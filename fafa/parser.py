@@ -28,6 +28,7 @@ class FitData:
     records: List[Record]
     session: dict = field(default_factory=dict)
     laps: List[dict] = field(default_factory=list)
+    manufacturer: Optional[str] = None
 
 
 def parse_fit(filepath: str) -> FitData:
@@ -76,8 +77,10 @@ def parse_fit(filepath: str) -> FitData:
 
     session = messages["session_mesgs"][0] if messages.get("session_mesgs") else {}
     laps = messages.get("lap_mesgs", [])
+    file_id = messages["file_id_mesgs"][0] if messages.get("file_id_mesgs") else {}
+    manufacturer = file_id.get("manufacturer")
 
-    return FitData(records=records, session=session, laps=laps)
+    return FitData(records=records, session=session, laps=laps, manufacturer=manufacturer)
 
 
 def decode_lr_balance(raw: int) -> Optional[tuple]:

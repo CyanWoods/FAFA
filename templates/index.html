@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FAFA Track Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- 顶部控制栏 -->
+  <div id="topbar">
+    <span class="logo">FAFA</span>
+
+    <div class="sep"></div>
+
+    <select id="tile-select">
+      <option value="dark" selected>深色地图</option>
+      <option value="dark-nolabels">深色路网</option>
+      <option value="light">浅色地图</option>
+      <option value="light-nolabels">浅色路网</option>
+      <option value="amap">高德地图</option>
+    </select>
+
+    <div class="sep"></div>
+
+    <button id="export-btn" onclick="openExportModal()">导出图片</button>
+    <div class="sep"></div>
+    <button id="clear-btn" onclick="clearAllTracks()">清除全部</button>
+
+  </div>
+
+  <!-- 路径列表 -->
+  <div id="track-panel">
+    <div id="panel-resize-handle"></div>
+    <div id="panel-header" onclick="togglePanel()">
+      <span class="panel-title">已加载路径</span>
+      <div class="panel-header-right">
+        <span id="track-badge">0</span>
+        <button id="panel-toggle" title="展开/收起">▼</button>
+      </div>
+    </div>
+    <div id="panel-body">
+      <div id="track-list"></div>
+      <div id="empty-hint">将 .fit 文件拖拽到地图即可加载</div>
+    </div>
+  </div>
+
+  <!-- 缩放拉柄 -->
+  <div id="zoom-slider-wrap">
+    <div id="zoom-track">
+      <div id="zoom-thumb"></div>
+    </div>
+  </div>
+
+  <!-- 地图 -->
+  <div id="map"></div>
+
+  <!-- 拖拽遮罩 -->
+  <div id="drop-overlay">
+    <div class="drop-card">
+      <div class="drop-arrow">↓</div>
+      <div class="drop-label">松开以加载 FIT 文件</div>
+    </div>
+  </div>
+
+  <!-- 导出模态框 -->
+  <div id="export-modal">
+    <div class="modal-overlay" onclick="closeExportModal()"></div>
+    <div class="modal-box">
+      <div class="modal-title">导出图片</div>
+      <div class="modal-section">
+        <div class="modal-label">地图背景</div>
+        <div class="opt-group" id="ex-tile-group">
+          <button class="opt-btn active" data-val="dark">深色地图</button>
+          <button class="opt-btn" data-val="dark-nolabels">深色路网</button>
+          <button class="opt-btn" data-val="light">浅色地图</button>
+          <button class="opt-btn" data-val="light-nolabels">浅色路网</button>
+        </div>
+      </div>
+      <div class="modal-section">
+        <div class="modal-label">颜色模式</div>
+        <div class="opt-group" id="ex-color-group">
+          <button class="opt-btn active" data-val="heatmap">热力图</button>
+          <button class="opt-btn" data-val="uniform">单一颜色</button>
+          <button class="opt-btn" data-val="multi">不同颜色</button>
+        </div>
+        <div id="ex-color-picker-row">
+          <span>路径颜色</span>
+          <input type="color" id="ex-color-picker" value="#e74c3c">
+        </div>
+      </div>
+      <div class="modal-section">
+        <div class="modal-label">画面比例</div>
+        <div class="opt-group" id="ex-ratio-group">
+          <button class="opt-btn active" data-val="16:9">16:9</button>
+          <button class="opt-btn" data-val="4:3">4:3</button>
+        </div>
+      </div>
+      <div class="modal-section">
+        <div class="modal-label">分辨率</div>
+        <div class="opt-group" id="ex-res-group">
+          <button class="opt-btn" data-val="4K">4K</button>
+          <button class="opt-btn active" data-val="2K">2K</button>
+          <button class="opt-btn" data-val="1080P">1080P</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="closeExportModal()">取消</button>
+        <button class="modal-export" id="ex-do-btn" onclick="doExport()">导出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 界面二：骑行详情 -->
+  <div id="detail-view">
+    <div id="detail-topbar">
+      <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
+      <span id="detail-filename-label"></span>
+      <div id="detail-mode-group">
+        <button class="det-mode-btn active" data-mode="km">按公里</button>
+        <button class="det-mode-btn" data-mode="time">按时间</button>
+      </div>
+      <button class="det-export-btn" onclick="exportDetailData('json')">导出 JSON</button>
+      <button class="det-export-btn" onclick="exportDetailData('csv')">导出 CSV</button>
+    </div>
+    <div id="detail-summary-row"></div>
+    <div id="detail-chart-section">
+      <div id="detail-metric-tabs"></div>
+      <div id="detail-chart-wrap"><canvas id="detail-canvas"></canvas></div>
+    </div>
+    <div id="detail-table-section">
+      <div id="detail-table-wrap"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

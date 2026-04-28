@@ -1,3 +1,5 @@
 .claude/
 *json
 *pyc
+*fit
+.venv
