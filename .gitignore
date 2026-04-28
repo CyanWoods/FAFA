@@ -3,3 +3,5 @@
 *pyc
 *fit
 .venv
+input/
+output/

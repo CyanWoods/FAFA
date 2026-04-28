@@ -164,6 +164,7 @@ function addTrack(data) {
   const encrypted = encryptCoords(raw);
   const polyline  = L.polyline(raw, { color, weight: 3, opacity: 0.82 }).addTo(map);
   const track = { id, name: data.filename, raw, decrypted, encrypted, polyline, color, mode: 'raw',
+                  source: data.source || 'upload',
                   summary: data.summary || null, kmStats: data.km_stats || [] };
   tracks.set(id, track);
 
@@ -192,15 +193,41 @@ function clearAllTracks() {
   for (const id of [...tracks.keys()]) removeTrack(id);
 }
 
-/* ── Per-track mode ──────────────────────────────────────────────────────── */
-function setTrackMode(id, mode) {
+/* ── Coord transform (writes back to file for library tracks) ────────────── */
+async function applyCoordTransform(id, method) {
   const t = tracks.get(id);
   if (!t) return;
-  t.mode = mode;
-  renderTrack(t);
-  document.querySelectorAll(`#ti-${id} .coord-btn`).forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === mode);
-  });
+
+  const newCoords = method === 'decrypt' ? decryptCoords(t.raw) : encryptCoords(t.raw);
+  t.polyline.setLatLngs(newCoords);
+
+  if (t.source !== 'library') {
+    t.raw       = newCoords;
+    t.decrypted = decryptCoords(newCoords);
+    t.encrypted = encryptCoords(newCoords);
+    return;
+  }
+
+  try {
+    const res  = await fetch('/api/fix_coords', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ filename: t.name, method }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      t.polyline.setLatLngs(t.raw);
+      toast(`写回失败：${data.error}`);
+      return;
+    }
+    t.raw       = newCoords;
+    t.decrypted = decryptCoords(newCoords);
+    t.encrypted = encryptCoords(newCoords);
+    toast(method === 'decrypt' ? '火星解密完成，已写入文件' : '火星加密完成，已写入文件');
+  } catch {
+    t.polyline.setLatLngs(t.raw);
+    toast('写回失败：网络错误');
+  }
 }
 
 /* ── Stats helpers ───────────────────────────────────────────────────────── */
@@ -285,15 +312,13 @@ function addTrackRow(track) {
   const group = document.createElement('div');
   group.className = 'coord-group';
   [
-    { mode: 'decrypt', label: '火星解密' },
-    { mode: 'raw',     label: '原始坐标' },
-    { mode: 'encrypt', label: '火星加密' },
-  ].forEach(({ mode, label }) => {
+    { method: 'decrypt', label: '火星解密' },
+    { method: 'encrypt', label: '火星加密' },
+  ].forEach(({ method, label }) => {
     const btn = document.createElement('button');
-    btn.className = 'coord-btn' + (track.mode === mode ? ' active' : '');
-    btn.dataset.mode = mode;
+    btn.className = 'coord-btn';
     btn.textContent = label;
-    btn.onclick = () => setTrackMode(track.id, mode);
+    btn.onclick = () => applyCoordTransform(track.id, method);
     group.appendChild(btn);
   });
 
@@ -356,6 +381,9 @@ function startFlash(id) {
   stopFlash(id);
   const t = tracks.get(id);
   if (!t) return;
+  for (const [tid, track] of tracks) {
+    if (tid !== id) track.polyline.setStyle({ opacity: 0 });
+  }
   let vis = true;
   _flashTimers.set(id, setInterval(() => {
     vis = !vis;
@@ -365,8 +393,9 @@ function startFlash(id) {
 
 function stopFlash(id) {
   if (_flashTimers.has(id)) { clearInterval(_flashTimers.get(id)); _flashTimers.delete(id); }
-  const t = tracks.get(id);
-  if (t) t.polyline.setStyle({ opacity: 0.82 });
+  for (const track of tracks.values()) {
+    track.polyline.setStyle({ opacity: 0.82 });
+  }
 }
 
 /* ── File upload ─────────────────────────────────────────────────────────── */
@@ -931,6 +960,302 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && detailTrackId != null) closeDetailView();
+    if (e.key === 'Escape') {
+      if (detailTrackId != null) closeDetailView();
+      else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
+    }
   });
+
+  // 初始加载文件库计数
+  refreshLibraryCount();
 });
+
+/* ── 文件库 ──────────────────────────────────────────────────────────────── */
+let _libFiles = [];       // [{filename, size_kb, mtime}]
+let _libLoading = false;
+let _libFilterYear  = null;
+let _libFilterMonth = null;
+
+function refreshLibraryCount() {
+  fetch('/api/files')
+    .then(r => r.json())
+    .then(d => {
+      _libFiles = d.files || [];
+      document.getElementById('lib-count').textContent = _libFiles.length;
+    })
+    .catch(() => {});
+}
+
+function openLibrary() {
+  document.getElementById('library-drawer').classList.add('open');
+  document.getElementById('library-overlay').classList.add('show');
+  refreshLibrary();
+}
+
+function closeLibrary() {
+  document.getElementById('library-drawer').classList.remove('open');
+  document.getElementById('library-overlay').classList.remove('show');
+}
+
+async function refreshLibrary() {
+  if (_libLoading) return;
+  _libLoading = true;
+  const list = document.getElementById('lib-list');
+  list.innerHTML = '<div class="lib-loading">加载中…</div>';
+  try {
+    const res  = await fetch('/api/files');
+    const data = await res.json();
+    _libFiles  = data.files || [];
+    document.getElementById('lib-count').textContent = _libFiles.length;
+    _buildLibFilter();
+    _applyLibFilter();
+  } catch {
+    list.innerHTML = '<div class="lib-loading">加载失败</div>';
+  } finally {
+    _libLoading = false;
+  }
+}
+
+function _buildLibFilter() {
+  const container = document.getElementById('lib-filter');
+  if (!container) return;
+
+  const yearMonths = new Map();
+  for (const f of _libFiles) {
+    const m = f.filename.match(/Magene_C506_(\d{4})(\d{2})\d{2}-/);
+    if (!m) continue;
+    const [, y, mo] = m;
+    if (!yearMonths.has(y)) yearMonths.set(y, new Set());
+    yearMonths.get(y).add(mo);
+  }
+
+  const years = [...yearMonths.keys()].sort().reverse();
+  if (!years.length) { container.innerHTML = ''; return; }
+
+  if (_libFilterYear && !yearMonths.has(_libFilterYear)) { _libFilterYear = null; _libFilterMonth = null; }
+  if (_libFilterMonth && _libFilterYear && !yearMonths.get(_libFilterYear)?.has(_libFilterMonth)) {
+    _libFilterMonth = null;
+  }
+
+  container.innerHTML = '';
+
+  const yearRow = document.createElement('div');
+  yearRow.className = 'lib-filter-row';
+
+  const makeBtn = (label, active, onclick) => {
+    const btn = document.createElement('button');
+    btn.className = 'lib-filter-btn' + (active ? ' active' : '');
+    btn.textContent = label;
+    btn.onclick = onclick;
+    return btn;
+  };
+
+  yearRow.appendChild(makeBtn('全部', _libFilterYear === null, () => {
+    _libFilterYear = null; _libFilterMonth = null; _buildLibFilter(); _applyLibFilter();
+  }));
+  for (const y of years) {
+    yearRow.appendChild(makeBtn(y, _libFilterYear === y, () => {
+      _libFilterYear = y; _libFilterMonth = null; _buildLibFilter(); _applyLibFilter();
+    }));
+  }
+  container.appendChild(yearRow);
+
+  if (_libFilterYear) {
+    const months = [...(yearMonths.get(_libFilterYear) || [])].sort();
+    const monthRow = document.createElement('div');
+    monthRow.className = 'lib-filter-row';
+    monthRow.appendChild(makeBtn('全月', _libFilterMonth === null, () => {
+      _libFilterMonth = null; _buildLibFilter(); _applyLibFilter();
+    }));
+    for (const mo of months) {
+      monthRow.appendChild(makeBtn(mo + '月', _libFilterMonth === mo, () => {
+        _libFilterMonth = mo; _buildLibFilter(); _applyLibFilter();
+      }));
+    }
+    container.appendChild(monthRow);
+  }
+}
+
+function _applyLibFilter() {
+  const q = document.getElementById('lib-search').value.toLowerCase();
+  let files = _libFiles;
+  if (_libFilterYear) {
+    files = files.filter(f => {
+      const m = f.filename.match(/Magene_C506_(\d{4})(\d{2})\d{2}-/);
+      return m && m[1] === _libFilterYear && (_libFilterMonth === null || m[2] === _libFilterMonth);
+    });
+  }
+  if (q) files = files.filter(f => f.filename.toLowerCase().includes(q));
+  _renderLibrary(files);
+}
+
+function filterLibrary() {
+  _applyLibFilter();
+}
+
+function _libDateLabel(filename) {
+  const m = filename.match(/Magene_C506_(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+  return filename.replace(/\.fit$/i, '');
+}
+
+function _renderLibrary(files) {
+  const list = document.getElementById('lib-list');
+  if (!files.length) {
+    list.innerHTML = '<div class="lib-loading">没有 .fit 文件</div>';
+    return;
+  }
+  const loadedNames = new Set([...tracks.values()].map(t => t.name));
+  list.innerHTML = '';
+  for (const f of files) {
+    const loaded = loadedNames.has(f.filename);
+    const row = document.createElement('div');
+    row.className = 'lib-row' + (loaded ? ' lib-row-loaded' : '');
+    row.dataset.filename = f.filename;
+
+    const info = document.createElement('div');
+    info.className = 'lib-row-info';
+
+    const date = document.createElement('span');
+    date.className = 'lib-date';
+    date.textContent = _libDateLabel(f.filename);
+
+    const size = document.createElement('span');
+    size.className = 'lib-size';
+    size.textContent = f.size_kb + ' KB';
+
+    info.append(date, size);
+
+    const btn = document.createElement('button');
+    btn.className = 'lib-load-btn' + (loaded ? ' lib-load-btn-loaded' : '');
+    btn.textContent = loaded ? '已加载' : '加载';
+    btn.disabled = loaded;
+    btn.onclick = () => loadFromLibrary(f.filename, btn);
+
+    row.append(info, btn);
+    list.appendChild(row);
+  }
+}
+
+async function loadFromLibrary(filename, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '加载中…'; }
+  try {
+    const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || '加载失败'); if (btn) { btn.disabled = false; btn.textContent = '加载'; } return; }
+    addTrack(data);
+    if (btn) { btn.disabled = true; btn.textContent = '已加载'; btn.closest('.lib-row')?.classList.add('lib-row-loaded'); }
+  } catch {
+    toast('加载失败：网络错误');
+    if (btn) { btn.disabled = false; btn.textContent = '加载'; }
+  }
+}
+
+async function loadAllFromLibrary() {
+  const loadedNames = new Set([...tracks.values()].map(t => t.name));
+  const toLoad = _libFiles.filter(f => !loadedNames.has(f.filename));
+  if (!toLoad.length) { toast('所有文件已加载'); return; }
+  toast(`正在加载 ${toLoad.length} 个文件…`);
+  for (const f of toLoad) {
+    try {
+      const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: f.filename }) });
+      const data = await res.json();
+      if (res.ok) addTrack(data);
+    } catch {}
+  }
+  _renderLibrary(_libFiles);
+  toast('加载完成');
+}
+
+/* ── 全量导出 JSON ────────────────────────────────────────────────────────── */
+function exportAllJson() {
+  const noKm  = false;   // 含逐公里数据
+  const minKm = 0;
+  const url = `/api/export/all?no_km_stats=${noKm ? 1 : 0}&min_km=${minKm}`;
+  toast('正在生成导出文件，请稍候…');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'fafa_export.json';
+  a.click();
+}
+
+/* ── 顽鹿同步 ────────────────────────────────────────────────────────────── */
+let _syncPollTimer = null;
+
+function openSyncModal() {
+  document.getElementById('sync-modal').style.display = 'flex';
+  document.getElementById('sync-idle-view').style.display = '';
+  document.getElementById('sync-progress-view').style.display = 'none';
+}
+
+function closeSyncModal() {
+  if (_syncPollTimer) { clearInterval(_syncPollTimer); _syncPollTimer = null; }
+  document.getElementById('sync-modal').style.display = 'none';
+}
+
+async function startSync() {
+  const full = document.getElementById('sync-full').checked;
+  document.getElementById('sync-idle-view').style.display = 'none';
+  document.getElementById('sync-progress-view').style.display = '';
+  document.getElementById('sync-close-btn').disabled = true;
+  _setSyncUI('正在启动…', 0, 0);
+
+  try {
+    const res = await fetch('/api/onelap/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full }),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      _setSyncUI(d.error || '启动失败', 0, 0);
+      document.getElementById('sync-close-btn').disabled = false;
+      return;
+    }
+  } catch {
+    _setSyncUI('网络错误', 0, 0);
+    document.getElementById('sync-close-btn').disabled = false;
+    return;
+  }
+
+  _syncPollTimer = setInterval(_pollSync, 1500);
+}
+
+async function _pollSync() {
+  try {
+    const res  = await fetch('/api/onelap/status');
+    const data = await res.json();
+    const pct  = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
+    _setSyncUI(data.message, pct, data.total);
+
+    if (data.state === 'done' || data.state === 'error') {
+      clearInterval(_syncPollTimer);
+      _syncPollTimer = null;
+      document.getElementById('sync-close-btn').disabled = false;
+
+      if (data.new_files && data.new_files.length) {
+        const el = document.getElementById('sync-done-files');
+        el.innerHTML = data.new_files
+          .map(f => `<div class="sync-new-file">+ ${f}</div>`)
+          .join('');
+      }
+      // 刷新文件库数量
+      refreshLibraryCount();
+      if (document.getElementById('library-drawer').classList.contains('open')) {
+        refreshLibrary();
+      }
+    }
+  } catch {}
+}
+
+function _setSyncUI(msg, pct, total) {
+  document.getElementById('sync-status-msg').textContent = msg;
+  const bar = document.getElementById('sync-progress-bar');
+  if (total === 0) {
+    bar.classList.add('indeterminate');
+    bar.style.width = '';
+  } else {
+    bar.classList.remove('indeterminate');
+    bar.style.width = pct + '%';
+  }
+}

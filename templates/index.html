@@ -25,10 +25,15 @@
 
     <div class="sep"></div>
 
-    <button id="export-btn" onclick="openExportModal()">导出图片</button>
+    <button id="library-btn" onclick="openLibrary()">文件库 <span id="lib-count">…</span></button>
+    <button id="sync-btn"    onclick="openSyncModal()">顽鹿同步</button>
+
+    <div class="sep"></div>
+
+    <button id="export-all-btn" onclick="exportAllJson()">全量导出</button>
+    <button id="export-btn"     onclick="openExportModal()">导出图片</button>
     <div class="sep"></div>
     <button id="clear-btn" onclick="clearAllTracks()">清除全部</button>
-
   </div>
 
   <!-- 路径列表 -->
@@ -43,7 +48,7 @@
     </div>
     <div id="panel-body">
       <div id="track-list"></div>
-      <div id="empty-hint">将 .fit 文件拖拽到地图即可加载</div>
+      <div id="empty-hint">将 .fit 文件拖拽到地图，或从文件库加载</div>
     </div>
   </div>
 
@@ -65,7 +70,55 @@
     </div>
   </div>
 
-  <!-- 导出模态框 -->
+  <!-- ── 文件库抽屉 ─────────────────────────────────────────────────────────── -->
+  <div id="library-drawer">
+    <div class="drawer-header">
+      <span class="drawer-title">文件库</span>
+      <div class="drawer-actions">
+        <button class="drawer-act-btn" onclick="loadAllFromLibrary()">全部加载</button>
+        <button class="drawer-act-btn" onclick="refreshLibrary()">刷新</button>
+        <button class="drawer-close-btn" onclick="closeLibrary()">×</button>
+      </div>
+    </div>
+    <div class="drawer-search">
+      <input id="lib-search" type="text" placeholder="搜索文件名…" oninput="filterLibrary()">
+    </div>
+    <div id="lib-filter"></div>
+    <div id="lib-list"></div>
+  </div>
+  <div id="library-overlay" onclick="closeLibrary()"></div>
+
+  <!-- ── 顽鹿同步弹窗 ───────────────────────────────────────────────────────── -->
+  <div id="sync-modal">
+    <div class="modal-overlay" onclick="closeSyncModal()"></div>
+    <div class="modal-box sync-box">
+      <div class="modal-title">从顽鹿同步</div>
+
+      <div id="sync-idle-view">
+        <p class="sync-desc">点击开始后，程序会自动打开浏览器，请在其中完成顽鹿账号登录，登录后将自动下载新的骑行文件。</p>
+        <div class="sync-opts">
+          <label><input type="checkbox" id="sync-full"> 全量下载（忽略已下载记录）</label>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-cancel" onclick="closeSyncModal()">取消</button>
+          <button class="modal-export" onclick="startSync()">开始同步</button>
+        </div>
+      </div>
+
+      <div id="sync-progress-view" style="display:none">
+        <div id="sync-status-msg" class="sync-status-msg"></div>
+        <div class="sync-progress-wrap">
+          <div id="sync-progress-bar" class="sync-progress-bar"></div>
+        </div>
+        <div id="sync-done-files" class="sync-done-files"></div>
+        <div class="modal-actions" style="margin-top:16px">
+          <button class="modal-cancel" id="sync-close-btn" onclick="closeSyncModal()" disabled>关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 导出图片弹窗 ───────────────────────────────────────────────────────── -->
   <div id="export-modal">
     <div class="modal-overlay" onclick="closeExportModal()"></div>
     <div class="modal-box">
