@@ -5,20 +5,20 @@ const TILES = {
     opts: { subdomains: '1234', maxZoom: 19, attribution: '&copy; 高德地图' },
   },
   'dark-nolabels': {
-    url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_nolabels/{z}/{x}/{y}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO' },
+    url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
+    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
   },
   'light-nolabels': {
-    url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO' },
+    url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
+    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
   },
   dark: {
-    url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO' },
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
   },
   light: {
-    url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO' },
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
   },
 };
 
@@ -55,10 +55,10 @@ const TABLE_COLS = [
 
 /* ── Export constants ────────────────────────────────────────────────────── */
 const EXPORT_TILE_URLS = {
-  dark:             'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-  'dark-nolabels':  'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_nolabels/{z}/{x}/{y}.png',
-  light:            'https://cartodb-basemaps-{s}.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png',
-  'light-nolabels': 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png',
+  dark:             'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+  'dark-nolabels':  'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
+  light:            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+  'light-nolabels': 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
 };
 
 const EXPORT_RESOLUTIONS = {
@@ -128,7 +128,7 @@ const exportState = { tile: 'dark', colorMode: 'heatmap', uniformColor: '#e74c3c
 let panelExpanded = true;
 let panelExpandedHeight = 320;
 let detailTrackId = null;
-let detailMode = 'km';
+let detailMode = 'time';
 let detailMetric = 'speed';
 let detailChart = null;
 
@@ -165,7 +165,9 @@ function addTrack(data) {
   const polyline  = L.polyline(raw, { color, weight: 3, opacity: 0.82 }).addTo(map);
   const track = { id, name: data.filename, raw, decrypted, encrypted, polyline, color, mode: 'raw',
                   source: data.source || 'upload',
-                  summary: data.summary || null, kmStats: data.km_stats || [] };
+                  summary: data.summary || null, kmStats: data.km_stats || [],
+                  distStats: data.dist_stats || [], timeStats: data.time_stats || [],
+                  timeStatsStart: data.time_stats_start || null };
   tracks.set(id, track);
 
   renderTrack(track);
@@ -202,9 +204,7 @@ async function applyCoordTransform(id, method) {
   t.polyline.setLatLngs(newCoords);
 
   if (t.source !== 'library') {
-    t.raw       = newCoords;
-    t.decrypted = decryptCoords(newCoords);
-    t.encrypted = encryptCoords(newCoords);
+    // Uploaded tracks: don't mutate t.raw so repeated clicks are idempotent
     return;
   }
 
@@ -220,9 +220,13 @@ async function applyCoordTransform(id, method) {
       toast(`写回失败：${data.error}`);
       return;
     }
-    t.raw       = newCoords;
-    t.decrypted = decryptCoords(newCoords);
-    t.encrypted = encryptCoords(newCoords);
+    // File on disk is now newCoords; update raw and disable button to prevent re-application
+    t.raw = newCoords;
+    const row = document.getElementById(`ti-${id}`);
+    if (row) {
+      const btn = row.querySelector(`[data-method="${method}"]`);
+      if (btn) btn.disabled = true;
+    }
     toast(method === 'decrypt' ? '火星解密完成，已写入文件' : '火星加密完成，已写入文件');
   } catch {
     t.polyline.setLatLngs(t.raw);
@@ -317,6 +321,7 @@ function addTrackRow(track) {
   ].forEach(({ method, label }) => {
     const btn = document.createElement('button');
     btn.className = 'coord-btn';
+    btn.dataset.method = method;
     btn.textContent = label;
     btn.onclick = () => applyCoordTransform(track.id, method);
     group.appendChild(btn);
@@ -772,13 +777,13 @@ async function doExport() {
 /* ── Detail view (界面二) ────────────────────────────────────────────────── */
 function openDetailView(id) {
   const t = tracks.get(id);
-  if (!t || !t.kmStats || !t.kmStats.length) {
+  if (!t || (!t.distStats?.length && !t.timeStats?.length)) {
     toast('该文件没有可用的分段数据');
     return;
   }
   stopFlash(id);
   detailTrackId = id;
-  detailMode = 'km';
+  detailMode = 'time';
 
   document.getElementById('detail-filename-label').textContent = t.name;
   document.getElementById('detail-view').classList.add('active');
@@ -803,7 +808,8 @@ function _renderDetailSummary(summary) {
 }
 
 function _buildDetailMetricTabs(track) {
-  const available = METRICS.filter(m => track.kmStats.some(s => s[m.field] != null));
+  const probe = track.distStats.length ? track.distStats : track.timeStats;
+  const available = METRICS.filter(m => probe.some(s => s[m.field] != null));
   if (available.length && !available.find(m => m.key === detailMetric)) {
     detailMetric = available[0].key;
   }
@@ -837,18 +843,40 @@ function _setupDetailModeButtons() {
   });
 }
 
-function _getDetailXLabels(kmStats) {
-  if (detailMode === 'km') return kmStats.map(s => s.km + ' km');
-  let cum = 0;
-  return kmStats.map(s => { cum += s.duration_s / 60; return cum.toFixed(1) + ' min'; });
+function _getDetailStats() {
+  const t = tracks.get(detailTrackId);
+  return detailMode === 'dist' ? t.distStats : t.timeStats;
+}
+
+function _getDetailTableStats() {
+  const t = tracks.get(detailTrackId);
+  return detailMode === 'dist' ? t.kmStats : t.timeStats;
+}
+
+function _getDetailXLabels(stats) {
+  if (detailMode === 'dist') {
+    // chart: 100m intervals
+    return stats.map((_, i) => ((i + 1) * 0.1).toFixed(1) + ' km');
+  }
+  // time mode: real clock time labels, one per minute
+  const t = tracks.get(detailTrackId);
+  const t0 = t?.timeStatsStart ? new Date(t.timeStatsStart) : null;
+  return stats.map((_, i) => {
+    if (!t0) return (i + 1) + ' min';
+    const d = new Date(t0.getTime() + i * 60000);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    return hh + ':' + mm;
+  });
 }
 
 function _renderDetailChart() {
   const t = tracks.get(detailTrackId);
   if (!t) return;
   const meta   = METRICS.find(m => m.key === detailMetric) || METRICS[0];
-  const labels = _getDetailXLabels(t.kmStats);
-  const data   = t.kmStats.map(s => s[meta.field] ?? null);
+  const stats  = _getDetailStats();
+  const labels = _getDetailXLabels(stats);
+  const data   = stats.map(s => s[meta.field] ?? null);
 
   if (detailChart) { detailChart.destroy(); detailChart = null; }
 
@@ -862,7 +890,7 @@ function _renderDetailChart() {
         borderColor: meta.color,
         backgroundColor: meta.color + '1a',
         borderWidth: 2,
-        pointRadius: t.kmStats.length > 30 ? 0 : 3,
+        pointRadius: stats.length > 30 ? 0 : 3,
         pointHoverRadius: 5,
         tension: 0.35,
         fill: true,
@@ -907,17 +935,19 @@ function _renderDetailChart() {
 function _renderDetailTable() {
   const t = tracks.get(detailTrackId);
   if (!t) return;
-  const { kmStats } = t;
+  const stats   = _getDetailTableStats();
+  const xLabels = detailMode === 'dist'
+    ? stats.map((_, i) => (i + 1) + ' km')
+    : _getDetailXLabels(stats);
 
-  const visCols = TABLE_COLS.filter(c => kmStats.some(s => s[c.key] != null));
-  const xLabels = _getDetailXLabels(kmStats);
+  const visCols = TABLE_COLS.filter(c => stats.some(s => s[c.key] != null));
 
   let html = '<table class="detail-table"><thead><tr>';
-  html += `<th>${detailMode === 'km' ? '公里' : '时间'}</th>`;
+  html += `<th>${detailMode === 'dist' ? '距离' : '时间'}</th>`;
   for (const c of visCols) html += `<th>${c.label}</th>`;
   html += '</tr></thead><tbody>';
 
-  kmStats.forEach((s, i) => {
+  stats.forEach((s, i) => {
     html += `<tr><td>${xLabels[i]}</td>`;
     for (const c of visCols) {
       const raw = s[c.key];
@@ -1064,7 +1094,7 @@ function _buildLibFilter() {
     const months = [...(yearMonths.get(_libFilterYear) || [])].sort();
     const monthRow = document.createElement('div');
     monthRow.className = 'lib-filter-row';
-    monthRow.appendChild(makeBtn('全月', _libFilterMonth === null, () => {
+    monthRow.appendChild(makeBtn('全部', _libFilterMonth === null, () => {
       _libFilterMonth = null; _buildLibFilter(); _applyLibFilter();
     }));
     for (const mo of months) {
@@ -1235,9 +1265,13 @@ async function _pollSync() {
 
       if (data.new_files && data.new_files.length) {
         const el = document.getElementById('sync-done-files');
-        el.innerHTML = data.new_files
-          .map(f => `<div class="sync-new-file">+ ${f}</div>`)
-          .join('');
+        el.innerHTML = '';
+        data.new_files.forEach(f => {
+          const div = document.createElement('div');
+          div.className = 'sync-new-file';
+          div.textContent = '+ ' + f;
+          el.appendChild(div);
+        });
       }
       // 刷新文件库数量
       refreshLibraryCount();

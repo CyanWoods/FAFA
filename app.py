@@ -18,7 +18,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 
 from fafa.parser import parse_fit
 from fafa.gcj02 import needs_wgs84_conversion
-from fafa.stats import compute_km_stats, compute_summary
+from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats, compute_summary
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -49,12 +49,30 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         summary_dict  = None
         km_stats_list = []
 
+    try:
+        dist_stats_list = [asdict(s) for s in compute_dist_stats(fit)]
+    except Exception:
+        dist_stats_list = []
+
+    try:
+        time_stats_list = [asdict(s) for s in compute_time_stats(fit)]
+        time_stats_start = (
+            fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+            if fit.records else None
+        )
+    except Exception:
+        time_stats_list  = []
+        time_stats_start = None
+
     return dict(
         coords=coords,
         filename=filename,
         is_gcj02=not needs_wgs84_conversion(fit.manufacturer),
         summary=summary_dict,
         km_stats=km_stats_list,
+        dist_stats=dist_stats_list,
+        time_stats=time_stats_list,
+        time_stats_start=time_stats_start,
     )
 
 
@@ -205,7 +223,7 @@ def load_file():
         return jsonify(error="无效的文件名"), 400
 
     path = (INPUT_DIR / filename).resolve()
-    if not str(path).startswith(str(INPUT_DIR.resolve())):
+    if path.parent != INPUT_DIR.resolve():
         return jsonify(error="非法路径"), 403
     if not path.exists():
         return jsonify(error="文件不存在"), 404
@@ -233,7 +251,7 @@ def fix_coords_api():
         return jsonify(error="method 必须是 decrypt 或 encrypt"), 400
 
     path = (INPUT_DIR / filename).resolve()
-    if not str(path).startswith(str(INPUT_DIR.resolve())):
+    if path.parent != INPUT_DIR.resolve():
         return jsonify(error="非法路径"), 403
     if not path.exists():
         return jsonify(error="文件不存在"), 404
@@ -252,8 +270,11 @@ def fix_coords_api():
 @app.route("/api/export/all")
 def export_all():
     """导出 input/ 下所有 FIT 文件的解析结果为 JSON 文件（供 AI 使用）。"""
-    no_km   = request.args.get("no_km_stats", "0") == "1"
-    min_km  = float(request.args.get("min_km", "0") or "0")
+    no_km = request.args.get("no_km_stats", "0") == "1"
+    try:
+        min_km = float(request.args.get("min_km", "0") or "0")
+    except ValueError:
+        return jsonify(error="min_km 参数无效"), 400
 
     if not INPUT_DIR.exists():
         return jsonify(error="input/ 目录不存在"), 404

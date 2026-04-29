@@ -105,100 +105,141 @@ def _avg(vals):
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
+def _sv(session_val, fallback):
+    """Return session_val when it is not None (0 is a valid value), else fallback."""
+    return session_val if session_val is not None else fallback
+
+
+def _build_one_segment(recs: List[Record], seg_idx: int, ftp) -> KmStats:
+    try:
+        duration_s = (recs[-1].timestamp - recs[0].timestamp).total_seconds()
+    except Exception:
+        duration_s = 0.0
+
+    speeds   = [r.speed_ms * 3.6 for r in recs if r.speed_ms is not None]
+    cadences = [r.cadence for r in recs if r.cadence is not None and r.cadence > 0]
+    hrs      = [r.heart_rate for r in recs if r.heart_rate is not None]
+    powers   = [r.power for r in recs if r.power is not None]
+    grades   = [r.grade for r in recs if r.grade is not None]
+    temps    = [r.temperature for r in recs if r.temperature is not None]
+    alts     = [r.altitude for r in recs if r.altitude is not None]
+
+    lr_raws = [r.left_right_balance for r in recs if r.left_right_balance is not None]
+    left_pct = None
+    if lr_raws:
+        avg_raw = sum(lr_raws) / len(lr_raws)
+        decoded = decode_lr_balance(int(round(avg_raw)))
+        left_pct = round(decoded[0], 1) if decoded else None
+
+    te_vals = []
+    for r in recs:
+        vals = [v for v in [r.left_torque_effectiveness, r.right_torque_effectiveness]
+                if v is not None and v > 0]
+        te_vals.extend(vals)
+
+    ps_vals = []
+    for r in recs:
+        vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
+                if v is not None and v > 0]
+        ps_vals.extend(vals)
+
+    cal_vals = [r.calories for r in recs if r.calories is not None]
+    calories_delta = (cal_vals[-1] - cal_vals[0]) if len(cal_vals) >= 2 else (cal_vals[0] if cal_vals else None)
+
+    work_kj   = round(sum(powers) / 1000, 1) if powers else None
+    avg_power = round(sum(powers) / len(powers), 1) if powers else None
+    np_val    = _normalized_power(powers) if powers else None
+    if_val    = round(avg_power / ftp, 3) if (avg_power is not None and ftp) else None
+    gain, loss = _elevation_changes(alts)
+
+    return KmStats(
+        km=seg_idx,
+        duration_s=duration_s,
+        avg_speed_kmh=round(sum(speeds) / len(speeds), 1) if speeds else None,
+        max_speed_kmh=round(max(speeds), 1) if speeds else None,
+        avg_cadence=_avg(cadences),
+        max_cadence=max(cadences) if cadences else None,
+        avg_hr=round(sum(hrs) / len(hrs), 1) if hrs else None,
+        max_hr=max(hrs) if hrs else None,
+        avg_power=avg_power,
+        max_power=max(powers) if powers else None,
+        normalized_power=np_val,
+        intensity_factor=if_val,
+        calories_kcal=int(calories_delta) if calories_delta is not None else None,
+        work_kj=work_kj,
+        avg_grade_pct=_avg(grades),
+        elevation_gain_m=gain,
+        elevation_loss_m=loss,
+        end_alt_m=round(alts[-1], 1) if alts else None,
+        avg_temp_c=_avg(temps),
+        left_pct=left_pct,
+        avg_torque_eff=round(sum(te_vals) / len(te_vals), 1) if te_vals else None,
+        avg_pedal_smooth=round(sum(ps_vals) / len(ps_vals), 1) if ps_vals else None,
+        start_dist_m=recs[0].distance_m,
+        end_dist_m=recs[-1].distance_m,
+    )
+
+
 def compute_km_stats(fit: FitData) -> List[KmStats]:
     records = fit.records
-    session = fit.session
     if not records:
         return []
-
-    ftp = session.get("threshold_power")
-
+    ftp = fit.session.get("threshold_power")
     buckets: dict[int, List[Record]] = defaultdict(list)
     for r in records:
         buckets[int(r.distance_m / 1000)].append(r)
+    return [_build_one_segment(buckets[k], k + 1, ftp) for k in sorted(buckets.keys())]
 
-    stats = []
-    for k in sorted(buckets.keys()):
-        recs = buckets[k]
 
-        try:
-            duration_s = (recs[-1].timestamp - recs[0].timestamp).total_seconds()
-        except Exception:
-            duration_s = 0.0
+def compute_dist_stats(fit: FitData, step_m: float = 100.0) -> List[KmStats]:
+    """Per-100 m (or custom step) segments, used by the detail view distance mode."""
+    records = fit.records
+    if not records:
+        return []
+    ftp = fit.session.get("threshold_power")
+    buckets: dict[int, List[Record]] = defaultdict(list)
+    for r in records:
+        buckets[int(r.distance_m / step_m)].append(r)
+    return [_build_one_segment(buckets[k], i + 1, ftp) for i, k in enumerate(sorted(buckets.keys()))]
 
-        speeds = [r.speed_ms * 3.6 for r in recs if r.speed_ms is not None]
-        cadences = [r.cadence for r in recs if r.cadence is not None and r.cadence > 0]
-        hrs = [r.heart_rate for r in recs if r.heart_rate is not None]
-        powers = [r.power for r in recs if r.power is not None]
-        grades = [r.grade for r in recs if r.grade is not None]
-        temps = [r.temperature for r in recs if r.temperature is not None]
-        alts = [r.altitude for r in recs if r.altitude is not None]
 
-        # Left/right balance: average the raw values then decode
-        lr_raws = [r.left_right_balance for r in recs if r.left_right_balance is not None]
-        left_pct = None
-        if lr_raws:
-            avg_raw = sum(lr_raws) / len(lr_raws)
-            decoded = decode_lr_balance(int(round(avg_raw)))
-            left_pct = round(decoded[0], 1) if decoded else None
+def _zero_segment(seg_idx: int, step_s: float) -> KmStats:
+    """Zero-filled segment for a pause/gap period (device stopped recording)."""
+    return KmStats(
+        km=seg_idx, duration_s=step_s,
+        avg_speed_kmh=0.0, max_speed_kmh=0.0,
+        avg_cadence=0.0, max_cadence=0,
+        avg_hr=0.0, max_hr=0,
+        avg_power=0.0, max_power=0,
+        normalized_power=None, intensity_factor=None,
+        calories_kcal=0, work_kj=0.0,
+        avg_grade_pct=None, elevation_gain_m=0.0, elevation_loss_m=0.0,
+        end_alt_m=None, avg_temp_c=None,
+        left_pct=None, avg_torque_eff=None, avg_pedal_smooth=None,
+        start_dist_m=0.0, end_dist_m=0.0,
+    )
 
-        # Torque effectiveness: average of L and R, skip zeros
-        te_vals = []
-        for r in recs:
-            vals = [v for v in [r.left_torque_effectiveness, r.right_torque_effectiveness]
-                    if v is not None and v > 0]
-            te_vals.extend(vals)
-        avg_torque = round(sum(te_vals) / len(te_vals), 1) if te_vals else None
 
-        # Pedal smoothness: average of L and R, skip zeros
-        ps_vals = []
-        for r in recs:
-            vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
-                    if v is not None and v > 0]
-            ps_vals.extend(vals)
-        avg_smooth = round(sum(ps_vals) / len(ps_vals), 1) if ps_vals else None
-
-        # Calories delta (field is cumulative)
-        cal_vals = [r.calories for r in recs if r.calories is not None]
-        calories_delta = (cal_vals[-1] - cal_vals[0]) if len(cal_vals) >= 2 else (cal_vals[0] if cal_vals else None)
-
-        # Work in kJ: sum(power * 1s) / 1000
-        work_kj = round(sum(powers) / 1000, 1) if powers else None
-
-        avg_power = round(sum(powers) / len(powers), 1) if powers else None
-        np = _normalized_power(powers) if powers else None
-        if_ = round(avg_power / ftp, 3) if (avg_power is not None and ftp) else None
-
-        gain, loss = _elevation_changes(alts)
-
-        stats.append(KmStats(
-            km=k + 1,
-            duration_s=duration_s,
-            avg_speed_kmh=round(sum(speeds) / len(speeds), 1) if speeds else None,
-            max_speed_kmh=round(max(speeds), 1) if speeds else None,
-            avg_cadence=_avg(cadences),
-            max_cadence=max(cadences) if cadences else None,
-            avg_hr=round(sum(hrs) / len(hrs), 1) if hrs else None,
-            max_hr=max(hrs) if hrs else None,
-            avg_power=avg_power,
-            max_power=max(powers) if powers else None,
-            normalized_power=np,
-            intensity_factor=if_,
-            calories_kcal=int(calories_delta) if calories_delta is not None else None,
-            work_kj=work_kj,
-            avg_grade_pct=_avg(grades),
-            elevation_gain_m=gain,
-            elevation_loss_m=loss,
-            end_alt_m=round(alts[-1], 1) if alts else None,
-            avg_temp_c=_avg(temps),
-            left_pct=left_pct,
-            avg_torque_eff=avg_torque,
-            avg_pedal_smooth=avg_smooth,
-            start_dist_m=recs[0].distance_m,
-            end_dist_m=recs[-1].distance_m,
-        ))
-
-    return stats
+def compute_time_stats(fit: FitData, step_s: float = 60.0) -> List[KmStats]:
+    """Per-1 min segments with gap-filling: paused intervals appear as zero segments
+    so array index i always maps to the real-clock interval [t0 + i*step_s, t0 + (i+1)*step_s)."""
+    records = fit.records
+    if not records:
+        return []
+    ftp = fit.session.get("threshold_power")
+    t0 = records[0].timestamp
+    buckets: dict[int, List[Record]] = defaultdict(list)
+    for r in records:
+        dt = (r.timestamp - t0).total_seconds()
+        buckets[int(dt / step_s)].append(r)
+    if not buckets:
+        return []
+    max_bucket = max(buckets.keys())
+    return [
+        _build_one_segment(buckets[k], k + 1, ftp) if k in buckets
+        else _zero_segment(k + 1, step_s)
+        for k in range(max_bucket + 1)
+    ]
 
 
 def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
@@ -250,22 +291,22 @@ def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
         moving_time_s=session.get("total_moving_time"),
         avg_speed_kmh=round(sum(speeds) / len(speeds), 1) if speeds else None,
         max_speed_kmh=round(max(speeds), 1) if speeds else None,
-        avg_cadence=session.get("avg_cadence") or _avg(cadences),
-        max_cadence=session.get("max_cadence") or (max(cadences) if cadences else None),
-        avg_hr=session.get("avg_heart_rate") or (round(sum(hrs) / len(hrs), 1) if hrs else None),
-        max_hr=session.get("max_heart_rate") or (max(hrs) if hrs else None),
-        avg_power=session.get("avg_power") or avg_power,
-        max_power=session.get("max_power") or (max(powers) if powers else None),
-        normalized_power=session.get("normalized_power") or np_all,
-        intensity_factor=session.get("intensity_factor") or if_all,
+        avg_cadence=_sv(session.get("avg_cadence"), _avg(cadences)),
+        max_cadence=_sv(session.get("max_cadence"), max(cadences) if cadences else None),
+        avg_hr=_sv(session.get("avg_heart_rate"), round(sum(hrs) / len(hrs), 1) if hrs else None),
+        max_hr=_sv(session.get("max_heart_rate"), max(hrs) if hrs else None),
+        avg_power=_sv(session.get("avg_power"), avg_power),
+        max_power=_sv(session.get("max_power"), max(powers) if powers else None),
+        normalized_power=_sv(session.get("normalized_power"), np_all),
+        intensity_factor=_sv(session.get("intensity_factor"), if_all),
         ftp_w=ftp,
         tss=session.get("training_stress_score"),
         total_calories_kcal=session.get("total_calories"),
-        total_work_kj=round(session.get("total_work", 0) / 1000, 1) if session.get("total_work") else None,
-        total_elevation_gain_m=session.get("total_ascent") or sum(s.elevation_gain_m for s in km_stats),
-        total_elevation_loss_m=session.get("total_descent") or sum(s.elevation_loss_m for s in km_stats),
-        avg_temp_c=session.get("avg_temperature") or _avg(temps),
-        max_temp_c=session.get("max_temperature") or (max(temps) if temps else None),
+        total_work_kj=round(session.get("total_work") / 1000, 1) if session.get("total_work") is not None else None,
+        total_elevation_gain_m=_sv(session.get("total_ascent"), sum(s.elevation_gain_m for s in km_stats)),
+        total_elevation_loss_m=_sv(session.get("total_descent"), sum(s.elevation_loss_m for s in km_stats)),
+        avg_temp_c=_sv(session.get("avg_temperature"), _avg(temps)),
+        max_temp_c=_sv(session.get("max_temperature"), max(temps) if temps else None),
         left_pct=left_pct,
         avg_torque_eff=round(sum(te_vals) / len(te_vals), 1) if te_vals else None,
         avg_pedal_smooth=round(sum(ps_vals) / len(ps_vals), 1) if ps_vals else None,
