@@ -1,4 +1,4 @@
-# FAFA — FIT Analysis & Visualization
+# FAFA — Fit Analysis & Functional Aggregator
 
 解析、纠偏、可视化骑行 FIT 文件的工具集，包含双界面交互式 Web 查看器和命令行分析工具。
 
