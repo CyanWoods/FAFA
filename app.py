@@ -282,7 +282,7 @@ def fix_coords_api():
         return jsonify(error="文件不存在"), 404
 
     try:
-        from fix_coords import fix_file
+        from fafa.tools.fix_coords import fix_file
         original_mtime = path.stat().st_mtime
         fix_file(path, path, method)
         os.utime(path, (original_mtime, original_mtime))
