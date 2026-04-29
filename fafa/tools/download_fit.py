@@ -2,10 +2,10 @@
 """从顽鹿（OneLap）批量下载 FIT 文件到 input/ 目录。
 
 用法：
-  .venv/bin/python download_fit.py                # 增量下载
-  .venv/bin/python download_fit.py --all          # 全量（忽略本地状态）
-  .venv/bin/python download_fit.py --dry-run      # 预览，不下载
-  .venv/bin/python download_fit.py --limit 20    # 最多下载 20 个
+  .venv/bin/python -m fafa.tools.download_fit                # 增量下载
+  .venv/bin/python -m fafa.tools.download_fit --all          # 全量（忽略本地状态）
+  .venv/bin/python -m fafa.tools.download_fit --dry-run      # 预览，不下载
+  .venv/bin/python -m fafa.tools.download_fit --limit 20     # 最多下载 20 个
 """
 
 import argparse
@@ -25,7 +25,7 @@ from fafa.onelap import (
     activity_id,
 )
 
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 INPUT_DIR    = PROJECT_ROOT / "input"
 STATE_FILE   = PROJECT_ROOT / "download_state.json"
 

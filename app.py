@@ -92,6 +92,23 @@ def _set_sync(**kw):
         _sync.update(kw)
 
 
+def _get_software_version(path: Path) -> float | None:
+    """返回 FIT 文件 software_mesgs 中的 version 字段，解析失败返回 None。"""
+    from garmin_fit_sdk import Decoder, Stream
+    try:
+        stream = Stream.from_file(str(path))
+        dec = Decoder(stream)
+        msgs, _ = dec.read(apply_scale_and_offset=True)
+        sw_list = msgs.get("software_mesgs") or []
+        if sw_list:
+            ver = sw_list[0].get("version")
+            if ver is not None:
+                return float(ver)
+    except Exception:
+        pass
+    return None
+
+
 def _run_sync(full: bool, limit: int | None):
     """后台线程：登录顽鹿 → 拉取列表 → 下载 FIT。"""
     from fafa.onelap import (
@@ -148,6 +165,14 @@ def _run_sync(full: bool, limit: int | None):
                 path = download_activity(sess, act, state, INPUT_DIR)
                 if path:
                     save_state(state)
+                    ver = _get_software_version(path)
+                    if ver is not None and ver > 18:
+                        try:
+                            from fafa.tools.fix_coords import fix_file as _fix_coords
+                            _fix_coords(path, path, "decrypt")
+                            _set_sync(message=f"[{i}/{len(activities)}] {tstr} — 已自动火星解密（版本 {ver:.0f}）")
+                        except Exception:
+                            pass
                     new_files.append(path.name)
             except Exception:
                 pass

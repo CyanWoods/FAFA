@@ -11,11 +11,11 @@
   }
 
 用法：
-  .venv/bin/python export_all.py                          # 导出到 export.json
-  .venv/bin/python export_all.py -o ai_data.json          # 指定输出文件
-  .venv/bin/python export_all.py --no-km-stats            # 只含 summary（文件更小）
-  .venv/bin/python export_all.py --min-km 5               # 过滤 5 km 以下的短骑行
-  .venv/bin/python export_all.py --input custom/dir       # 指定 FIT 文件目录
+  .venv/bin/python -m fafa.tools.export_all                          # 导出到 export.json
+  .venv/bin/python -m fafa.tools.export_all -o ai_data.json          # 指定输出文件
+  .venv/bin/python -m fafa.tools.export_all --no-km-stats            # 只含 summary（文件更小）
+  .venv/bin/python -m fafa.tools.export_all --min-km 5               # 过滤 5 km 以下的短骑行
+  .venv/bin/python -m fafa.tools.export_all --input custom/dir       # 指定 FIT 文件目录
 """
 
 import argparse
@@ -26,7 +26,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # 从已重命名的文件名提取日期
 _DATE_PATTERN = re.compile(r"Magene_C506_(\d{8}-\d{6})_")

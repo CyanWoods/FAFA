@@ -6,9 +6,9 @@
   encrypt   火星加密：WGS-84 → GCJ-02（适用于 Garmin 等存 WGS-84 的设备）
 
 用法：
-  .venv/bin/python fix_coords.py --method decrypt
-  .venv/bin/python fix_coords.py --method encrypt input/ -o output/fixed/
-  .venv/bin/python fix_coords.py --method decrypt --dry-run
+  .venv/bin/python -m fafa.tools.fix_coords --method decrypt
+  .venv/bin/python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
+  .venv/bin/python -m fafa.tools.fix_coords --method decrypt --dry-run
 """
 
 import argparse

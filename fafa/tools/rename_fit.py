@@ -4,14 +4,19 @@
 Source pattern: [Mm]AGENE_C506_{start_unix}_{device_id}_{end_unix[_millis]}.fit
 Target pattern: Magene_C506_{YYYYMMDD-HHMMSS}_{device_id}.fit
 Timestamps converted to CST (UTC+8).
+
+用法：
+  .venv/bin/python -m fafa.tools.rename_fit
+  .venv/bin/python -m fafa.tools.rename_fit --dry-run
 """
 
 import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
-INPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "input")
+INPUT_DIR = str(Path(__file__).parent.parent.parent / "input")
 CST = timezone(timedelta(hours=8))
 
 PATTERN = re.compile(r'^MAGENE_C506_(\d+)_(\d+)_\d+\.fit$', re.IGNORECASE)
