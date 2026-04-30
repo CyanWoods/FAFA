@@ -174,17 +174,28 @@
       <div id="detail-mode-group">
         <button class="det-mode-btn" data-mode="dist">按距离</button>
         <button class="det-mode-btn active" data-mode="time">按时间</button>
+        <button class="det-mode-btn" data-mode="route">路线图</button>
       </div>
       <button class="det-export-btn" onclick="exportDetailData('json')">导出 JSON</button>
       <button class="det-export-btn" onclick="exportDetailData('csv')">导出 CSV</button>
     </div>
     <div id="detail-summary-row"></div>
-    <div id="detail-chart-section">
+    <div id="detail-metric-tabs-wrap">
       <div id="detail-metric-tabs"></div>
+    </div>
+    <div id="detail-chart-section">
       <div id="detail-chart-wrap"><canvas id="detail-canvas"></canvas></div>
     </div>
     <div id="detail-table-section">
       <div id="detail-table-wrap"></div>
+    </div>
+    <div id="detail-route-section" style="display:none">
+      <div id="detail-route-map"></div>
+      <div id="detail-route-legend">
+        <span id="detail-route-legend-low"></span>
+        <div id="detail-route-legend-bar"></div>
+        <span id="detail-route-legend-high"></span>
+      </div>
     </div>
   </div>
 

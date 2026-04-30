@@ -131,6 +131,8 @@ let detailTrackId = null;
 let detailMode = 'time';
 let detailMetric = 'speed';
 let detailChart = null;
+let detailRouteMap = null;
+let detailRouteLayers = [];
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
@@ -785,6 +787,12 @@ function openDetailView(id) {
   detailTrackId = id;
   detailMode = 'time';
 
+  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; }
+  detailRouteLayers = [];
+  document.getElementById('detail-chart-section').style.display = '';
+  document.getElementById('detail-table-section').style.display = '';
+  document.getElementById('detail-route-section').style.display = 'none';
+
   document.getElementById('detail-filename-label').textContent = t.name;
   document.getElementById('detail-view').classList.add('active');
 
@@ -798,6 +806,8 @@ function openDetailView(id) {
 function closeDetailView() {
   document.getElementById('detail-view').classList.remove('active');
   if (detailChart) { detailChart.destroy(); detailChart = null; }
+  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; }
+  detailRouteLayers = [];
   detailTrackId = null;
 }
 
@@ -824,7 +834,11 @@ function _buildDetailMetricTabs(track) {
       detailMetric = m.key;
       container.querySelectorAll('.det-metric-tab').forEach(b =>
         b.classList.toggle('active', b.dataset.key === m.key));
-      _renderDetailChart();
+      if (detailMode === 'route') {
+        _renderDetailRoute();
+      } else {
+        _renderDetailChart();
+      }
     };
     container.appendChild(btn);
   }
@@ -837,8 +851,18 @@ function _setupDetailModeButtons() {
       detailMode = btn.dataset.mode;
       document.querySelectorAll('.det-mode-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.mode === detailMode));
-      _renderDetailChart();
-      _renderDetailTable();
+      if (detailMode === 'route') {
+        document.getElementById('detail-chart-section').style.display = 'none';
+        document.getElementById('detail-table-section').style.display = 'none';
+        document.getElementById('detail-route-section').style.display = 'flex';
+        _renderDetailRoute();
+      } else {
+        document.getElementById('detail-chart-section').style.display = '';
+        document.getElementById('detail-table-section').style.display = '';
+        document.getElementById('detail-route-section').style.display = 'none';
+        _renderDetailChart();
+        _renderDetailTable();
+      }
     };
   });
 }
@@ -963,6 +987,101 @@ function _renderDetailTable() {
 function exportDetailData(fmt) {
   if (detailTrackId == null) return;
   exportTrackData(detailTrackId, fmt);
+}
+
+/* ── Detail route view ───────────────────────────────────────────────────── */
+function _haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(Math.min(1, a)));
+}
+
+function _metricHeatColor(t) {
+  // t: 0 = blue (hue 240), 1 = red (hue 0)
+  return `hsl(${Math.round(240 * (1 - t))},88%,56%)`;
+}
+
+function _renderDetailRoute() {
+  const t = tracks.get(detailTrackId);
+  if (!t) return;
+
+  const meta  = METRICS.find(m => m.key === detailMetric) || METRICS[0];
+  const field = meta.field;
+
+  // Prefer 100-m segments; fall back to 1-km
+  const stats = t.distStats.length ? t.distStats : t.kmStats;
+  const stepM = t.distStats.length ? 100 : 1000;
+
+  const values = stats.map(s => s[field]).filter(v => v != null);
+  if (!values.length) { toast(`指标「${meta.label}」无可用数据`); return; }
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+
+  const coords = getCoords(t);
+  if (coords.length < 2) return;
+
+  // Cumulative GPS distance (metres) along the track
+  const cumDist = [0];
+  for (let i = 1; i < coords.length; i++) {
+    cumDist.push(cumDist[i - 1] + _haversineM(
+      coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]
+    ));
+  }
+
+  // Init Leaflet map once per detail session
+  if (!detailRouteMap) {
+    detailRouteMap = L.map('detail-route-map', { zoomControl: true });
+    const tileKey = document.getElementById('tile-select').value || 'dark';
+    const tile = TILES[tileKey];
+    L.tileLayer(tile.url, tile.opts).addTo(detailRouteMap);
+  }
+
+  for (const layer of detailRouteLayers) detailRouteMap.removeLayer(layer);
+  detailRouteLayers = [];
+
+  // Assign each GPS point to a stat-bucket and draw colored runs
+  const buckets = coords.map((_, i) =>
+    Math.min(Math.floor(cumDist[i] / stepM), stats.length - 1)
+  );
+
+  let i = 0;
+  while (i < coords.length) {
+    const b = buckets[i];
+    let j = i + 1;
+    while (j < coords.length && buckets[j] === b) j++;
+
+    // Include one overlap point for seamless joins between segments
+    const seg = coords.slice(i, j < coords.length ? j + 1 : j);
+    const val = stats[b]?.[field];
+    const tNorm = (val != null && maxVal > minVal) ? (val - minVal) / (maxVal - minVal) : 0.5;
+    detailRouteLayers.push(
+      L.polyline(seg, { color: _metricHeatColor(tNorm), weight: 5, opacity: 0.9 }).addTo(detailRouteMap)
+    );
+    i = j;
+  }
+
+  // Fit bounds after layout settles (Leaflet needs stable container size)
+  setTimeout(() => {
+    if (!detailRouteMap) return;
+    detailRouteMap.invalidateSize();
+    if (detailRouteLayers.length) {
+      const bounds = L.latLngBounds([]);
+      for (const layer of detailRouteLayers) bounds.extend(layer.getBounds());
+      detailRouteMap.fitBounds(bounds, { padding: [24, 24] });
+    }
+  }, 80);
+
+  // Update legend labels
+  const fmtVal = v => {
+    if (meta.unit === 'km/h') return v.toFixed(1) + ' km/h';
+    if (['bpm', 'rpm', 'W', 'm'].includes(meta.unit)) return Math.round(v) + ' ' + meta.unit;
+    return v.toFixed(1) + ' ' + meta.unit;
+  };
+  document.getElementById('detail-route-legend-low').textContent  = fmtVal(minVal);
+  document.getElementById('detail-route-legend-high').textContent = fmtVal(maxVal);
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */

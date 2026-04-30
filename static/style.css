@@ -739,20 +739,24 @@ body {
   flex-shrink: 0;
 }
 
-#detail-chart-section {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 14px 20px 10px;
+#detail-metric-tabs-wrap {
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
 }
 
 #detail-metric-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin-bottom: 12px;
-  flex-shrink: 0;
+}
+
+#detail-chart-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 10px 20px;
 }
 
 .det-metric-tab {
@@ -1014,3 +1018,49 @@ body {
 }
 #lib-count { opacity: .6; font-size: 11px; }
 .detail-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
+
+/* ── Detail route view ───────────────────────────────────────────────────── */
+#detail-route-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#detail-route-map {
+  flex: 1;
+  min-height: 0;
+}
+
+#detail-route-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(15, 15, 20, 0.6);
+}
+
+#detail-route-legend-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right,
+    hsl(240,85%,58%),
+    hsl(180,85%,50%),
+    hsl(120,80%,45%),
+    hsl(60,85%,52%),
+    hsl(0,85%,58%)
+  );
+}
+
+#detail-route-legend-low,
+#detail-route-legend-high {
+  font-size: 11px;
+  color: #666;
+  white-space: nowrap;
+  min-width: 52px;
+}
+
+#detail-route-legend-high { text-align: right; }
