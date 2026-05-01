@@ -136,7 +136,7 @@ let detailRouteLayers = [];
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
-  map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: true });
+  map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
   setTiles('dark');
 }
 
@@ -552,6 +552,14 @@ function initZoomSlider() {
     if (z !== map.getZoom()) map.setZoom(z);
   }, { passive: false });
   document.addEventListener('touchend', () => { dragging = false; });
+
+  // +/- buttons
+  document.getElementById('zoom-in-btn').addEventListener('click', () => {
+    map.setZoom(Math.min(MAX_Z, map.getZoom() + 1));
+  });
+  document.getElementById('zoom-out-btn').addEventListener('click', () => {
+    map.setZoom(Math.max(MIN_Z, map.getZoom() - 1));
+  });
 
   // Click on track (jump to position)
   track.addEventListener('click', e => {
@@ -1305,15 +1313,35 @@ async function loadAllFromLibrary() {
   const toLoad = _libFiles.filter(f => !loadedNames.has(f.filename));
   if (!toLoad.length) { toast('所有文件已加载'); return; }
   toast(`正在加载 ${toLoad.length} 个文件…`);
-  for (const f of toLoad) {
-    try {
-      const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: f.filename }) });
-      const data = await res.json();
-      if (res.ok) addTrack(data);
-    } catch {}
+  const CHUNK = 4;
+  for (let i = 0; i < toLoad.length; i += CHUNK) {
+    await Promise.all(toLoad.slice(i, i + CHUNK).map(async f => {
+      try {
+        const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: f.filename }) });
+        const data = await res.json();
+        if (res.ok) addTrack(data);
+      } catch {}
+    }));
   }
   _renderLibrary(_libFiles);
   toast('加载完成');
+}
+
+async function deleteAllFromLibrary() {
+  if (!confirm('确定要删除文件库中所有 .fit 文件吗？此操作不可撤销。')) return;
+  try {
+    const res = await fetch('/api/files/delete_all', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      toast(`已删除 ${data.deleted} 个文件`);
+      refreshLibrary();
+      refreshLibraryCount();
+    } else {
+      toast('删除失败');
+    }
+  } catch {
+    toast('删除失败');
+  }
 }
 
 /* ── 全量导出 JSON ────────────────────────────────────────────────────────── */

@@ -14,7 +14,10 @@
 import argparse
 import io
 import math
+import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 from garmin_fit_sdk import Decoder, Encoder, Stream
@@ -174,13 +177,65 @@ def fix_file(src: Path, dst: Path, method: str) -> int:
     if n_gps == 0:
         return 0
 
-    # 转换所有含坐标的消息类型
     for key in list(msgs.keys()):
         msgs[key] = [_convert_mesg(m, method) for m in msgs[key]]
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(_encode(msgs))
+    data = _encode(msgs)
+    # 原子写入：先写临时文件再 rename，防止写入中断导致源文件损坏
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=dst.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(data)
+        Path(tmp_path).rename(dst)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return n_gps
+
+
+def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None]:
+    """Read FIT once: check software version, decrypt GCJ-02 in-place if ver > 18,
+    and extract the device model string (e.g. 'C506') from file_id_mesgs.
+
+    Returns (software_version, model_or_None).
+    Raises on write failure so the caller can log it.
+    """
+    msgs = _decode(path)
+
+    # Extract device model from file_id (e.g. product_name = "C506_..." → "C506")
+    product_name = (msgs.get("file_id_mesgs") or [{}])[0].get("product_name") or ""
+    raw_model = product_name.split("_")[0] if product_name else ""
+    model: str | None = raw_model if re.match(r"^[A-Z]\d+$", raw_model) else None
+
+    sw_list = msgs.get("software_mesgs") or []
+    ver: float | None = None
+    if sw_list:
+        try:
+            ver = float(sw_list[0].get("version"))
+        except (TypeError, ValueError):
+            pass
+
+    if ver is not None and ver > 18:
+        for key in list(msgs.keys()):
+            msgs[key] = [_convert_mesg(m, "decrypt") for m in msgs[key]]
+        data = _encode(msgs)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(data)
+            Path(tmp_path).rename(path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    return ver, model
 
 
 def fix_dir(

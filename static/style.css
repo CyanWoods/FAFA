@@ -85,9 +85,8 @@ body {
 #track-panel {
   position: fixed;
   bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(680px, calc(100vw - 32px));
+  left: 14px;
+  width: min(320px, calc(100vw - 28px));
   z-index: 900;
   background: rgba(15, 15, 20, 0.88);
   backdrop-filter: blur(14px);
@@ -112,12 +111,16 @@ body {
 
 /* resize handle — thin pill at panel top */
 #panel-resize-handle {
-  height: 10px;
-  flex-shrink: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
   cursor: ns-resize;
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
 }
 
 #panel-resize-handle::after {
@@ -137,7 +140,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  height: 44px;
+  padding: 0 14px;
   cursor: pointer;
   flex-shrink: 0;
   user-select: none;
@@ -188,7 +192,7 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 0 20px 10px;
+  padding: 0 10px 10px;
   overflow: hidden;
 }
 
@@ -226,13 +230,35 @@ body {
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 20px;
-  padding: 12px 10px;
+  padding: 10px 10px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.zoom-btn {
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 17px;
+  font-weight: 300;
+  line-height: 1;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  user-select: none;
+  border-radius: 50%;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
 }
+.zoom-btn:hover  { background: rgba(255, 255, 255, 0.09); color: #ccc; }
+.zoom-btn:active { background: rgba(255, 255, 255, 0.15); }
 
 #zoom-track {
   width: 4px;
@@ -435,7 +461,7 @@ body {
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
 .toast {
   position: fixed;
-  bottom: 80px;
+  bottom: 90px;
   left: 50%;
   transform: translateX(-50%) translateY(8px);
   background: rgba(15, 15, 20, 0.90);
@@ -868,6 +894,8 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 .drawer-act-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
+.drawer-act-btn.danger { color: #f87171; border-color: rgba(248,113,113,.25); }
+.drawer-act-btn.danger:hover { background: rgba(248,113,113,.15); color: #fca5a5; }
 .drawer-close-btn {
   background: none; border: none; color: #666;
   font-size: 18px; cursor: pointer; padding: 2px 6px; line-height: 1;

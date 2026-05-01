@@ -1,3 +1,4 @@
+import sys
 from dataclasses import dataclass, field
 from typing import Optional, List
 
@@ -44,7 +45,7 @@ def parse_fit(filepath: str) -> FitData:
     )
     if errors:
         for e in errors:
-            print(f"[Warning] {e}")
+            print(f"[Warning] {e}", file=sys.stderr)
 
     records: List[Record] = []
     for r in messages.get("record_mesgs", []):

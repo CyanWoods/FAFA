@@ -78,13 +78,29 @@ class Summary:
     avg_pedal_smooth: Optional[float]
 
 
-def _normalized_power(powers: List[int]) -> Optional[float]:
-    if len(powers) < 30:
+def _normalized_power(recs: List[Record]) -> Optional[float]:
+    """归一化功率：先将功率数据重采样到 1 秒分辨率，再应用 30 秒滚动均值。
+    正确处理 Garmin 智能采样（记录间隔不固定）场景。"""
+    pairs = [(r.timestamp, r.power) for r in recs if r.power is not None]
+    if not pairs:
         return None
+    total_s = int((pairs[-1][0] - pairs[0][0]).total_seconds())
+    if total_s < 30:
+        return None
+    t0 = pairs[0][0]
+    # 前向填充到 1 秒等间距网格
+    power_1s: List[int] = []
+    pi = 0
+    for sec in range(total_s + 1):
+        while pi + 1 < len(pairs) and (pairs[pi + 1][0] - t0).total_seconds() <= sec:
+            pi += 1
+        power_1s.append(pairs[pi][1])
     window = 30
+    if len(power_1s) < window:
+        return None
     rolling = [
-        sum(powers[i - window + 1 : i + 1]) / window
-        for i in range(window - 1, len(powers))
+        sum(power_1s[i : i + window]) / window
+        for i in range(len(power_1s) - window + 1)
     ]
     mean_4th = sum(x**4 for x in rolling) / len(rolling)
     return round(mean_4th**0.25, 1)
@@ -127,9 +143,10 @@ def _build_one_segment(recs: List[Record], seg_idx: int, ftp) -> KmStats:
     lr_raws = [r.left_right_balance for r in recs if r.left_right_balance is not None]
     left_pct = None
     if lr_raws:
-        avg_raw = sum(lr_raws) / len(lr_raws)
-        decoded = decode_lr_balance(int(round(avg_raw)))
-        left_pct = round(decoded[0], 1) if decoded else None
+        # 先解码各条记录再对百分比求均值，避免对含标志位的原始值直接平均
+        decoded_vals = [decode_lr_balance(raw) for raw in lr_raws]
+        valid = [d[0] for d in decoded_vals if d is not None]
+        left_pct = round(sum(valid) / len(valid), 1) if valid else None
 
     te_vals = []
     for r in recs:
@@ -144,11 +161,11 @@ def _build_one_segment(recs: List[Record], seg_idx: int, ftp) -> KmStats:
         ps_vals.extend(vals)
 
     cal_vals = [r.calories for r in recs if r.calories is not None]
-    calories_delta = (cal_vals[-1] - cal_vals[0]) if len(cal_vals) >= 2 else (cal_vals[0] if cal_vals else None)
+    calories_delta = max(0, cal_vals[-1] - cal_vals[0]) if len(cal_vals) >= 2 else (cal_vals[0] if cal_vals else None)
 
-    work_kj   = round(sum(powers) / 1000, 1) if powers else None
     avg_power = round(sum(powers) / len(powers), 1) if powers else None
-    np_val    = _normalized_power(powers) if powers else None
+    work_kj   = round(avg_power * duration_s / 1000, 1) if (avg_power is not None and duration_s > 0) else None
+    np_val    = _normalized_power(recs)
     if_val    = round(avg_power / ftp, 3) if (avg_power is not None and ftp) else None
     gain, loss = _elevation_changes(alts)
 
@@ -264,8 +281,9 @@ def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
     lr_raws = [r.left_right_balance for r in records if r.left_right_balance is not None]
     left_pct = None
     if lr_raws:
-        decoded = decode_lr_balance(int(round(sum(lr_raws) / len(lr_raws))))
-        left_pct = round(decoded[0], 1) if decoded else None
+        decoded_vals = [decode_lr_balance(raw) for raw in lr_raws]
+        valid = [d[0] for d in decoded_vals if d is not None]
+        left_pct = round(sum(valid) / len(valid), 1) if valid else None
 
     te_vals = []
     for r in records:
@@ -281,7 +299,7 @@ def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
 
     ftp = session.get("threshold_power")
     avg_power = round(sum(powers) / len(powers), 1) if powers else None
-    np_all = _normalized_power(powers) if powers else None
+    np_all = _normalized_power(records)
     if_all = round(avg_power / ftp, 3) if (avg_power and ftp) else None
 
     # Prefer session-level values when available (more accurate)

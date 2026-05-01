@@ -6,12 +6,17 @@
 然后访问 http://localhost:5173
 """
 
+import io
 import json
+import logging
 import os
+import re
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, send_file
@@ -28,9 +33,42 @@ INPUT_DIR      = PROJECT_ROOT / "input"
 STATE_FILE     = PROJECT_ROOT / "download_state.json"
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
 
+# ── 解析结果缓存（按文件路径+mtime） ───────────────────────────────────────────
+_parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
+_cache_lock  = threading.Lock()
+_CACHE_MAX   = 300
+
+
+def _cache_get(path_str: str, mtime: float) -> dict | None:
+    with _cache_lock:
+        entry = _parse_cache.get(path_str)
+        if entry and entry["mtime"] == mtime:
+            return entry["data"]
+    return None
+
+
+def _cache_put(path_str: str, mtime: float, data: dict) -> None:
+    with _cache_lock:
+        if len(_parse_cache) >= _CACHE_MAX:
+            # 淘汰最旧的 50 条
+            old_keys = list(_parse_cache.keys())[:50]
+            for k in old_keys:
+                _parse_cache.pop(k, None)
+        _parse_cache[path_str] = {"mtime": mtime, "data": data}
+
 
 # ── 通用 FIT 解析 ──────────────────────────────────────────────────────────────
 def _parse_and_build(fit_path: str, filename: str) -> dict:
+    p = Path(fit_path)
+    if p.exists():
+        try:
+            mtime = p.stat().st_mtime
+            cached = _cache_get(fit_path, mtime)
+            if cached is not None:
+                return cached
+        except OSError:
+            pass
+
     fit      = parse_fit(fit_path)
     coords   = [
         [r.position_lat * SEMICIRCLE_TO_DEG, r.position_long * SEMICIRCLE_TO_DEG]
@@ -45,13 +83,15 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         summary       = compute_summary(fit, km_stats)
         summary_dict  = asdict(summary)
         km_stats_list = [asdict(s) for s in km_stats]
-    except Exception:
+    except Exception as e:
+        logging.warning("计算 km_stats 失败 (%s): %s", filename, e)
         summary_dict  = None
         km_stats_list = []
 
     try:
         dist_stats_list = [asdict(s) for s in compute_dist_stats(fit)]
-    except Exception:
+    except Exception as e:
+        logging.warning("计算 dist_stats 失败 (%s): %s", filename, e)
         dist_stats_list = []
 
     try:
@@ -60,11 +100,12 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
             fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%S")
             if fit.records else None
         )
-    except Exception:
+    except Exception as e:
+        logging.warning("计算 time_stats 失败 (%s): %s", filename, e)
         time_stats_list  = []
         time_stats_start = None
 
-    return dict(
+    result = dict(
         coords=coords,
         filename=filename,
         is_gcj02=not needs_wgs84_conversion(fit.manufacturer),
@@ -74,6 +115,15 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         time_stats=time_stats_list,
         time_stats_start=time_stats_start,
     )
+
+    p2 = Path(fit_path)
+    if p2.exists():
+        try:
+            _cache_put(fit_path, p2.stat().st_mtime, result)
+        except OSError:
+            pass
+
+    return result
 
 
 # ── 同步状态（全局，被后台线程写、前端轮询读） ─────────────────────────────────
@@ -92,29 +142,16 @@ def _set_sync(**kw):
         _sync.update(kw)
 
 
-def _get_software_version(path: Path) -> float | None:
-    """返回 FIT 文件 software_mesgs 中的 version 字段，解析失败返回 None。"""
-    from garmin_fit_sdk import Decoder, Stream
-    try:
-        stream = Stream.from_file(str(path))
-        dec = Decoder(stream)
-        msgs, _ = dec.read(apply_scale_and_offset=True)
-        sw_list = msgs.get("software_mesgs") or []
-        if sw_list:
-            ver = sw_list[0].get("version")
-            if ver is not None:
-                return float(ver)
-    except Exception:
-        pass
-    return None
+_MAX_DL_WORKERS = 3
 
 
 def _run_sync(full: bool, limit: int | None):
-    """后台线程：登录顽鹿 → 拉取列表 → 下载 FIT。"""
+    """后台线程：登录顽鹿 → 拉取列表 → 并发下载 FIT。"""
     from fafa.onelap import (
         browser_login, build_session, fetch_activity_list,
-        download_activity, latest_local_time, parse_activity_time, activity_id,
+        download_activity, rename_magene, latest_local_time, parse_activity_time, activity_id,
     )
+    from fafa.tools.fix_coords import auto_decrypt_if_gcj02
 
     def load_state():
         if STATE_FILE.exists():
@@ -154,35 +191,58 @@ def _run_sync(full: bool, limit: int | None):
             _set_sync(state="done", message="没有新活动需要下载", total=0, done=0)
             return
 
-        _set_sync(state="downloading", message=f"共 {len(activities)} 个活动，开始下载…", total=len(activities), done=0)
+        total = len(activities)
+        _set_sync(state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
 
-        new_files = []
-        for i, act in enumerate(activities, 1):
+        new_files: list[str] = []
+        done_count = 0
+        dl_lock    = threading.Lock()
+
+        def _download_one(act: dict) -> tuple[Path | None, str]:
+            rid  = activity_id(act)
             t    = parse_activity_time(act)
-            tstr = t.strftime("%Y-%m-%d %H:%M") if t else activity_id(act)
-            _set_sync(message=f"[{i}/{len(activities)}] {tstr}", done=i - 1)
+            tstr = t.strftime("%Y-%m-%d %H:%M") if t else rid
+            # 如果活动已在 state 中标记为已下载，直接走 download_activity 的早返回路径，
+            # 无需再做 decrypt/rename（上次同步时已处理）。
+            already_done = bool(state.get(rid, {}).get("downloaded"))
             try:
-                path = download_activity(sess, act, state, INPUT_DIR)
-                if path:
-                    save_state(state)
-                    ver = _get_software_version(path)
-                    if ver is not None and ver > 18:
+                path = download_activity(sess, act, state, INPUT_DIR,
+                                         skip_rename=not already_done)
+                if path and not already_done:
+                    # 仅对本次实际下载的文件执行：单次 FIT 解析完成版本检查+解密+提取型号
+                    is_fresh = state.get(rid, {}).get("downloaded_at") is not None
+                    if is_fresh:
                         try:
-                            from fafa.tools.fix_coords import fix_file as _fix_coords
-                            _fix_coords(path, path, "decrypt")
-                            _set_sync(message=f"[{i}/{len(activities)}] {tstr} — 已自动火星解密（版本 {ver:.0f}）")
-                        except Exception:
-                            pass
-                    new_files.append(path.name)
-            except Exception:
-                pass
-            _set_sync(done=i, new_files=list(new_files))
-            time.sleep(0.3)
+                            ver, model = auto_decrypt_if_gcj02(path)
+                            new_path   = rename_magene(path, model=model)
+                            if new_path != path:
+                                state[rid]["filename"] = new_path.name
+                            path = new_path
+                            if ver is not None and ver > 18:
+                                tstr = f"{tstr} — 已自动火星解密（版本 {ver:.0f}）"
+                        except Exception as e:
+                            logging.warning("自动火星解密失败 (%s): %s", path.name, e)
+                return path, tstr
+            except Exception as e:
+                logging.warning("下载 %s 失败: %s", tstr, e)
+                return None, tstr
 
+        with ThreadPoolExecutor(max_workers=_MAX_DL_WORKERS) as pool:
+            futures = {pool.submit(_download_one, act): act for act in activities}
+            for future in as_completed(futures):
+                path, msg = future.result()
+                with dl_lock:
+                    done_count += 1
+                    dc = done_count
+                    if path:
+                        new_files.append(path.name)
+                _set_sync(message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
+
+        save_state(state)
         _set_sync(
             state="done",
             message=f"同步完成，新增 {len(new_files)} 个文件",
-            done=len(activities),
+            done=total,
             new_files=new_files,
         )
 
@@ -236,6 +296,21 @@ def list_files():
             "mtime":    st.st_mtime,
         })
     return jsonify(files=files)
+
+
+@app.route("/api/files/delete_all", methods=["POST"])
+def delete_all_files():
+    """删除 input/ 目录下所有 .fit 文件。"""
+    if not INPUT_DIR.exists():
+        return jsonify(deleted=0)
+    deleted = 0
+    for p in INPUT_DIR.glob("*.fit"):
+        try:
+            p.unlink()
+            deleted += 1
+        except Exception:
+            pass
+    return jsonify(deleted=deleted)
 
 
 @app.route("/api/load", methods=["POST"])
@@ -304,6 +379,13 @@ def export_all():
     if not INPUT_DIR.exists():
         return jsonify(error="input/ 目录不存在"), 404
 
+    def _strip_nulls(obj):
+        if isinstance(obj, dict):
+            return {k: _strip_nulls(v) for k, v in obj.items() if v is not None}
+        if isinstance(obj, list):
+            return [_strip_nulls(i) for i in obj]
+        return obj
+
     fit_files = sorted(INPUT_DIR.glob("*.fit"))
     activities = []
 
@@ -312,7 +394,8 @@ def export_all():
             fit      = parse_fit(str(path))
             km_stats = compute_km_stats(fit)
             summary  = compute_summary(fit, km_stats)
-        except Exception:
+        except Exception as e:
+            logging.warning("export_all 解析失败 (%s): %s", path.name, e)
             continue
 
         if not fit.records:
@@ -323,10 +406,8 @@ def export_all():
             continue
 
         # 从文件名提取日期，降级到第一条记录
-        import re
         m = re.match(r"Magene_C506_(\d{8}-\d{6})_", path.name)
         if m:
-            from datetime import datetime
             date_str = datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").strftime("%Y-%m-%dT%H:%M:%S")
         else:
             try:
@@ -338,15 +419,7 @@ def export_all():
         if not no_km:
             entry["km_stats"] = [asdict(s) for s in km_stats]
 
-        # 去 None
-        def strip_nulls(obj):
-            if isinstance(obj, dict):
-                return {k: strip_nulls(v) for k, v in obj.items() if v is not None}
-            if isinstance(obj, list):
-                return [strip_nulls(i) for i in obj]
-            return obj
-
-        entry = strip_nulls(entry)
+        entry = _strip_nulls(entry)
         entry["filename"] = path.name
         if date_str:
             entry["date"] = date_str
@@ -354,7 +427,6 @@ def export_all():
 
     activities.sort(key=lambda a: a.get("date") or "")
 
-    from datetime import datetime
     total_km = sum((a.get("summary", {}).get("total_dist_km") or 0) for a in activities)
     dates    = [a["date"][:10] for a in activities if a.get("date")]
 
@@ -369,7 +441,6 @@ def export_all():
         "activities": activities,
     }
 
-    import io
     buf = io.BytesIO(json.dumps(result, ensure_ascii=False, indent=2, default=str).encode("utf-8"))
     buf.seek(0)
     return send_file(
@@ -408,4 +479,5 @@ def onelap_status():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5173)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, port=5173)

@@ -54,9 +54,11 @@
 
   <!-- 缩放拉柄 -->
   <div id="zoom-slider-wrap">
+    <button id="zoom-in-btn"  class="zoom-btn" title="放大">+</button>
     <div id="zoom-track">
       <div id="zoom-thumb"></div>
     </div>
+    <button id="zoom-out-btn" class="zoom-btn" title="缩小">−</button>
   </div>
 
   <!-- 地图 -->
@@ -77,6 +79,7 @@
       <div class="drawer-actions">
         <button class="drawer-act-btn" onclick="loadAllFromLibrary()">全部加载</button>
         <button class="drawer-act-btn" onclick="refreshLibrary()">刷新</button>
+        <button class="drawer-act-btn danger" onclick="deleteAllFromLibrary()">全部删除</button>
         <button class="drawer-close-btn" onclick="closeLibrary()">×</button>
       </div>
     </div>

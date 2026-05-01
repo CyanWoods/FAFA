@@ -19,15 +19,19 @@ ONELAP_APP   = "https://u.onelap.cn"
 LIST_API     = f"{ONELAP_APP}/api/otm/ride_record/list"
 DETAIL_API   = f"{ONELAP_APP}/api/otm/ride_record/analysis/{{rid}}"
 DOWNLOAD_API = f"{ONELAP_APP}/api/otm/ride_record/analysis/fit_content/{{key}}"
-SIGN_KEY     = "fe9f8382418fcdeb136461cac6acae7b"
+SIGN_KEY     = os.environ.get("ONELAP_SIGN_KEY", "fe9f8382418fcdeb136461cac6acae7b")
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
 
 CST             = timezone(timedelta(hours=8))
-_MAGENE_RAW     = re.compile(r"^MAGENE_C506_(\d+)_(\d+)_\d+(?:_\d+)?\.fit$", re.IGNORECASE)
-_MAGENE_RENAMED = re.compile(r"^Magene_C506_(\d{8}-\d{6})_")
+_MAGENE_RAW     = re.compile(r"^MAGENE_[A-Z]\d+_(\d+)_(\d+)_\d+(?:_\d+)?\.fit$", re.IGNORECASE)
+# group(1): 旧格式日期 Magene_Cxxx_YYYYMMDD-HHMMSS_id.fit
+# group(2): 新格式日期 Magene_Cxxx_id_YYYYMMDD-HHMMSS.fit
+_MAGENE_RENAMED = re.compile(
+    r"^Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_\d+|\d+_(\d{8}-\d{6}))\.fit$"
+)
 
 
 # ── 签名 ──────────────────────────────────────────────────────────────────────
@@ -42,12 +46,32 @@ def sign(params: dict) -> dict:
 
 
 # ── 文件名工具 ─────────────────────────────────────────────────────────────────
-def rename_magene(path: Path) -> Path:
+def _read_model(path: Path) -> str | None:
+    """从 FIT 文件的 file_id 消息中读取码表型号（如 C506）。"""
+    try:
+        from garmin_fit_sdk import Decoder, Stream
+        messages, _ = Decoder(Stream.from_file(str(path))).read(
+            apply_scale_and_offset=False,
+            merge_heart_rates=False,
+            expand_sub_fields=False,
+        )
+        product_name = (messages.get("file_id_mesgs") or [{}])[0].get("product_name", "")
+        model = product_name.split("_")[0] if product_name else ""
+        if re.match(r"^[A-Z]\d+$", model):
+            return model
+    except Exception:
+        pass
+    return None
+
+
+def rename_magene(path: Path, model: str | None = None) -> Path:
     m = _MAGENE_RAW.match(path.name)
     if not m:
         return path
+    if model is None:
+        model = _read_model(path) or path.name.split("_")[1].upper()
     dt = datetime.fromtimestamp(int(m.group(1)), tz=CST)
-    new_name = f"Magene_C506_{dt.strftime('%Y%m%d-%H%M%S')}_{m.group(2)}.fit"
+    new_name = f"Magene_{model}_{m.group(2)}_{dt.strftime('%Y%m%d-%H%M%S')}.fit"
     new_path = path.parent / new_name
     if new_path == path:
         return path
@@ -64,7 +88,8 @@ def latest_local_time(input_dir: Path) -> datetime | None:
         if not m:
             continue
         try:
-            dt = datetime.strptime(m.group(1), "%Y%m%d-%H%M%S")
+            dt_str = m.group(1) or m.group(2)
+            dt = datetime.strptime(dt_str, "%Y%m%d-%H%M%S")
             if latest is None or dt > latest:
                 latest = dt
         except ValueError:
@@ -155,7 +180,7 @@ def fetch_activity_list(
                 t = parse_activity_time(act)
                 if t and t <= cutoff:
                     stop = True
-                    continue
+                    break
             collected.append(act)
             if limit and len(collected) >= limit:
                 stop = True
@@ -196,6 +221,7 @@ def download_activity(
     act: dict,
     state: dict,
     out_dir: Path,
+    skip_rename: bool = False,
 ) -> Path | None:
     """
     下载单个活动 FIT 文件。
@@ -275,7 +301,7 @@ def download_activity(
 
     try:
         with part.open("wb") as f:
-            for chunk in resp.iter_content(8192):
+            for chunk in resp.iter_content(65536):
                 if chunk:
                     f.write(chunk)
         part.rename(final)
@@ -286,7 +312,8 @@ def download_activity(
     finally:
         resp.close()
 
-    final = rename_magene(final)
+    if not skip_rename:
+        final = rename_magene(final)
     state[rid] = {
         "filename": final.name,
         "downloaded": True,
