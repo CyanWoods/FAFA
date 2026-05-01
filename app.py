@@ -142,7 +142,7 @@ def _set_sync(**kw):
         _sync.update(kw)
 
 
-_MAX_DL_WORKERS = 3
+_MAX_DL_WORKERS = 6
 
 
 def _run_sync(full: bool, limit: int | None):
@@ -480,4 +480,6 @@ def onelap_status():
 
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    if debug:
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
     app.run(debug=debug, port=5173)

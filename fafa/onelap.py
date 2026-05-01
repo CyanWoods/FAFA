@@ -238,11 +238,20 @@ def download_activity(
         if existing.exists() and existing.stat().st_size > 0:
             return existing
 
-    detail_resp = sess.get(DETAIL_API.format(rid=rid), timeout=30)
-    detail_resp.raise_for_status()
-    detail = detail_resp.json()
+    import logging
+    t0 = time.time()
 
-    fit_url = _extract_fit_url(detail, act)
+    # 优先从活动列表数据中直接提取 fit_url，省去一次 Detail API 请求
+    fit_url = _extract_fit_url({}, act)
+    if not fit_url:
+        detail_resp = sess.get(DETAIL_API.format(rid=rid), timeout=30)
+        detail_resp.raise_for_status()
+        detail = detail_resp.json()
+        fit_url = _extract_fit_url(detail, act)
+        logging.debug("[onelap] rid=%s  detail API: %.2fs", rid, time.time() - t0)
+    else:
+        logging.debug("[onelap] rid=%s  fit_url found in list (skipped detail API)", rid)
+
     if not fit_url:
         return None
 
@@ -260,6 +269,7 @@ def download_activity(
         if c not in seen:
             candidates.append(c)
 
+    t1 = time.time()
     resp = None
     for key_src in candidates:
         fit_key = base64.b64encode(key_src.encode()).decode()
@@ -312,6 +322,12 @@ def download_activity(
     finally:
         resp.close()
 
+    size_kb = final.stat().st_size / 1024
+    logging.debug(
+        "[onelap] rid=%s  key_resolve: %.2fs  download: %.2fs  size: %.1f KB",
+        rid, t1 - t0, time.time() - t1, size_kb,
+    )
+
     if not skip_rename:
         final = rename_magene(final)
     state[rid] = {
@@ -356,7 +372,12 @@ def browser_login() -> dict:
             raise RuntimeError("等待登录超时（90 秒）")
 
         tab.get(f"{ONELAP_APP}/analysis")
-        time.sleep(4)
+        # 轮询等待 token 写入 localStorage，最长 10 秒，比固定 sleep(4) 更快
+        _poll_end = time.time() + 10
+        while time.time() < _poll_end:
+            if tab.run_js("return !!localStorage.getItem('token');"):
+                break
+            time.sleep(0.3)
 
         token = tab.run_js("return localStorage.getItem('token');") or ""
         if not token:
