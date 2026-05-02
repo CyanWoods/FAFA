@@ -1,24 +1,30 @@
 /* ── Tile configs ────────────────────────────────────────────────────────── */
+const _CARTO_OPTS = {
+  subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO',
+  crossOrigin: 'anonymous',
+  tileSize: 512, zoomOffset: -1,
+  keepBuffer: 4, updateWhenZooming: false,
+};
 const TILES = {
   amap: {
     url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-    opts: { subdomains: '1234', maxZoom: 19, attribution: '&copy; 高德地图' },
+    opts: { subdomains: '1234', maxZoom: 19, attribution: '&copy; 高德地图', keepBuffer: 4, updateWhenZooming: false },
   },
   'dark-nolabels': {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
+    url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png',
+    opts: _CARTO_OPTS,
   },
   'light-nolabels': {
-    url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
+    url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png',
+    opts: _CARTO_OPTS,
   },
   dark: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+    opts: _CARTO_OPTS,
   },
   light: {
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    opts: { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO', crossOrigin: 'anonymous' },
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+    opts: _CARTO_OPTS,
   },
 };
 
@@ -292,6 +298,13 @@ function exportTrackData(id, fmt) {
 }
 
 /* ── Track list UI ───────────────────────────────────────────────────────── */
+function _trackDateLabel(track) {
+  if (track.timeStatsStart) return track.timeStatsStart.slice(0, 16).replace('T', ' ');
+  const m = track.name.match(/Magene_[A-Z]\d+_(?:\d+_)?(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+  return track.name.replace(/\.fit$/i, '');
+}
+
 function addTrackRow(track) {
   const row = document.createElement('div');
   row.className = 'track-item';
@@ -313,7 +326,7 @@ function addTrackRow(track) {
 
   const name = document.createElement('span');
   name.className = 'track-name';
-  name.textContent = track.name;
+  name.textContent = _trackDateLabel(track);
   name.title = '查看详情';
   name.onclick = () => openDetailView(track.id);
 
@@ -339,6 +352,13 @@ function addTrackRow(track) {
 
   main.append(dot, name, group, rmBtn);
   row.appendChild(main);
+
+  // Filename subtitle
+  const fnEl = document.createElement('div');
+  fnEl.className = 'track-filename';
+  fnEl.textContent = track.name;
+  fnEl.title = track.name;
+  row.appendChild(fnEl);
 
   // Stats row: key metrics as chips
   const chips = _statChips(track.summary);
@@ -373,6 +393,26 @@ function addTrackRow(track) {
   }
 
   document.getElementById('track-list').appendChild(row);
+  _sortTrackList();
+}
+
+function _trackSortKey(track) {
+  if (track.timeStatsStart) return track.timeStatsStart;
+  const m = track.name.match(/Magene_[A-Z]\d+_(?:\d+_)?(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})?/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] || '00'}`;
+  return track.name;
+}
+
+function _sortTrackList() {
+  const list = document.getElementById('track-list');
+  const items = [...list.children];
+  items.sort((a, b) => {
+    const ta = tracks.get(+a.id.slice(3));
+    const tb = tracks.get(+b.id.slice(3));
+    if (!ta || !tb) return 0;
+    return _trackSortKey(ta).localeCompare(_trackSortKey(tb));
+  });
+  items.forEach(el => list.appendChild(el));
 }
 
 function syncBadge() {
@@ -640,14 +680,22 @@ function _calcOrigin(minLat, maxLat, minLon, maxLon, zoom, W, H) {
   return [(x0 + x1) / 2 - W / 2, (y0 + y1) / 2 - H / 2];
 }
 
-function _loadTileImg(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('tile: ' + url));
-    img.src = url;
-  });
+async function _loadTileImg(url, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      await new Promise(r => setTimeout(r, attempt * 300));
+      const img = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.crossOrigin = 'anonymous';
+        im.onload = () => resolve(im);
+        im.onerror = () => reject(new Error('tile: ' + url));
+        im.src = url;
+      });
+      return img;
+    } catch (e) {
+      if (attempt === retries - 1) throw e;
+    }
+  }
 }
 
 const _TILE_SUBS = ['a', 'b', 'c', 'd'];
@@ -655,13 +703,15 @@ let _tileSubIdx = 0;
 
 async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate) {
   const TILE = 256;
+  const CONCURRENCY = 8;
+  ctx.imageSmoothingEnabled = false;
   const maxIdx = Math.pow(2, zoom) - 1;
   const col0 = Math.floor(originX / TILE);
   const col1 = Math.floor((originX + W - 1) / TILE);
   const row0 = Math.floor(originY / TILE);
   const row1 = Math.floor((originY + H - 1) / TILE);
 
-  const loads = [];
+  const tasks = [];
   for (let col = col0; col <= col1; col++) {
     for (let row = row0; row <= row1; row++) {
       const tx = Math.max(0, Math.min(maxIdx, col));
@@ -669,19 +719,21 @@ async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate) {
       const s = _TILE_SUBS[(_tileSubIdx++) % 4];
       const url = urlTemplate.replace('{s}', s).replace('{z}', zoom)
                              .replace('{x}', tx).replace('{y}', ty);
-      const dx = col * TILE - originX;
-      const dy = row * TILE - originY;
-      loads.push(_loadTileImg(url).then(img => ({ img, dx, dy })));
+      tasks.push({ url, dx: col * TILE - originX, dy: row * TILE - originY });
     }
   }
 
-  const results = await Promise.allSettled(loads);
-  for (const r of results) {
-    if (r.status === 'fulfilled') {
-      const { img, dx, dy } = r.value;
-      ctx.drawImage(img, dx, dy, TILE, TILE);
+  const results = [];
+  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+    const batch = tasks.slice(i, i + CONCURRENCY).map(({ url, dx, dy }) =>
+      _loadTileImg(url).then(img => ({ img, dx, dy })).catch(() => null)
+    );
+    const batchResults = await Promise.all(batch);
+    for (const r of batchResults) {
+      if (r) ctx.drawImage(r.img, r.dx, r.dy, TILE, TILE);
     }
   }
+  return results;
 }
 
 function _drawPath(ctx, coords, zoom, originX, originY) {
@@ -758,7 +810,9 @@ async function doExport() {
     for (const t of tracks.values()) for (const pt of getCoords(t)) allCoords.push(pt);
 
     const { zoom, minLat, maxLat, minLon, maxLon } = _calcZoom(allCoords, W, H);
-    const [originX, originY] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoom, W, H);
+    const [_ox, _oy] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoom, W, H);
+    const originX = Math.round(_ox);
+    const originY = Math.round(_oy);
 
     const canvas = document.createElement('canvas');
     canvas.width  = W;
