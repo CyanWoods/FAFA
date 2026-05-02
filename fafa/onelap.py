@@ -27,8 +27,8 @@ UA = (
 
 CST             = timezone(timedelta(hours=8))
 _MAGENE_RAW     = re.compile(r"^MAGENE_[A-Z]\d+_(\d+)_(\d+)_\d+(?:_\d+)?\.fit$", re.IGNORECASE)
-# group(1): 旧格式日期 Magene_Cxxx_YYYYMMDD-HHMMSS_id.fit
-# group(2): 新格式日期 Magene_Cxxx_id_YYYYMMDD-HHMMSS.fit
+# group(1): 旧格式日期字符串 YYYYMMDD-HHMMSS（Magene_Cxxx_YYYYMMDD-HHMMSS_id.fit）
+# group(2): 新格式日期字符串 YYYYMMDD-HHMMSS（Magene_Cxxx_id_YYYYMMDD-HHMMSS.fit）
 _MAGENE_RENAMED = re.compile(
     r"^Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_\d+|\d+_(\d{8}-\d{6}))\.fit$"
 )

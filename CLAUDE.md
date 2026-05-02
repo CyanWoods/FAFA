@@ -46,7 +46,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 ### CLI tools (`fafa/tools/` — run as Python modules)
 
 - `fafa.tools.fix_coords` — Batch GCJ-02 ↔ WGS-84 correction written back into FIT files. `fix_file(src, dst, method)` is also called by `app.py`.
-- `fafa.tools.rename_fit` — Rename Magene raw filenames to `Magene_C506_YYYYMMDD-HHMMSS_{id}.fit`
+- `fafa.tools.rename_fit` — Rename Magene raw filenames to `Magene_{model}_{id}_YYYYMMDD-HHMMSS.fit`
 - `fafa.tools.export_all` — Batch-parse `input/` and write a JSON file for AI use. Supports `--no-km-stats`, `--min-km`, `--keep-nulls`.
 - `fafa.tools.download_fit` — CLI wrapper for the OneLap download pipeline (same logic as the web sync, but terminal output).
 

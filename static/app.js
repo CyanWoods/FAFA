@@ -206,7 +206,9 @@ async function applyCoordTransform(id, method) {
   t.polyline.setLatLngs(newCoords);
 
   if (t.source !== 'library') {
-    // Uploaded tracks: don't mutate t.raw so repeated clicks are idempotent
+    // Uploaded tracks: don't mutate t.raw so repeated clicks are idempotent,
+    // but update t.mode so getCoords() (used by export / route view) stays in sync.
+    t.mode = method;
     return;
   }
 
@@ -1173,13 +1175,16 @@ async function refreshLibrary() {
   }
 }
 
+// Match both old (Magene_{model}_YYYYMMDD-…) and new (Magene_{model}_{id}_YYYYMMDD-…) formats
+const _MAGENE_DATE_RE = /Magene_[A-Z]\d+_(?:\d+_)?(\d{4})(\d{2})\d{2}-/;
+
 function _buildLibFilter() {
   const container = document.getElementById('lib-filter');
   if (!container) return;
 
   const yearMonths = new Map();
   for (const f of _libFiles) {
-    const m = f.filename.match(/Magene_C506_(\d{4})(\d{2})\d{2}-/);
+    const m = f.filename.match(_MAGENE_DATE_RE);
     if (!m) continue;
     const [, y, mo] = m;
     if (!yearMonths.has(y)) yearMonths.set(y, new Set());
@@ -1238,7 +1243,7 @@ function _applyLibFilter() {
   let files = _libFiles;
   if (_libFilterYear) {
     files = files.filter(f => {
-      const m = f.filename.match(/Magene_C506_(\d{4})(\d{2})\d{2}-/);
+      const m = f.filename.match(_MAGENE_DATE_RE);
       return m && m[1] === _libFilterYear && (_libFilterMonth === null || m[2] === _libFilterMonth);
     });
   }
@@ -1251,7 +1256,9 @@ function filterLibrary() {
 }
 
 function _libDateLabel(filename) {
-  const m = filename.match(/Magene_C506_(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+  // Matches both old (Magene_{model}_YYYYMMDD-HHMMSS_…) and
+  // new (Magene_{model}_{id}_YYYYMMDD-HHMMSS) formats
+  const m = filename.match(/Magene_[A-Z]\d+_(?:\d+_)?(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
   if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
   return filename.replace(/\.fit$/i, '');
 }

@@ -361,6 +361,10 @@ def fix_coords_api():
         original_mtime = path.stat().st_mtime
         fix_file(path, path, method)
         os.utime(path, (original_mtime, original_mtime))
+        # Mtime was reset to its original value so the cache key still matches —
+        # explicitly evict the stale entry so the next load reads fresh data.
+        with _cache_lock:
+            _parse_cache.pop(str(path), None)
         return jsonify(ok=True)
     except Exception as e:
         return jsonify(error=f"坐标转换失败: {e}"), 500
@@ -405,10 +409,10 @@ def export_all():
         if min_km > 0 and (summary_d.get("total_dist_km") or 0) < min_km:
             continue
 
-        # 从文件名提取日期，降级到第一条记录
-        m = re.match(r"Magene_C506_(\d{8}-\d{6})_", path.name)
+        # 从文件名提取日期（旧格式 _YYYYMMDD-HHMMSS_ 或新格式 _id_YYYYMMDD-HHMMSS）
+        m = re.search(r"Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_|\d+_(\d{8}-\d{6}))", path.name)
         if m:
-            date_str = datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").strftime("%Y-%m-%dT%H:%M:%S")
+            date_str = datetime.strptime(m.group(1) or m.group(2), "%Y%m%d-%H%M%S").strftime("%Y-%m-%dT%H:%M:%S")
         else:
             try:
                 date_str = fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%S")

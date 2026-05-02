@@ -28,15 +28,16 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-# 从已重命名的文件名提取日期
-_DATE_PATTERN = re.compile(r"Magene_C506_(\d{8}-\d{6})_")
+# 支持旧格式 Magene_{model}_YYYYMMDD-HHMMSS_{id}.fit 和
+# 新格式 Magene_{model}_{id}_YYYYMMDD-HHMMSS.fit，型号不限于 C506
+_DATE_PATTERN = re.compile(r"Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_|\d+_(\d{8}-\d{6}))")
 
 
 def _date_from_filename(name: str) -> datetime | None:
-    m = _DATE_PATTERN.match(name)
+    m = _DATE_PATTERN.search(name)
     if m:
         try:
-            return datetime.strptime(m.group(1), "%Y%m%d-%H%M%S")
+            return datetime.strptime(m.group(1) or m.group(2), "%Y%m%d-%H%M%S")
         except ValueError:
             pass
     return None

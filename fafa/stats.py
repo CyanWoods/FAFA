@@ -300,7 +300,7 @@ def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
     ftp = session.get("threshold_power")
     avg_power = round(sum(powers) / len(powers), 1) if powers else None
     np_all = _normalized_power(records)
-    if_all = round(avg_power / ftp, 3) if (avg_power and ftp) else None
+    if_all = round(avg_power / ftp, 3) if (avg_power is not None and ftp) else None
 
     # Prefer session-level values when available (more accurate)
     return Summary(
