@@ -144,15 +144,13 @@ def build_session(token: str, cookies: dict) -> requests.Session:
 def fetch_activity_list(
     sess: requests.Session,
     skip_ids: set,
-    cutoff: datetime | None,
     limit: int | None,
     on_page=None,
 ) -> list:
     """
-    拉取活动列表（降序）。
-    - skip_ids:  record_id 在集合中则跳过并停止翻页
-    - cutoff:    时间早于此值则跳过并停止翻页
-    - limit:     最多收集条数
+    拉取活动列表。
+    - skip_ids: 已下载的 record_id 集合，按条过滤，不中断翻页
+    - limit:    最多收集条数
     - on_page(page, collected, total_pages): 每页回调
     """
     page, page_size = 1, 20
@@ -170,26 +168,19 @@ def fetch_activity_list(
         if not items:
             break
 
-        stop = False
         for act in items:
-            rid = activity_id(act)
-            if rid in skip_ids:
-                stop = True
+            if activity_id(act) in skip_ids:
                 continue
-            if cutoff:
-                t = parse_activity_time(act)
-                if t and t <= cutoff:
-                    stop = True
-                    break
             collected.append(act)
             if limit and len(collected) >= limit:
-                stop = True
-                break
+                if on_page:
+                    on_page(page, len(collected), total_pages)
+                return collected
 
         if on_page:
             on_page(page, len(collected), total_pages)
 
-        if stop or (total_pages and page >= total_pages):
+        if total_pages and page >= total_pages:
             break
         page += 1
         time.sleep(0.2)
@@ -359,30 +350,34 @@ def browser_login() -> dict:
     tab = ChromiumPage(opts)
     try:
         tab.get(f"{ONELAP_WEB}/login.html")
+        time.sleep(3)  # 等待登录页面完全加载，避免 run_js 在页面刷新中被调用
 
         end = time.time() + 90
         while time.time() < end:
             url = tab.url or ""
             if "u.onelap.cn" in url and "login.html" not in url:
                 break
-            if tab.run_js("return localStorage.getItem('userInfo');"):
-                break
+            try:
+                if tab.run_js("return localStorage.getItem('userInfo');"):
+                    break
+            except Exception:
+                pass  # 页面切换/刷新期间 run_js 会抛出异常，忽略并重试
             time.sleep(1)
         else:
             raise RuntimeError("等待登录超时（90 秒）")
 
         tab.get(f"{ONELAP_APP}/analysis")
-        # 轮询等待 token 写入 localStorage，最长 10 秒，比固定 sleep(4) 更快
-        _poll_end = time.time() + 10
-        while time.time() < _poll_end:
-            if tab.run_js("return !!localStorage.getItem('token');"):
-                break
-            time.sleep(0.3)
+        time.sleep(5)  # 等待 analysis 页面加载完成，确保 token 已写入 localStorage
 
-        token = tab.run_js("return localStorage.getItem('token');") or ""
+        token = ""
+        try:
+            token = tab.run_js("return localStorage.getItem('token');") or ""
+        except Exception:
+            pass
+
         if not token:
-            raw = tab.run_js("return localStorage.getItem('userInfo');") or ""
             try:
+                raw = tab.run_js("return localStorage.getItem('userInfo');") or ""
                 ui = json.loads(raw)
                 if isinstance(ui, list) and ui:
                     token = ui[0].get("token", "")

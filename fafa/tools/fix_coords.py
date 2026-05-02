@@ -197,11 +197,12 @@ def fix_file(src: Path, dst: Path, method: str) -> int:
     return n_gps
 
 
-def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None]:
-    """Read FIT once: check software version, decrypt GCJ-02 in-place if ver > 18,
+def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None, bool]:
+    """Read FIT once: check software part_number and version, decrypt GCJ-02
+    in-place only when part_number contains 'c506' (case-insensitive) and ver > 18,
     and extract the device model string (e.g. 'C506') from file_id_mesgs.
 
-    Returns (software_version, model_or_None).
+    Returns (software_version, model_or_None, decrypted).
     Raises on write failure so the caller can log it.
     """
     msgs = _decode(path)
@@ -213,13 +214,17 @@ def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None]:
 
     sw_list = msgs.get("software_mesgs") or []
     ver: float | None = None
+    part_number: str = ""
     if sw_list:
         try:
             ver = float(sw_list[0].get("version"))
         except (TypeError, ValueError):
             pass
+        part_number = str(sw_list[0].get("part_number") or "")
 
-    if ver is not None and ver > 18:
+    is_c506 = "c506" in part_number.lower()
+    decrypted = False
+    if is_c506 and ver is not None and ver > 18:
         for key in list(msgs.keys()):
             msgs[key] = [_convert_mesg(m, "decrypt") for m in msgs[key]]
         data = _encode(msgs)
@@ -234,8 +239,9 @@ def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None]:
             except OSError:
                 pass
             raise
+        decrypted = True
 
-    return ver, model
+    return ver, model, decrypted
 
 
 def fix_dir(

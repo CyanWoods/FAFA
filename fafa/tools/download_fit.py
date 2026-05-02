@@ -20,7 +20,6 @@ from fafa.onelap import (
     build_session,
     fetch_activity_list,
     download_activity,
-    latest_local_time,
     parse_activity_time,
     activity_id,
 )
@@ -65,10 +64,6 @@ def main() -> None:
 
     state    = {} if args.all else _load_state()
     skip_ids = set(state.keys())
-    cutoff   = None if args.all else latest_local_time(INPUT_DIR)
-
-    if cutoff:
-        log.info(f"本地最新文件时间: {cutoff.strftime('%Y-%m-%d %H:%M:%S')}")
 
     try:
         auth = browser_login()
@@ -80,7 +75,7 @@ def main() -> None:
 
     log.info("正在获取活动列表...")
     activities = fetch_activity_list(
-        sess, skip_ids, cutoff, args.limit,
+        sess, skip_ids, args.limit,
         on_page=lambda pg, col, tot: log.info(f"  第 {pg} 页 | 已收集 {col} 条"),
     )
 

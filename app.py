@@ -149,7 +149,7 @@ def _run_sync(full: bool, limit: int | None):
     """后台线程：登录顽鹿 → 拉取列表 → 并发下载 FIT。"""
     from fafa.onelap import (
         browser_login, build_session, fetch_activity_list,
-        download_activity, rename_magene, latest_local_time, parse_activity_time, activity_id,
+        download_activity, rename_magene, parse_activity_time, activity_id,
     )
     from fafa.tools.fix_coords import auto_decrypt_if_gcj02
 
@@ -177,7 +177,6 @@ def _run_sync(full: bool, limit: int | None):
         if state and not any(INPUT_DIR.glob("*.fit")):
             state = {}
         skip_ids = set(state.keys())
-        cutoff   = None if full else latest_local_time(INPUT_DIR)
         sess     = build_session(auth["token"], auth["cookies"])
 
         _set_sync(state="fetching", message="正在获取活动列表…")
@@ -185,7 +184,7 @@ def _run_sync(full: bool, limit: int | None):
         def on_page(pg, col, tot):
             _set_sync(message=f"获取列表：第 {pg} 页，已找到 {col} 条新活动")
 
-        activities = fetch_activity_list(sess, skip_ids, cutoff, limit, on_page=on_page)
+        activities = fetch_activity_list(sess, skip_ids, limit, on_page=on_page)
 
         if not activities:
             _set_sync(state="done", message="没有新活动需要下载", total=0, done=0)
@@ -213,12 +212,12 @@ def _run_sync(full: bool, limit: int | None):
                     is_fresh = state.get(rid, {}).get("downloaded_at") is not None
                     if is_fresh:
                         try:
-                            ver, model = auto_decrypt_if_gcj02(path)
+                            ver, model, decrypted = auto_decrypt_if_gcj02(path)
                             new_path   = rename_magene(path, model=model)
                             if new_path != path:
                                 state[rid]["filename"] = new_path.name
                             path = new_path
-                            if ver is not None and ver > 18:
+                            if decrypted:
                                 tstr = f"{tstr} — 已自动火星解密（版本 {ver:.0f}）"
                         except Exception as e:
                             logging.warning("自动火星解密失败 (%s): %s", path.name, e)
