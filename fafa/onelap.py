@@ -338,12 +338,20 @@ def browser_login() -> dict:
         raise RuntimeError("请先安装 DrissionPage：.venv/bin/pip install DrissionPage")
 
     opts = ChromiumOptions().auto_port()
+    local = os.environ.get("LOCALAPPDATA", "")
+    pf    = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86  = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     for candidate in [
+        os.path.join(pf,    "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(pf86,  "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(pf,    "Microsoft", "Edge", "Application", "msedge.exe"),
+        os.path.join(pf86,  "Microsoft", "Edge", "Application", "msedge.exe"),
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/usr/bin/google-chrome",
         "/usr/bin/chromium",
     ]:
-        if os.path.exists(candidate):
+        if candidate and os.path.exists(candidate):
             opts.set_paths(browser_path=candidate)
             break
 
