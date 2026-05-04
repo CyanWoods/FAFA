@@ -682,29 +682,27 @@ function _calcOrigin(minLat, maxLat, minLon, maxLon, zoom, W, H) {
 
 async function _loadTileImg(url, retries = 3) {
   for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      await new Promise(r => setTimeout(r, attempt * 300));
-      const img = await new Promise((resolve, reject) => {
-        const im = new Image();
-        im.crossOrigin = 'anonymous';
-        im.onload = () => resolve(im);
-        im.onerror = () => reject(new Error('tile: ' + url));
-        im.src = url;
-      });
-      return img;
-    } catch (e) {
-      if (attempt === retries - 1) throw e;
-    }
+    if (attempt > 0) await new Promise(r => setTimeout(r, 400 * attempt));
+    // Add cache-bust on retry so the browser doesn't serve a cached error response.
+    const src = attempt > 0 ? `${url}?_r=${attempt}` : url;
+    const img = await new Promise(resolve => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload  = () => resolve(im);
+      im.onerror = () => resolve(null);
+      im.src = src;
+    });
+    if (img) return img;
   }
+  return null;
 }
 
 const _TILE_SUBS = ['a', 'b', 'c', 'd'];
 let _tileSubIdx = 0;
 
-async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate) {
+async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate, onProgress) {
   const TILE = 256;
-  const CONCURRENCY = 8;
-  ctx.imageSmoothingEnabled = false;
+  const CONCURRENCY = 10;
   const maxIdx = Math.pow(2, zoom) - 1;
   const col0 = Math.floor(originX / TILE);
   const col1 = Math.floor((originX + W - 1) / TILE);
@@ -723,17 +721,29 @@ async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate) {
     }
   }
 
-  const results = [];
-  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
-    const batch = tasks.slice(i, i + CONCURRENCY).map(({ url, dx, dy }) =>
-      _loadTileImg(url).then(img => ({ img, dx, dy })).catch(() => null)
-    );
-    const batchResults = await Promise.all(batch);
-    for (const r of batchResults) {
-      if (r) ctx.drawImage(r.img, r.dx, r.dy, TILE, TILE);
+  // Pool-based concurrency: always keep CONCURRENCY requests in-flight.
+  // A finished slot immediately picks up the next task — no batch waiting.
+  let done = 0;
+  await new Promise(resolve => {
+    if (tasks.length === 0) { resolve(); return; }
+    let running = 0, index = 0;
+
+    function pump() {
+      while (running < CONCURRENCY && index < tasks.length) {
+        const { url, dx, dy } = tasks[index++];
+        running++;
+        _loadTileImg(url).then(img => {
+          if (img) ctx.drawImage(img, dx, dy, TILE, TILE);
+          onProgress?.(++done);
+          running--;
+          if (index < tasks.length) pump();
+          else if (running === 0) resolve();
+        });
+      }
     }
-  }
-  return results;
+
+    pump();
+  });
 }
 
 function _drawPath(ctx, coords, zoom, originX, originY) {
@@ -802,6 +812,11 @@ async function doExport() {
   btn.disabled = true;
   btn.textContent = '生成中…';
 
+  const T = label => { console.timeEnd('[export] ' + label); console.time('[export] ' + label); };
+  console.group('[export] PNG 导出诊断');
+  console.time('[export] 总耗时');
+  console.time('[export] 计算 zoom/origin');
+
   try {
     const [W, H] = EXPORT_RESOLUTIONS[exportState.resolution][exportState.ratio];
     const tileTemplate = EXPORT_TILE_URLS[exportState.tile];
@@ -814,15 +829,33 @@ async function doExport() {
     const originX = Math.round(_ox);
     const originY = Math.round(_oy);
 
+    const TILE = 256;
+    const col0 = Math.floor(originX / TILE), col1 = Math.floor((originX + W - 1) / TILE);
+    const row0 = Math.floor(originY / TILE), row1 = Math.floor((originY + H - 1) / TILE);
+    const tileCount = (col1 - col0 + 1) * (row1 - row0 + 1);
+    T('计算 zoom/origin');
+    console.log(`[export] 分辨率 ${W}×${H}，zoom=${zoom}，tiles=${tileCount}（${col1-col0+1}列×${row1-row0+1}行）`);
+
     const canvas = document.createElement('canvas');
     canvas.width  = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
 
-    await _drawTiles(ctx, zoom, originX, originY, W, H, tileTemplate);
-    _drawTracks(ctx, zoom, originX, originY, exportState.colorMode, exportState.uniformColor);
+    console.time('[export] 加载 tiles');
+    btn.textContent = `加载地图 0/${tileCount}…`;
+    await _drawTiles(ctx, zoom, originX, originY, W, H, tileTemplate, n => {
+      btn.textContent = `加载地图 ${n}/${tileCount}…`;
+    });
+    T('加载 tiles');
 
+    console.time('[export] 绘制路径');
+    _drawTracks(ctx, zoom, originX, originY, exportState.colorMode, exportState.uniformColor);
+    T('绘制路径');
+
+    console.time('[export] PNG 编码 (toBlob)');
+    btn.textContent = 'PNG 编码中…';
     await new Promise(resolve => canvas.toBlob(blob => {
+      T('PNG 编码 (toBlob)');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `fafa_${exportState.resolution}_${exportState.ratio.replace(':', '-')}.png`;
@@ -831,8 +864,12 @@ async function doExport() {
       resolve();
     }, 'image/png'));
 
+    console.timeEnd('[export] 总耗时');
+    console.groupEnd();
     closeExportModal();
   } catch (e) {
+    console.timeEnd('[export] 总耗时');
+    console.groupEnd();
     toast('导出失败：' + e.message);
   } finally {
     btn.disabled = false;
