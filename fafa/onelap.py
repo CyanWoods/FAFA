@@ -305,7 +305,7 @@ def download_activity(
             for chunk in resp.iter_content(65536):
                 if chunk:
                     f.write(chunk)
-        part.rename(final)
+        part.replace(final)
     except Exception:
         if part.exists():
             part.unlink()
@@ -332,10 +332,25 @@ def download_activity(
 # ── 浏览器登录 ─────────────────────────────────────────────────────────────────
 def browser_login() -> dict:
     """打开浏览器让用户登录顽鹿，返回 {token, cookies}。失败时抛出异常。"""
+    import sys
+    import platform
     try:
         from DrissionPage import ChromiumPage, ChromiumOptions
     except ImportError:
-        raise RuntimeError("请先安装 DrissionPage：.venv/bin/pip install DrissionPage")
+        if sys.platform == "win32":
+            pip_cmd = r".venv\Scripts\pip install DrissionPage"
+        else:
+            pip_cmd = ".venv/bin/pip install DrissionPage"
+        raise RuntimeError(f"请先安装 DrissionPage：{pip_cmd}")
+
+    if sys.platform == "linux" and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        raise RuntimeError(
+            "Linux 无显示环境，无法弹出浏览器窗口。\n"
+            "请通过以下方式之一解决：\n"
+            "  1. 在桌面环境中运行本程序\n"
+            "  2. 安装 Xvfb 并执行：xvfb-run python app.py\n"
+            "  3. 通过 SSH -X 转发 X11 显示"
+        )
 
     opts = ChromiumOptions().auto_port()
     local = os.environ.get("LOCALAPPDATA", "")
@@ -348,8 +363,13 @@ def browser_login() -> dict:
         os.path.join(pf,    "Microsoft", "Edge", "Application", "msedge.exe"),
         os.path.join(pf86,  "Microsoft", "Edge", "Application", "msedge.exe"),
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
         "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
         "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
+        "/usr/local/bin/chromium",
     ]:
         if candidate and os.path.exists(candidate):
             opts.set_paths(browser_path=candidate)

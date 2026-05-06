@@ -263,9 +263,9 @@ def upload():
     if not f.filename.lower().endswith(".fit"):
         return jsonify(error="请上传 .fit 格式文件"), 400
 
-    with tempfile.NamedTemporaryFile(suffix=".fit", delete=False) as tmp:
-        f.save(tmp.name)
-        tmp_path = tmp.name
+    fd, tmp_path = tempfile.mkstemp(suffix=".fit")
+    os.close(fd)
+    f.save(tmp_path)
 
     try:
         data = _parse_and_build(tmp_path, f.filename)

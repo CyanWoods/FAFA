@@ -10,6 +10,7 @@ Timestamps converted to CST (UTC+8).
   .venv/bin/python -m fafa.tools.rename_fit --dry-run
 """
 
+import argparse
 import os
 import re
 import sys
@@ -64,8 +65,14 @@ def rename_files(dry_run: bool = False) -> None:
     print(f"\n{'[dry run] ' if dry_run else ''}renamed={renamed}  skipped={skipped}  conflicts={conflicts}")
 
 
-if __name__ == "__main__":
-    dry_run = "--dry-run" in sys.argv
-    if dry_run:
+def main() -> None:
+    parser = argparse.ArgumentParser(description="将 Magene FIT 文件重命名为可读格式")
+    parser.add_argument("--dry-run", action="store_true", help="预览，不写入")
+    args = parser.parse_args()
+    if args.dry_run:
         print("=== DRY RUN (no files changed) ===\n")
-    rename_files(dry_run)
+    rename_files(args.dry_run)
+
+
+if __name__ == "__main__":
+    main()

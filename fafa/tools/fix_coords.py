@@ -187,7 +187,7 @@ def fix_file(src: Path, dst: Path, method: str) -> int:
     try:
         with os.fdopen(tmp_fd, "wb") as f:
             f.write(data)
-        Path(tmp_path).rename(dst)
+        Path(tmp_path).replace(dst)
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -232,7 +232,7 @@ def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None, bool]:
         try:
             with os.fdopen(tmp_fd, "wb") as f:
                 f.write(data)
-            Path(tmp_path).rename(path)
+            Path(tmp_path).replace(path)
         except Exception:
             try:
                 os.unlink(tmp_path)
