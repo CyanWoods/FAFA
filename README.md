@@ -34,9 +34,16 @@ FAFA/
 
 ## 安装
 
+**macOS / Linux：**
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+**Windows：**
+```bat
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
 ```
 
 ---
@@ -45,10 +52,15 @@ python3 -m venv .venv
 
 主要功能入口，基于 Flask + Leaflet.js + Chart.js 的双界面交互查看器。
 
+**macOS / Linux：**
 ```bash
 .venv/bin/python app.py
-# 访问 http://localhost:5173
 ```
+**Windows：**
+```bat
+.venv\Scripts\python app.py
+```
+然后访问 http://localhost:5173
 
 ### 界面一：地图视图
 
@@ -112,14 +124,15 @@ python3 -m venv .venv
 对 FIT 文件中的 GPS 坐标进行火星坐标系转换，支持批量处理。
 
 ```bash
-# 火星解密：GCJ-02 → WGS-84（Magene 等国内设备）
-.venv/bin/python -m fafa.tools.fix_coords --method decrypt
-
-# 火星加密：WGS-84 → GCJ-02
+# macOS / Linux
+.venv/bin/python -m fafa.tools.fix_coords --method decrypt          # 火星解密：GCJ-02 → WGS-84
 .venv/bin/python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
-
-# 预览（不写入）
 .venv/bin/python -m fafa.tools.fix_coords --method decrypt --dry-run
+
+# Windows
+.venv\Scripts\python -m fafa.tools.fix_coords --method decrypt
+.venv\Scripts\python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
+.venv\Scripts\python -m fafa.tools.fix_coords --method decrypt --dry-run
 ```
 
 ---
@@ -134,8 +147,13 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 ```
 
 ```bash
-.venv/bin/python -m fafa.tools.rename_fit           # 实际重命名
-.venv/bin/python -m fafa.tools.rename_fit --dry-run # 预览
+# macOS / Linux
+.venv/bin/python -m fafa.tools.rename_fit
+.venv/bin/python -m fafa.tools.rename_fit --dry-run
+
+# Windows
+.venv\Scripts\python -m fafa.tools.rename_fit
+.venv\Scripts\python -m fafa.tools.rename_fit --dry-run
 ```
 
 ---
@@ -145,10 +163,17 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 解析 `input/` 下所有 FIT 文件，输出包含骑行摘要和逐公里数据的 JSON。
 
 ```bash
-.venv/bin/python -m fafa.tools.export_all                        # 导出全部到 export.json
-.venv/bin/python -m fafa.tools.export_all --no-km-stats          # 只含骑行汇总，文件更小
-.venv/bin/python -m fafa.tools.export_all --min-km 5             # 过滤 5 km 以下短骑
-.venv/bin/python -m fafa.tools.export_all -o ~/Desktop/data.json # 指定输出路径
+# macOS / Linux
+.venv/bin/python -m fafa.tools.export_all
+.venv/bin/python -m fafa.tools.export_all --no-km-stats
+.venv/bin/python -m fafa.tools.export_all --min-km 5
+.venv/bin/python -m fafa.tools.export_all -o ~/Desktop/data.json
+
+# Windows
+.venv\Scripts\python -m fafa.tools.export_all
+.venv\Scripts\python -m fafa.tools.export_all --no-km-stats
+.venv\Scripts\python -m fafa.tools.export_all --min-km 5
+.venv\Scripts\python -m fafa.tools.export_all -o %USERPROFILE%\Desktop\data.json
 ```
 
 输出格式：
@@ -168,10 +193,17 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 与 Web 界面顽鹿同步功能等价，适合在终端中使用。
 
 ```bash
-.venv/bin/python -m fafa.tools.download_fit           # 增量下载新活动
-.venv/bin/python -m fafa.tools.download_fit --all     # 全量下载
-.venv/bin/python -m fafa.tools.download_fit --dry-run # 预览，不下载
-.venv/bin/python -m fafa.tools.download_fit --limit 10 # 最多下载 10 个
+# macOS / Linux
+.venv/bin/python -m fafa.tools.download_fit
+.venv/bin/python -m fafa.tools.download_fit --all
+.venv/bin/python -m fafa.tools.download_fit --dry-run
+.venv/bin/python -m fafa.tools.download_fit --limit 10
+
+# Windows
+.venv\Scripts\python -m fafa.tools.download_fit
+.venv\Scripts\python -m fafa.tools.download_fit --all
+.venv\Scripts\python -m fafa.tools.download_fit --dry-run
+.venv\Scripts\python -m fafa.tools.download_fit --limit 10
 ```
 
 ---
