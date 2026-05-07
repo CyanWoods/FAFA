@@ -57,6 +57,67 @@ def _cache_put(path_str: str, mtime: float, data: dict) -> None:
         _parse_cache[path_str] = {"mtime": mtime, "data": data}
 
 
+_PEAK_DURATIONS = (5, 60, 300, 1200, 3600)
+
+
+def _peak_powers(records) -> dict:
+    """Max mean power (W) at key durations. Keys are strings like '5', '60', etc."""
+    if not records or len(records) < 2:
+        return {}
+    total_s = int((records[-1].timestamp - records[0].timestamp).total_seconds())
+    if total_s < 5:
+        return {}
+    t0 = records[0].timestamp
+    ri = 0
+    power_1s = []
+    for sec in range(total_s + 1):
+        while ri + 1 < len(records) and (records[ri + 1].timestamp - t0).total_seconds() <= sec:
+            ri += 1
+        p = records[ri].power
+        power_1s.append(p if p is not None else 0)
+    result = {}
+    for dur in _PEAK_DURATIONS:
+        if len(power_1s) < dur:
+            continue
+        window = sum(power_1s[:dur])
+        best = window
+        for i in range(dur, len(power_1s)):
+            window += power_1s[i] - power_1s[i - dur]
+            if window > best:
+                best = window
+        watts = round(best / dur)
+        if watts > 0:
+            result[str(dur)] = watts
+    return result
+
+
+def _zone_time_s(records, ftp) -> dict | None:
+    """Seconds in each power zone Z0(rest)-Z6 using given FTP. Returns None if no power data."""
+    if not ftp or ftp <= 0 or not records or len(records) < 2:
+        return None
+    total_s = int((records[-1].timestamp - records[0].timestamp).total_seconds())
+    t0 = records[0].timestamp
+    ri = 0
+    zones = [0] * 7
+    for sec in range(total_s + 1):
+        while ri + 1 < len(records) and (records[ri + 1].timestamp - t0).total_seconds() <= sec:
+            ri += 1
+        p = records[ri].power
+        if not p or p <= 0:
+            zones[0] += 1
+            continue
+        pct = p / ftp
+        if pct < 0.55:   zones[1] += 1
+        elif pct < 0.75: zones[2] += 1
+        elif pct < 0.90: zones[3] += 1
+        elif pct < 1.05: zones[4] += 1
+        elif pct < 1.20: zones[5] += 1
+        else:            zones[6] += 1
+    if sum(zones[1:]) == 0:
+        return None
+    return {str(i): zones[i] for i in range(7)}
+
+
 # ── 通用 FIT 解析 ──────────────────────────────────────────────────────────────
 def _parse_and_build(fit_path: str, filename: str) -> dict:
     p = Path(fit_path)
@@ -109,6 +170,16 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         time_stats_list  = []
         time_stats_start = None
 
+    try:
+        peak_power = _peak_powers(fit.records)
+    except Exception:
+        peak_power = {}
+
+    try:
+        zone_time = _zone_time_s(fit.records, fit.session.get("threshold_power"))
+    except Exception:
+        zone_time = None
+
     result = dict(
         coords=coords,
         filename=filename,
@@ -118,12 +189,13 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         dist_stats=dist_stats_list,
         time_stats=time_stats_list,
         time_stats_start=time_stats_start,
+        peak_power=peak_power,
+        zone_time_s=zone_time,
     )
 
-    p2 = Path(fit_path)
-    if p2.exists():
+    if p.exists():
         try:
-            _cache_put(fit_path, p2.stat().st_mtime, result)
+            _cache_put(fit_path, p.stat().st_mtime, result)
         except OSError:
             pass
 
@@ -426,11 +498,7 @@ def export_all():
         if not no_km:
             entry["km_stats"] = [asdict(s) for s in km_stats]
 
-        entry = _strip_nulls(entry)
-        entry["filename"] = path.name
-        if date_str:
-            entry["date"] = date_str
-        activities.append(entry)
+        activities.append(_strip_nulls(entry))
 
     activities.sort(key=lambda a: a.get("date") or "")
 
@@ -675,29 +743,20 @@ def get_activities():
         try:
             mtime  = path.stat().st_mtime
             cached = _cache_get(path_str, mtime)
-            if cached:
-                ts_start = cached.get("time_stats_start")
-                summary  = cached.get("summary") or {}
-            else:
-                fit = parse_fit(path_str)
-                if not fit.records:
-                    continue
-                km  = compute_km_stats(fit)
-                s   = compute_summary(fit, km)
-                summary = asdict(s)
-                ts = fit.records[0].timestamp
-                if fit.utc_offset_s is not None:
-                    tz_local = timezone(timedelta(seconds=fit.utc_offset_s))
-                    ts = ts.astimezone(tz_local)
-                ts_start = ts.strftime("%Y-%m-%dT%H:%M:%S")
+            if not cached:
+                cached = _parse_and_build(path_str, path.name)
 
+            ts_start = cached.get("time_stats_start")
             if not ts_start:
                 continue
+            summary = cached.get("summary") or {}
             result.append({
-                "filename":   path.name,
-                "date":       ts_start[:10],
-                "start_time": ts_start,
-                "summary":    {k: v for k, v in summary.items() if v is not None},
+                "filename":    path.name,
+                "date":        ts_start[:10],
+                "start_time":  ts_start,
+                "summary":     {k: v for k, v in summary.items() if v is not None},
+                "peak_power":  cached.get("peak_power") or {},
+                "zone_time_s": cached.get("zone_time_s"),
             })
         except Exception as e:
             logging.warning("activities: %s: %s", path.name, e)
@@ -740,6 +799,10 @@ def _build_pmc_prompt(data: dict) -> str:
 
     if cfg_u.get("ftp"):
         lines.append(f"- FTP：{cfg_u['ftp']} W")
+    if cfg_u.get("weight_kg"):
+        lines.append(f"- 体重：{cfg_u['weight_kg']} kg")
+    if cfg_u.get("wkg"):
+        lines.append(f"- 功重比：{cfg_u['wkg']} W/kg")
 
     ctl_7d = trend.get("ctl_7d_ago", ctl)
     ctl_30d = trend.get("ctl_30d_ago", ctl)
@@ -748,6 +811,12 @@ def _build_pmc_prompt(data: dict) -> str:
         f"- CTL 30天前：{ctl_30d:.1f}（变化 {ctl - ctl_30d:+.1f}）",
         f"- 数据覆盖：{data.get('total_activities', 0)} 次骑行，最早记录 {data.get('first_date', '—')}",
     ]
+    if data.get("zone_distribution"):
+        lines += ["", f"## 训练区间分布（骑行时间占比）", data["zone_distribution"]]
+    if data.get("power_curve_alltime"):
+        lines += ["", "## 峰值功率曲线", f"- 历史最佳：{data['power_curve_alltime']}"]
+        if data.get("power_curve_90d"):
+            lines.append(f"- 近90天最佳：{data['power_curve_90d']}")
 
     if rides:
         lines += ["", f"## 近期骑行记录（最近 {len(rides)} 次）",

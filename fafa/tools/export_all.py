@@ -95,10 +95,6 @@ def _process_file(path: Path, include_km_stats: bool, keep_nulls: bool) -> dict 
 
     if not keep_nulls:
         entry = _strip_nulls(entry)
-        # 确保 filename/date 即使为空字符串也保留
-        entry["filename"] = path.name
-        if date_str is not None:
-            entry["date"] = date_str
 
     return entry
 

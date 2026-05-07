@@ -12,8 +12,6 @@
 """
 
 import argparse
-import io
-import math
 import os
 import re
 import sys
@@ -21,6 +19,8 @@ import tempfile
 from pathlib import Path
 
 from garmin_fit_sdk import Decoder, Encoder, Stream
+
+from fafa.gcj02 import gcj02_to_wgs84, wgs84_to_gcj02
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 SEMI_TO_DEG = 180.0 / (2 ** 31)
@@ -62,59 +62,6 @@ MESG_NUM: dict[str, int] = {
     "split_summary_mesgs": 313,
     "set_mesgs": 225,
 }
-
-# ── GCJ-02 转换 ───────────────────────────────────────────────────────────────
-_A  = 6378245.0
-_EE = 0.00669342162296594323
-
-
-def _out_of_china(lat: float, lon: float) -> bool:
-    return not (72.004 <= lon <= 137.8347 and 0.8293 <= lat <= 55.8271)
-
-
-def _t_lat(x: float, y: float) -> float:
-    r = -100 + 2*x + 3*y + 0.2*y*y + 0.1*x*y + 0.2*math.sqrt(abs(x))
-    r += (20*math.sin(6*x*math.pi) + 20*math.sin(2*x*math.pi)) * 2/3
-    r += (20*math.sin(y*math.pi)   + 40*math.sin(y/3*math.pi)) * 2/3
-    r += (160*math.sin(y/12*math.pi) + 320*math.sin(y*math.pi/30)) * 2/3
-    return r
-
-
-def _t_lon(x: float, y: float) -> float:
-    r = 300 + x + 2*y + 0.1*x*x + 0.1*x*y + 0.1*math.sqrt(abs(x))
-    r += (20*math.sin(6*x*math.pi) + 20*math.sin(2*x*math.pi)) * 2/3
-    r += (20*math.sin(x*math.pi)   + 40*math.sin(x/3*math.pi)) * 2/3
-    r += (150*math.sin(x/12*math.pi) + 300*math.sin(x/30*math.pi)) * 2/3
-    return r
-
-
-def _delta(lat: float, lon: float) -> tuple[float, float]:
-    d_lat = _t_lat(lon - 105.0, lat - 35.0)
-    d_lon = _t_lon(lon - 105.0, lat - 35.0)
-    rad = lat / 180.0 * math.pi
-    magic = math.sin(rad)
-    magic = 1 - _EE * magic * magic
-    sqrt_magic = math.sqrt(magic)
-    d_lat = d_lat * 180.0 / ((_A * (1 - _EE)) / (magic * sqrt_magic) * math.pi)
-    d_lon = d_lon * 180.0 / (_A / sqrt_magic * math.cos(rad) * math.pi)
-    return d_lat, d_lon
-
-
-def gcj02_to_wgs84(lat: float, lon: float) -> tuple[float, float]:
-    """火星解密：GCJ-02 → WGS-84"""
-    if _out_of_china(lat, lon):
-        return lat, lon
-    d_lat, d_lon = _delta(lat, lon)
-    return lat - d_lat, lon - d_lon
-
-
-def wgs84_to_gcj02(lat: float, lon: float) -> tuple[float, float]:
-    """火星加密：WGS-84 → GCJ-02"""
-    if _out_of_china(lat, lon):
-        return lat, lon
-    d_lat, d_lon = _delta(lat, lon)
-    return lat + d_lat, lon + d_lon
-
 
 # ── 坐标字段（可能包含 GPS 的消息字段） ────────────────────────────────────────
 GPS_FIELDS = ("position_lat", "position_long")

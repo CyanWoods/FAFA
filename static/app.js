@@ -1257,7 +1257,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // PMC settings auto-save on change (no auto-recalc to avoid hammering)
-  ['pmc-ftp', 'pmc-rest-hr', 'pmc-max-hr'].forEach(id => {
+  ['pmc-ftp', 'pmc-rest-hr', 'pmc-max-hr', 'pmc-weight'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', _savePmcSettings);
   });
 
@@ -1737,6 +1737,7 @@ function _pmcSettings() {
     ftp:    parseInt(document.getElementById('pmc-ftp').value)     || 0,
     restHR: parseInt(document.getElementById('pmc-rest-hr').value) || 50,
     maxHR:  parseInt(document.getElementById('pmc-max-hr').value)  || 190,
+    weight: parseFloat(document.getElementById('pmc-weight').value) || 0,
   };
 }
 
@@ -1745,15 +1746,18 @@ function _savePmcSettings() {
   if (s.ftp)    localStorage.setItem('pmc_ftp',     s.ftp);
   if (s.restHR) localStorage.setItem('pmc_rest_hr', s.restHR);
   if (s.maxHR)  localStorage.setItem('pmc_max_hr',  s.maxHR);
+  if (s.weight) localStorage.setItem('pmc_weight',  s.weight);
 }
 
 function _loadPmcSettings() {
   const ftp    = localStorage.getItem('pmc_ftp')     || '';
   const restHR = localStorage.getItem('pmc_rest_hr') || '50';
   const maxHR  = localStorage.getItem('pmc_max_hr')  || '190';
+  const weight = localStorage.getItem('pmc_weight')  || '';
   document.getElementById('pmc-ftp').value     = ftp;
   document.getElementById('pmc-rest-hr').value = restHR;
   document.getElementById('pmc-max-hr').value  = maxHR;
+  document.getElementById('pmc-weight').value  = weight;
 }
 
 function openPmcView() {
@@ -1785,8 +1789,11 @@ async function _loadAndRenderPmc() {
     const acts = data.activities || [];
     const settings = _pmcSettings();
     _pmcAllData = _computePMC(acts, settings);
+    _pmcAllData.activities = acts;   // preserve full activity list for curve/zones
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
+    _renderPmcZones(acts, settings);
+    _renderPmcCurve(acts, settings);
   } catch (e) {
     console.error('PMC load error:', e);
   }
@@ -1876,11 +1883,22 @@ function _renderPmcCards(pmc) {
   const atl = pmc.atl[n];
   const tsb = pmc.tsb[n];
 
-  // CTL 趋势（7天前）
-  const ctl7 = n >= 7 ? pmc.ctl[n - 7] : 0;
-  const ctlΔ = ctl - ctl7;
+  const ctl7  = n >= 7  ? pmc.ctl[n - 7]  : 0;
+  const ctlΔ  = ctl - ctl7;
+  const rampPerWeek = ctlΔ;
+  let rampTag = '';
+  if (Math.abs(rampPerWeek) < 0.5) {
+    rampTag = '';
+  } else if (rampPerWeek > 8) {
+    rampTag = `<span class="pmc-ramp-tag pmc-ramp-over">+${rampPerWeek.toFixed(1)}/周 ⚠</span>`;
+  } else if (rampPerWeek > 4) {
+    rampTag = `<span class="pmc-ramp-tag pmc-ramp-warn">+${rampPerWeek.toFixed(1)}/周</span>`;
+  } else if (rampPerWeek >= 0) {
+    rampTag = `<span class="pmc-ramp-tag pmc-ramp-ok">+${rampPerWeek.toFixed(1)}/周</span>`;
+  } else {
+    rampTag = `<span class="pmc-ramp-tag pmc-ramp-warn">${rampPerWeek.toFixed(1)}/周</span>`;
+  }
 
-  // 形态文字 & 颜色
   let formText, formColor;
   if      (tsb >  10) { formText = '新鲜';     formColor = '#2ed573'; }
   else if (tsb >  -5) { formText = '最佳状态';  formColor = '#a8e063'; }
@@ -1888,11 +1906,23 @@ function _renderPmcCards(pmc) {
   else if (tsb > -40) { formText = '较疲劳';    formColor = '#e67e22'; }
   else                { formText = '过度疲劳';  formColor = '#e74c3c'; }
 
+  const settings = _pmcSettings();
+  let wkgCard = '';
+  if (settings.weight > 0 && settings.ftp > 0) {
+    const wkg = (settings.ftp / settings.weight).toFixed(2);
+    wkgCard = `
+    <div class="pmc-card pmc-card-wkg">
+      <div class="pmc-card-label">功重比</div>
+      <div class="pmc-card-value">${wkg}</div>
+      <div class="pmc-card-sub">W/kg（FTP ${settings.ftp}W / ${settings.weight}kg）</div>
+    </div>`;
+  }
+
   container.innerHTML = `
     <div class="pmc-card pmc-card-ctl">
       <div class="pmc-card-label">体能 · CTL</div>
       <div class="pmc-card-value">${ctl.toFixed(1)}</div>
-      <div class="pmc-card-sub">慢性训练负荷（42天）<br>7天变化 ${ctlΔ >= 0 ? '+' : ''}${ctlΔ.toFixed(1)}</div>
+      <div class="pmc-card-sub">慢性训练负荷（42天）<br>7天变化 ${rampTag || (ctlΔ >= 0 ? '+' : '') + ctlΔ.toFixed(1)}</div>
     </div>
     <div class="pmc-card pmc-card-atl">
       <div class="pmc-card-label">疲劳 · ATL</div>
@@ -1909,6 +1939,7 @@ function _renderPmcCards(pmc) {
       <div class="pmc-card-value" style="color:${formColor}">${formText}</div>
       <div class="pmc-card-sub">共 ${pmc.activities.length} 次骑行记录</div>
     </div>
+    ${wkgCard}
   `;
 }
 
@@ -1940,7 +1971,31 @@ function _renderPmcChart(pmc, periodDays) {
   if (_pmcChart) { _pmcChart.destroy(); _pmcChart = null; }
 
   const ctx = document.getElementById('pmc-canvas').getContext('2d');
+  const tsbZoneBands = {
+    id: 'tsbZones',
+    beforeDraw(chart) {
+      const yScale = chart.scales['yPMC'];
+      if (!yScale) return;
+      const { ctx: c, chartArea: { left, right } } = chart;
+      const bands = [
+        { min: 10,  max: 60,  color: 'rgba(46,213,115,0.04)' },
+        { min: -10, max: 10,  color: 'rgba(163,224,100,0.03)' },
+        { min: -30, max: -10, color: 'rgba(243,156,18,0.05)'  },
+        { min: -80, max: -30, color: 'rgba(231,76,60,0.06)'   },
+      ];
+      c.save();
+      for (const { min, max, color } of bands) {
+        const yTop = yScale.getPixelForValue(max);
+        const yBot = yScale.getPixelForValue(min);
+        c.fillStyle = color;
+        c.fillRect(left, yTop, right - left, yBot - yTop);
+      }
+      c.restore();
+    },
+  };
+
   _pmcChart = new Chart(ctx, {
+    plugins: [tsbZoneBands],
     data: {
       labels,
       datasets: [
@@ -2011,7 +2066,7 @@ function _renderPmcChart(pmc, periodDays) {
             title: items => days[items[0].dataIndex] || '',
             label: item => {
               const v = item.parsed.y;
-              return ` ${item.dataset.label}: ${v >= 0 ? '' : ''}${v.toFixed(1)}`;
+              return ` ${item.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
             },
           },
         },
@@ -2035,6 +2090,140 @@ function _renderPmcChart(pmc, periodDays) {
       },
     },
   });
+}
+
+/* ── 训练区间分布 ─────────────────────────────────────────────────────────── */
+const _ZONE_COLORS  = ['', '#4a9eff', '#2ed573', '#f1c40f', '#e67e22', '#e74c3c', '#9b59b6'];
+const _ZONE_NAMES   = ['', '恢复 Z1', '有氧 Z2', '节奏 Z3', '阈值 Z4', 'VO₂ Z5', '无氧 Z6'];
+// [low%, high%] thresholds; 0 = no lower bound, null = no upper bound
+const _ZONE_THRESHOLDS = [null, [0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, null]];
+
+function _zoneWattLabel(i, ftp) {
+  if (!ftp || ftp <= 0) return null;
+  const [lo, hi] = _ZONE_THRESHOLDS[i];
+  const loW = Math.round(ftp * lo / 100);
+  const hiW = hi != null ? Math.round(ftp * hi / 100) : null;
+  if (lo === 0) return `<${hiW}W`;
+  if (hiW == null) return `>${loW}W`;
+  return `${loW}-${hiW}W`;
+}
+
+function _renderPmcZones(activities, settings) {
+  const wrap = document.getElementById('pmc-zone-bars');
+  const note = document.getElementById('pmc-zone-note');
+  if (!wrap) return;
+
+  // Aggregate zone_time_s across all activities that have it
+  const total = new Array(7).fill(0);
+  let count = 0;
+  for (const act of activities) {
+    const z = act.zone_time_s;
+    if (!z) continue;
+    for (let i = 0; i <= 6; i++) total[i] += (z[String(i)] || 0);
+    count++;
+  }
+  const pedalS = total.slice(1).reduce((a, b) => a + b, 0);
+  if (pedalS === 0) {
+    wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据（需要 FIT 文件含功率且设备记录了 FTP）</div>';
+    note.textContent = '';
+    return;
+  }
+
+  note.textContent = `基于 ${count} 次有功率骑行`;
+  wrap.innerHTML = '';
+
+  const ftp = settings?.ftp || 0;
+  for (let i = 1; i <= 6; i++) {
+    const pct = pedalS > 0 ? (total[i] / pedalS * 100) : 0;
+    const mins = Math.round(total[i] / 60);
+    const wattLabel = _zoneWattLabel(i, ftp);
+    const row = document.createElement('div');
+    row.className = 'pmc-zone-row';
+    row.innerHTML = `
+      <span class="pmc-zone-label">
+        ${wattLabel ? `<span class="pmc-zone-watts">${wattLabel}</span>` : ''}
+        <span class="pmc-zone-pct-label">${_ZONE_THRESHOLDS[i][0] === 0 ? '<55%' : _ZONE_THRESHOLDS[i][1] != null ? `${_ZONE_THRESHOLDS[i][0]}-${_ZONE_THRESHOLDS[i][1]}%` : `>${_ZONE_THRESHOLDS[i][0]}%`}</span>
+      </span>
+      <div class="pmc-zone-bar-track">
+        <div class="pmc-zone-bar-fill" style="width:${pct.toFixed(1)}%;background:${_ZONE_COLORS[i]}"></div>
+      </div>
+      <span class="pmc-zone-pct">${pct.toFixed(1)}%</span>
+      <span class="pmc-zone-name">${_ZONE_NAMES[i]}（${mins}min）</span>
+    `;
+    wrap.appendChild(row);
+  }
+}
+
+/* ── 峰值功率曲线 ─────────────────────────────────────────────────────────── */
+const _CURVE_DURATIONS = [
+  { key: '5',    label: '5 秒' },
+  { key: '60',   label: '1 分钟' },
+  { key: '300',  label: '5 分钟' },
+  { key: '1200', label: '20 分钟' },
+  { key: '3600', label: '60 分钟' },
+];
+
+function _renderPmcCurve(activities, settings) {
+  const wrap = document.getElementById('pmc-curve-wrap');
+  const note = document.getElementById('pmc-curve-note');
+  if (!wrap) return;
+
+  const today = new Date();
+  const d90 = new Date(today); d90.setDate(d90.getDate() - 90);
+  const d30 = new Date(today); d30.setDate(d30.getDate() - 30);
+
+  // Compute all-time, 90-day, 30-day best for each duration
+  const best = {};
+  const best90 = {};
+  const best30 = {};
+  for (const { key } of _CURVE_DURATIONS) {
+    best[key] = 0; best90[key] = 0; best30[key] = 0;
+  }
+
+  for (const act of activities) {
+    const pp = act.peak_power;
+    if (!pp || !Object.keys(pp).length) continue;
+    const actDate = new Date(act.date);
+    const in90 = actDate >= d90;
+    const in30 = actDate >= d30;
+    for (const { key } of _CURVE_DURATIONS) {
+      const w = pp[key] || 0;
+      if (w > best[key]) best[key] = w;
+      if (in90 && w > best90[key]) best90[key] = w;
+      if (in30 && w > best30[key]) best30[key] = w;
+    }
+  }
+
+  const hasAny = Object.values(best).some(v => v > 0);
+  if (!hasAny) {
+    wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据</div>';
+    if (note) note.textContent = '';
+    return;
+  }
+
+  const weight = settings.weight;
+  const showWkg = weight > 0;
+  if (note) note.textContent = showWkg ? `体重 ${weight} kg` : '';
+
+  let html = `<table class="pmc-curve-table"><thead><tr>
+    <th>时长</th><th>历史最佳</th><th>近90天</th><th>近30天</th>
+  </tr></thead><tbody>`;
+
+  for (const { key, label } of _CURVE_DURATIONS) {
+    const allW  = best[key];
+    const d90W  = best90[key];
+    const d30W  = best30[key];
+
+    const fmtW = (w, isBest) => {
+      if (!w) return '<td class="pmc-curve-none">—</td>';
+      const wkg = showWkg ? `<span class="pmc-curve-wkg">${(w/weight).toFixed(2)} W/kg</span>` : '';
+      return `<td${isBest ? ' class="pmc-curve-best"' : ''}>${w} W${wkg}</td>`;
+    };
+
+    html += `<tr><td>${label}</td>${fmtW(allW, true)}${fmtW(d90W, false)}${fmtW(d30W, false)}</tr>`;
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
 }
 
 async function startPmcAi() {
@@ -2068,6 +2257,45 @@ async function startPmcAi() {
     avg_power: a.summary.avg_power,
   }));
 
+  // Compute zone totals for AI context
+  const zoneTotals = new Array(7).fill(0);
+  let zonePedalS = 0;
+  for (const act of _pmcAllData.activities) {
+    const z = act.zone_time_s;
+    if (!z) continue;
+    for (let i = 0; i <= 6; i++) zoneTotals[i] += (z[String(i)] || 0);
+  }
+  zonePedalS = zoneTotals.slice(1).reduce((a, b) => a + b, 0);
+  const zoneDistStr = zonePedalS > 0
+    ? ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6'].map((z, i) => {
+        const pct = (zoneTotals[i + 1] / zonePedalS * 100).toFixed(1);
+        return `${z}:${pct}%`;
+      }).join(' ')
+    : null;
+
+  // Power curve bests
+  const today = new Date();
+  const d90 = new Date(today); d90.setDate(d90.getDate() - 90);
+  const curveBest = {}, curveBest90 = {};
+  for (const { key } of _CURVE_DURATIONS) { curveBest[key] = 0; curveBest90[key] = 0; }
+  for (const act of _pmcAllData.activities) {
+    const pp = act.peak_power || {};
+    const in90 = new Date(act.date) >= d90;
+    for (const { key } of _CURVE_DURATIONS) {
+      const w = pp[key] || 0;
+      if (w > curveBest[key]) curveBest[key] = w;
+      if (in90 && w > curveBest90[key]) curveBest90[key] = w;
+    }
+  }
+  const curveStr = _CURVE_DURATIONS
+    .filter(({ key }) => curveBest[key] > 0)
+    .map(({ key, label }) => `${label}:${curveBest[key]}W`)
+    .join(' / ');
+  const curve90Str = _CURVE_DURATIONS
+    .filter(({ key }) => curveBest90[key] > 0)
+    .map(({ key, label }) => `${label}:${curveBest90[key]}W`)
+    .join(' / ');
+
   const body = {
     current: { ctl: _pmcAllData.ctl[n], atl: _pmcAllData.atl[n], tsb: _pmcAllData.tsb[n] },
     trend: {
@@ -2075,7 +2303,16 @@ async function startPmcAi() {
       ctl_30d_ago: n >= 30 ? _pmcAllData.ctl[n - 30] : 0,
     },
     recent_rides:     recentActs,
-    settings:         { ftp: settings.ftp || null, rest_hr: settings.restHR, max_hr: settings.maxHR },
+    settings: {
+      ftp: settings.ftp || null,
+      rest_hr: settings.restHR,
+      max_hr: settings.maxHR,
+      weight_kg: settings.weight || null,
+      wkg: (settings.ftp && settings.weight) ? +(settings.ftp / settings.weight).toFixed(2) : null,
+    },
+    zone_distribution: zoneDistStr,
+    power_curve_alltime: curveStr || null,
+    power_curve_90d:     curve90Str || null,
     total_activities: _pmcAllData.activities.length,
     first_date:       _pmcAllData.activities[0]?.date || '',
   };

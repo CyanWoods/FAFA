@@ -10,8 +10,6 @@
 
 import folium
 
-STYLES = list[str]
-
 PRESETS: dict[str, dict] = {
     "amap": {
         "url": (

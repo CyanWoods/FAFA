@@ -208,6 +208,52 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 
 ---
 
+## AI 评估功能配置
+
+Web 查看器内置两个 AI 功能：**单次骑行评估**（界面一点击「AI 评估」）和 **PMC 训练状态分析**（训练管理页面）。两者均需要配置一个 OpenAI 兼容的 API。
+
+### 1. 创建配置文件
+
+将项目根目录下的模板文件复制一份：
+
+```bash
+cp ai_config.template.json ai_config.json
+```
+
+### 2. 编辑配置
+
+用文本编辑器打开 `ai_config.json`，填入你的 API 信息：
+
+```json
+{
+  "api_base": "https://api.openai.com/v1",
+  "api_key": "sk-...",
+  "model": "gpt-4o-mini",
+  "max_tokens": 2500
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `api_key` | ✅ | 你的 API Key，留空或保留 `your-api-key-here` 时 AI 功能自动禁用 |
+| `api_base` | ❌ | API 端点，默认 `https://api.openai.com/v1`，填入其他兼容服务地址即可切换 |
+| `model` | ❌ | 模型名称，默认 `gpt-4o-mini` |
+| `max_tokens` | ❌ | 单次回复最大 token 数，默认 `2500` |
+
+### 常见 API 服务示例
+
+| 服务 | `api_base` | 模型示例 |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o`、`gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Ollama（本地） | `http://localhost:11434/v1` | `qwen2.5:7b` |
+
+> **注意：** `ai_config.json` 已被 `.gitignore` 排除，不会提交到版本库，请勿将含有真实 API Key 的文件公开。
+
+---
+
 ## 坐标系说明
 
 FIT 文件中的 GPS 坐标以**半圆（semicircle）**存储：

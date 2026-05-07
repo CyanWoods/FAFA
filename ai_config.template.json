@@ -1,0 +1,7 @@
+{
+  "_comment": "复制此文件并重命名为 ai_config.json，填入你的 API 信息。api_key 留空或保留占位符时 AI 功能自动禁用。",
+  "api_base": "https://api.openai.com/v1",
+  "api_key": "your-api-key-here",
+  "model": "gpt-4o-mini",
+  "max_tokens": 2500
+}

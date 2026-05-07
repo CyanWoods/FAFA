@@ -222,6 +222,7 @@
         <label>FTP <input id="pmc-ftp" class="pmc-input" type="number" placeholder="—" min="50" max="600"> W</label>
         <label>静息心率 <input id="pmc-rest-hr" class="pmc-input" type="number" placeholder="50" min="30" max="100"> bpm</label>
         <label>最大心率 <input id="pmc-max-hr" class="pmc-input" type="number" placeholder="190" min="100" max="220"> bpm</label>
+        <label>体重 <input id="pmc-weight" class="pmc-input" type="number" placeholder="—" min="30" max="150"> kg</label>
         <button class="pmc-recalc-btn" onclick="pmcRecalc()">重新计算</button>
       </div>
       <div style="flex:1"></div>
@@ -242,6 +243,24 @@
         <div id="pmc-chart-wrap"><canvas id="pmc-canvas"></canvas></div>
         <div id="pmc-no-data" style="display:none">暂无骑行数据，请先将 .fit 文件放入 input/ 目录</div>
       </div>
+      <!-- 训练区间分布 -->
+      <div class="pmc-section" id="pmc-zone-section">
+        <div class="pmc-section-header">
+          <span class="pmc-chart-title">训练区间分布 · 骑行时间</span>
+          <span id="pmc-zone-note" class="pmc-zone-note"></span>
+        </div>
+        <div id="pmc-zone-bars"></div>
+      </div>
+
+      <!-- 峰值功率曲线 -->
+      <div class="pmc-section" id="pmc-curve-section">
+        <div class="pmc-section-header">
+          <span class="pmc-chart-title">峰值功率曲线</span>
+          <span id="pmc-curve-note" class="pmc-zone-note"></span>
+        </div>
+        <div id="pmc-curve-wrap"></div>
+      </div>
+
       <div id="pmc-ai-wrap">
         <div class="pmc-ai-header">
           <span class="pmc-ai-section-title">AI 体能评估</span>

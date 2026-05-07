@@ -1,5 +1,6 @@
 .claude/
 *json
+!ai_config.template.json
 *pyc
 *fit
 .venv

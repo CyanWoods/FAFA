@@ -1586,3 +1586,135 @@ body {
 #pmc-ai-result li { margin-bottom: 5px; color: #bbb; }
 #pmc-ai-result strong { color: #fff; font-weight: 600; }
 #pmc-ai-result em { color: #7ab0e8; font-style: normal; }
+
+/* ── PMC 卡片自适应列 ── */
+#pmc-cards-row {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.pmc-card-wkg { border-top: 2px solid #9b59b6; }
+.pmc-card-wkg .pmc-card-value { color: #9b59b6; font-size: 26px; }
+
+.pmc-ramp-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 1px 7px;
+  margin-left: 4px;
+}
+.pmc-ramp-ok   { background: rgba(46,213,115,0.12); color: #2ed573; }
+.pmc-ramp-warn { background: rgba(243,156,18,0.15);  color: #f39c12; }
+.pmc-ramp-over { background: rgba(231,76,60,0.15);   color: #e74c3c; }
+
+/* ── PMC 通用 section ── */
+.pmc-section {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.pmc-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.pmc-zone-note {
+  font-size: 11px;
+  color: #555;
+}
+
+/* ── 区间分布 ── */
+.pmc-zone-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+  font-size: 12px;
+}
+
+.pmc-zone-label {
+  width: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  gap: 1px;
+}
+
+.pmc-zone-watts {
+  font-size: 12px;
+  color: #ccc;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.pmc-zone-pct-label {
+  font-size: 10px;
+  color: #555;
+  line-height: 1.2;
+}
+
+.pmc-zone-bar-track {
+  flex: 1;
+  height: 10px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.pmc-zone-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.5s ease;
+}
+
+.pmc-zone-pct {
+  width: 42px;
+  text-align: right;
+  color: #555;
+  flex-shrink: 0;
+}
+
+.pmc-zone-name {
+  width: 80px;
+  color: #444;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* ── 功率曲线 ── */
+.pmc-curve-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: #aaa;
+}
+
+.pmc-curve-table th {
+  text-align: right;
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+.pmc-curve-table th:first-child { text-align: left; }
+
+.pmc-curve-table td {
+  text-align: right;
+  padding: 7px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.pmc-curve-table td:first-child { text-align: left; color: #777; }
+.pmc-curve-table td.pmc-curve-best { color: #f39c12; font-weight: 600; }
+.pmc-curve-table td.pmc-curve-none { color: #444; }
+.pmc-curve-table tr:last-child td { border-bottom: none; }
+.pmc-curve-wkg { font-size: 11px; color: #666; margin-left: 4px; }
