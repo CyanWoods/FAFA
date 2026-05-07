@@ -598,28 +598,14 @@ def ai_config_status():
     return jsonify(configured=False, model="")
 
 
-@app.route("/api/ai/evaluate", methods=["POST"])
-def ai_evaluate():
+def _llm_stream(cfg: dict, prompt: str):
+    """共享 SSE 流式响应助手，所有 AI 端点都通过此函数返回。"""
     from flask import Response as _Resp, stream_with_context
     import requests as _req
 
-    cfg = _load_ai_config()
-    if not cfg:
-        return jsonify(error="AI 未配置，请编辑项目根目录下的 ai_config.json"), 503
-
-    body       = request.get_json(silent=True) or {}
-    summary    = body.get("summary") or {}
-    km_stats   = body.get("km_stats") or []
-    filename   = body.get("filename", "")
-    start_time = body.get("start_time", "")
-
-    prompt   = _build_eval_prompt(summary, km_stats, filename, start_time)
     api_base = cfg.get("api_base", "https://api.openai.com/v1").rstrip("/")
-    headers  = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {cfg['api_key']}",
-    }
-    payload = {
+    auth     = f"Bearer {cfg['api_key']}"
+    payload  = {
         "model":      cfg.get("model", "gpt-4o-mini"),
         "messages":   [{"role": "user", "content": prompt}],
         "max_tokens": cfg.get("max_tokens", 2500),
@@ -630,11 +616,11 @@ def ai_evaluate():
         try:
             with _req.post(
                 f"{api_base}/chat/completions",
-                headers=headers, json=payload, stream=True, timeout=120,
+                headers={"Content-Type": "application/json", "Authorization": auth},
+                json=payload, stream=True, timeout=120,
             ) as resp:
                 if not resp.ok:
-                    err = resp.text[:300]
-                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {err}'})}\n\n"
+                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {resp.text[:200]}'})}\n\n"
                     return
                 for raw in resp.iter_lines():
                     if not raw:
@@ -642,11 +628,11 @@ def ai_evaluate():
                     line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
                     if not line.startswith("data: "):
                         continue
-                    data_str = line[6:].strip()
-                    if data_str == "[DONE]":
+                    ds = line[6:].strip()
+                    if ds == "[DONE]":
                         break
                     try:
-                        chunk = json.loads(data_str)
+                        chunk = json.loads(ds)
                         delta = chunk["choices"][0]["delta"].get("content", "")
                         if delta:
                             yield f"data: {json.dumps({'text': delta})}\n\n"
@@ -661,6 +647,147 @@ def ai_evaluate():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/ai/evaluate", methods=["POST"])
+def ai_evaluate():
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑项目根目录下的 ai_config.json"), 503
+    body = request.get_json(silent=True) or {}
+    prompt = _build_eval_prompt(
+        body.get("summary") or {}, body.get("km_stats") or [],
+        body.get("filename", ""), body.get("start_time", ""),
+    )
+    return _llm_stream(cfg, prompt)
+
+
+# ── 活动列表（PMC 数据源） ────────────────────────────────────────────────────
+@app.route("/api/activities")
+def get_activities():
+    """返回 input/ 中所有 FIT 文件的轻量摘要，供 PMC 页面计算使用。"""
+    if not INPUT_DIR.exists():
+        return jsonify(activities=[])
+
+    result = []
+    for path in sorted(INPUT_DIR.glob("*.fit")):
+        path_str = str(path)
+        try:
+            mtime  = path.stat().st_mtime
+            cached = _cache_get(path_str, mtime)
+            if cached:
+                ts_start = cached.get("time_stats_start")
+                summary  = cached.get("summary") or {}
+            else:
+                fit = parse_fit(path_str)
+                if not fit.records:
+                    continue
+                km  = compute_km_stats(fit)
+                s   = compute_summary(fit, km)
+                summary = asdict(s)
+                ts = fit.records[0].timestamp
+                if fit.utc_offset_s is not None:
+                    tz_local = timezone(timedelta(seconds=fit.utc_offset_s))
+                    ts = ts.astimezone(tz_local)
+                ts_start = ts.strftime("%Y-%m-%dT%H:%M:%S")
+
+            if not ts_start:
+                continue
+            result.append({
+                "filename":   path.name,
+                "date":       ts_start[:10],
+                "start_time": ts_start,
+                "summary":    {k: v for k, v in summary.items() if v is not None},
+            })
+        except Exception as e:
+            logging.warning("activities: %s: %s", path.name, e)
+
+    result.sort(key=lambda a: a["date"])
+    return jsonify(activities=result)
+
+
+# ── AI PMC 体能分析 ───────────────────────────────────────────────────────────
+def _build_pmc_prompt(data: dict) -> str:
+    cur    = data.get("current", {})
+    trend  = data.get("trend", {})
+    rides  = data.get("recent_rides", [])
+    cfg_u  = data.get("settings", {})
+
+    ctl = cur.get("ctl", 0)
+    atl = cur.get("atl", 0)
+    tsb = cur.get("tsb", 0)
+
+    if tsb > 10:
+        form_str = "新鲜（Fresh）— 体力充沛，适合比赛或高强度训练"
+    elif tsb > -5:
+        form_str = "最佳区间（Optimal）— 训练与恢复平衡，黄金训练期"
+    elif tsb > -20:
+        form_str = "疲劳（Tired）— 有训练负荷积累，建议控制强度"
+    elif tsb > -40:
+        form_str = "较疲劳（Very Tired）— 需要主动恢复"
+    else:
+        form_str = "过度疲劳（Overreached）— 建议安排休息日"
+
+    lines = [
+        "你是一名专业公路自行车训练教练，请根据以下训练管理图（PMC）数据进行体能状态分析，给出恢复与训练建议，用中文输出。",
+        "",
+        "## 当前 PMC 状态",
+        f"- 体能 CTL（42天慢性训练负荷）：**{ctl:.1f}**",
+        f"- 疲劳 ATL（7天急性训练负荷）：**{atl:.1f}**",
+        f"- 状态 TSB（今日形态 = 昨日CTL − 昨日ATL）：**{tsb:+.1f}**",
+        f"- 形态判定：**{form_str}**",
+    ]
+
+    if cfg_u.get("ftp"):
+        lines.append(f"- FTP：{cfg_u['ftp']} W")
+
+    ctl_7d = trend.get("ctl_7d_ago", ctl)
+    ctl_30d = trend.get("ctl_30d_ago", ctl)
+    lines += [
+        f"- CTL 7天前：{ctl_7d:.1f}（变化 {ctl - ctl_7d:+.1f}）",
+        f"- CTL 30天前：{ctl_30d:.1f}（变化 {ctl - ctl_30d:+.1f}）",
+        f"- 数据覆盖：{data.get('total_activities', 0)} 次骑行，最早记录 {data.get('first_date', '—')}",
+    ]
+
+    if rides:
+        lines += ["", f"## 近期骑行记录（最近 {len(rides)} 次）",
+                  "日期 | 距离 | 时长 | TSS | 均心率 | 均功率"]
+        lines.append("-----|------|------|-----|-------|------")
+        for r in rides:
+            def _rv(k, fmt="{:.0f}", fb="—"):
+                v = r.get(k)
+                return fb if v is None else fmt.format(v)
+            lines.append(
+                f"{r.get('date','?')} | {_rv('dist_km','{:.1f}')} km | "
+                f"{_rv('dur_min')} min | {_rv('tss')} | "
+                f"{_rv('avg_hr')} bpm | {_rv('avg_power')} W"
+            )
+
+    lines += [
+        "",
+        "## 请输出以下分析（Markdown格式，简洁专业）：",
+        "### 1. 当前状态解读",
+        "解读CTL/ATL/TSB数值，说明当前体能与疲劳水平。",
+        "### 2. 疲劳与恢复评估",
+        "当前是否过度训练？需要休息还是可以继续？",
+        "### 3. 近期训练模式分析",
+        "从近期数据看训练规律、强度分布、是否有明显规律或问题。",
+        "### 4. 近期建议（1-2周）",
+        "具体的训练安排：强度、量、休息日。",
+        "### 5. 中期目标（1-3个月）",
+        "如何合理提升CTL？建议目标区间和提升节奏（每周CTL增幅不超过3-5）。",
+    ]
+    return "\n".join(lines)
+
+
+@app.route("/api/ai/pmc", methods=["POST"])
+def ai_pmc():
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑 ai_config.json"), 503
+    data   = request.get_json(silent=True) or {}
+    prompt = _build_pmc_prompt(data)
+    return _llm_stream(cfg, prompt)
 
 
 if __name__ == "__main__":

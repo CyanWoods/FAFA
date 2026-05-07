@@ -140,7 +140,11 @@ let detailChart = null;
 let detailRouteMap = null;
 let detailRouteLayers = [];
 let aiTrackId = null;
-let _aiModel = '';
+let _aiModel  = '';
+let _pmcOpen  = false;
+let _pmcChart = null;
+let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
+let _pmcPeriod = 90;
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
@@ -1214,9 +1218,25 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       if (aiTrackId != null) closeAiView();
+      else if (_pmcOpen) closePmcView();
       else if (detailTrackId != null) closeDetailView();
       else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
     }
+  });
+
+  // Period selector buttons
+  document.querySelectorAll('.pmc-period-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.pmc-period-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _pmcPeriod = parseInt(btn.dataset.days) || 0;
+      if (_pmcAllData) _renderPmcChart(_pmcAllData, _pmcPeriod);
+    });
+  });
+
+  // PMC settings auto-save on change (no auto-recalc to avoid hammering)
+  ['pmc-ftp', 'pmc-rest-hr', 'pmc-max-hr'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', _savePmcSettings);
   });
 
   // 初始加载文件库计数 & AI 配置
@@ -1686,4 +1706,396 @@ function _renderMarkdown(text) {
   }
   if (inList) html += '</ul>';
   return html;
+}
+
+/* ── 训练状态 PMC（界面三） ──────────────────────────────────────────────── */
+
+function _pmcSettings() {
+  return {
+    ftp:    parseInt(document.getElementById('pmc-ftp').value)     || 0,
+    restHR: parseInt(document.getElementById('pmc-rest-hr').value) || 50,
+    maxHR:  parseInt(document.getElementById('pmc-max-hr').value)  || 190,
+  };
+}
+
+function _savePmcSettings() {
+  const s = _pmcSettings();
+  if (s.ftp)    localStorage.setItem('pmc_ftp',     s.ftp);
+  if (s.restHR) localStorage.setItem('pmc_rest_hr', s.restHR);
+  if (s.maxHR)  localStorage.setItem('pmc_max_hr',  s.maxHR);
+}
+
+function _loadPmcSettings() {
+  const ftp    = localStorage.getItem('pmc_ftp')     || '';
+  const restHR = localStorage.getItem('pmc_rest_hr') || '50';
+  const maxHR  = localStorage.getItem('pmc_max_hr')  || '190';
+  document.getElementById('pmc-ftp').value     = ftp;
+  document.getElementById('pmc-rest-hr').value = restHR;
+  document.getElementById('pmc-max-hr').value  = maxHR;
+}
+
+function openPmcView() {
+  _pmcOpen = true;
+  document.getElementById('pmc-view').classList.add('active');
+  _loadPmcSettings();
+  document.getElementById('pmc-ai-model-tag').textContent  = _aiModel || '';
+  document.getElementById('pmc-ai-model-tag').style.display = _aiModel ? '' : 'none';
+  document.getElementById('pmc-ai-result').innerHTML   = '';
+  document.getElementById('pmc-ai-loading').style.display = 'none';
+  document.getElementById('pmc-ai-placeholder').style.display = '';
+  _loadAndRenderPmc();
+}
+
+function closePmcView() {
+  _pmcOpen = false;
+  document.getElementById('pmc-view').classList.remove('active');
+}
+
+function pmcRecalc() {
+  _savePmcSettings();
+  _loadAndRenderPmc();
+}
+
+async function _loadAndRenderPmc() {
+  try {
+    const res  = await fetch('/api/activities');
+    const data = await res.json();
+    const acts = data.activities || [];
+    const settings = _pmcSettings();
+    _pmcAllData = _computePMC(acts, settings);
+    _renderPmcCards(_pmcAllData);
+    _renderPmcChart(_pmcAllData, _pmcPeriod);
+  } catch (e) {
+    console.error('PMC load error:', e);
+  }
+}
+
+function _computeTSS(summary, settings) {
+  if (!summary) return 0;
+  const { ftp, restHR, maxHR } = settings;
+  const dur_s = summary.moving_time_s || summary.total_duration_s || 0;
+  if (dur_s < 60) return 0;
+
+  // 功率 TSS（最准确）
+  if (summary.normalized_power && ftp > 0) {
+    const np = summary.normalized_power;
+    const IF = np / ftp;
+    return Math.max(0, Math.round((dur_s * np * IF) / (ftp * 3600) * 100));
+  }
+
+  // hrTSS（TRIMP 归一化）
+  if (summary.avg_hr && maxHR > restHR) {
+    const dur_min = dur_s / 60;
+    const hrr = Math.max(0, Math.min(1, (summary.avg_hr - restHR) / (maxHR - restHR)));
+    const trimp = dur_min * hrr * 0.64 * Math.exp(1.92 * hrr);
+    // 基准：85% HRR 持续1小时 ≈ 100 TSS
+    const hrr_ref   = 0.85;
+    const trimp_ref = 60 * hrr_ref * 0.64 * Math.exp(1.92 * hrr_ref);
+    return Math.max(0, Math.round(trimp / trimp_ref * 100));
+  }
+
+  // 距离粗估（最后兜底）
+  if (summary.total_dist_km > 0) {
+    return Math.max(0, Math.round(summary.total_dist_km * 8 +
+      (summary.total_elevation_gain_m || 0) * 0.04));
+  }
+  return 0;
+}
+
+function _computePMC(activities, settings) {
+  if (!activities.length) {
+    return { days: [], tss: [], ctl: [], atl: [], tsb: [], activities: [] };
+  }
+
+  // 每天 TSS 累加
+  const tssMap = new Map();
+  for (const act of activities) {
+    const t = _computeTSS(act.summary, settings);
+    tssMap.set(act.date, (tssMap.get(act.date) || 0) + t);
+  }
+
+  const kCTL = 1 - Math.exp(-1 / 42);
+  const kATL = 1 - Math.exp(-1 / 7);
+
+  const firstDate = new Date(activities[0].date);
+  const today     = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const days = [], tssArr = [], ctlArr = [], atlArr = [], tsbArr = [];
+  let ctl = 0, atl = 0;
+
+  const d = new Date(firstDate);
+  while (d <= today) {
+    const ds  = d.toISOString().slice(0, 10);
+    const tss = tssMap.get(ds) || 0;
+
+    // TSB 用昨日的 CTL/ATL 计算
+    const tsb = ctl - atl;
+    ctl = ctl + (tss - ctl) * kCTL;
+    atl = atl + (tss - atl) * kATL;
+
+    days.push(ds);
+    tssArr.push(tss);
+    ctlArr.push(+ctl.toFixed(1));
+    atlArr.push(+atl.toFixed(1));
+    tsbArr.push(+tsb.toFixed(1));
+    d.setDate(d.getDate() + 1);
+  }
+
+  return { days, tss: tssArr, ctl: ctlArr, atl: atlArr, tsb: tsbArr, activities };
+}
+
+function _renderPmcCards(pmc) {
+  const container = document.getElementById('pmc-cards-row');
+  if (!pmc.days.length) { container.innerHTML = ''; return; }
+
+  const n   = pmc.days.length - 1;
+  const ctl = pmc.ctl[n];
+  const atl = pmc.atl[n];
+  const tsb = pmc.tsb[n];
+
+  // CTL 趋势（7天前）
+  const ctl7 = n >= 7 ? pmc.ctl[n - 7] : 0;
+  const ctlΔ = ctl - ctl7;
+
+  // 形态文字 & 颜色
+  let formText, formColor;
+  if      (tsb >  10) { formText = '新鲜';     formColor = '#2ed573'; }
+  else if (tsb >  -5) { formText = '最佳状态';  formColor = '#a8e063'; }
+  else if (tsb > -20) { formText = '疲劳';      formColor = '#f39c12'; }
+  else if (tsb > -40) { formText = '较疲劳';    formColor = '#e67e22'; }
+  else                { formText = '过度疲劳';  formColor = '#e74c3c'; }
+
+  container.innerHTML = `
+    <div class="pmc-card pmc-card-ctl">
+      <div class="pmc-card-label">体能 · CTL</div>
+      <div class="pmc-card-value">${ctl.toFixed(1)}</div>
+      <div class="pmc-card-sub">慢性训练负荷（42天）<br>7天变化 ${ctlΔ >= 0 ? '+' : ''}${ctlΔ.toFixed(1)}</div>
+    </div>
+    <div class="pmc-card pmc-card-atl">
+      <div class="pmc-card-label">疲劳 · ATL</div>
+      <div class="pmc-card-value">${atl.toFixed(1)}</div>
+      <div class="pmc-card-sub">急性训练负荷（7天）</div>
+    </div>
+    <div class="pmc-card pmc-card-tsb">
+      <div class="pmc-card-label">状态 · TSB</div>
+      <div class="pmc-card-value" style="color:${tsb >= 0 ? '#2ed573' : tsb > -20 ? '#f39c12' : '#e74c3c'}">${tsb >= 0 ? '+' : ''}${tsb.toFixed(1)}</div>
+      <div class="pmc-card-sub">今日形态（昨日CTL − 昨日ATL）</div>
+    </div>
+    <div class="pmc-card pmc-card-form">
+      <div class="pmc-card-label">当前形态</div>
+      <div class="pmc-card-value" style="color:${formColor}">${formText}</div>
+      <div class="pmc-card-sub">共 ${pmc.activities.length} 次骑行记录</div>
+    </div>
+  `;
+}
+
+function _renderPmcChart(pmc, periodDays) {
+  const wrap   = document.getElementById('pmc-chart-wrap');
+  const noData = document.getElementById('pmc-no-data');
+
+  if (!pmc.days.length) {
+    wrap.style.display   = 'none';
+    noData.style.display = '';
+    return;
+  }
+  wrap.style.display   = '';
+  noData.style.display = 'none';
+
+  // 截取显示范围
+  const total = pmc.days.length;
+  const start = periodDays > 0 ? Math.max(0, total - periodDays) : 0;
+  const days  = pmc.days.slice(start);
+  const tss   = pmc.tss.slice(start);
+  const ctl   = pmc.ctl.slice(start);
+  const atl   = pmc.atl.slice(start);
+  const tsb   = pmc.tsb.slice(start);
+
+  // X 轴标签：每隔 N 天显示一次
+  const step = Math.max(1, Math.ceil(days.length / 20));
+  const labels = days.map((d, i) => i % step === 0 ? d.slice(5) : '');
+
+  if (_pmcChart) { _pmcChart.destroy(); _pmcChart = null; }
+
+  const ctx = document.getElementById('pmc-canvas').getContext('2d');
+  _pmcChart = new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'TSS',
+          data: tss,
+          backgroundColor: 'rgba(46, 134, 222, 0.25)',
+          borderColor:     'rgba(46, 134, 222, 0.5)',
+          borderWidth: 1,
+          yAxisID: 'yTSS',
+          order: 2,
+        },
+        {
+          type: 'line',
+          label: 'CTL 体能',
+          data: ctl,
+          borderColor: '#2ed573',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0,
+          yAxisID: 'yPMC',
+          order: 1,
+        },
+        {
+          type: 'line',
+          label: 'ATL 疲劳',
+          data: atl,
+          borderColor: '#e74c3c',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0,
+          yAxisID: 'yPMC',
+          order: 1,
+        },
+        {
+          type: 'line',
+          label: 'TSB 状态',
+          data: tsb,
+          borderColor: '#f39c12',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0,
+          yAxisID: 'yPMC',
+          order: 1,
+          segment: {
+            borderColor: ctx => {
+              const v = ctx.p1.parsed.y;
+              return v > 5 ? '#2ed573' : v > -20 ? '#f39c12' : '#e74c3c';
+            },
+          },
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: '#888', font: { size: 11 }, boxWidth: 14 },
+        },
+        tooltip: {
+          backgroundColor: 'rgba(20,20,28,0.95)',
+          titleColor: '#ccc',
+          bodyColor: '#aaa',
+          callbacks: {
+            title: items => days[items[0].dataIndex] || '',
+            label: item => {
+              const v = item.parsed.y;
+              return ` ${item.dataset.label}: ${v >= 0 ? '' : ''}${v.toFixed(1)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#555', font: { size: 10 }, maxRotation: 0 },
+          grid:  { color: 'rgba(255,255,255,0.04)' },
+        },
+        yPMC: {
+          position: 'left',
+          ticks: { color: '#666', font: { size: 10 } },
+          grid:  { color: 'rgba(255,255,255,0.05)' },
+        },
+        yTSS: {
+          position: 'right',
+          min: 0,
+          ticks: { color: 'rgba(46,134,222,0.6)', font: { size: 10 } },
+          grid:  { display: false },
+        },
+      },
+    },
+  });
+}
+
+async function startPmcAi() {
+  if (!_pmcAllData || !_pmcAllData.days.length) {
+    toast('暂无骑行数据，无法进行 AI 分析');
+    return;
+  }
+  if (!_aiModel) {
+    toast('AI 未配置，请先编辑 ai_config.json');
+    return;
+  }
+
+  const loading     = document.getElementById('pmc-ai-loading');
+  const placeholder = document.getElementById('pmc-ai-placeholder');
+  const result      = document.getElementById('pmc-ai-result');
+
+  loading.style.display     = 'flex';
+  placeholder.style.display = 'none';
+  result.innerHTML          = '';
+
+  const n        = _pmcAllData.days.length - 1;
+  const settings = _pmcSettings();
+
+  // 构建发送给 AI 的数据
+  const recentActs = _pmcAllData.activities.slice(-14).map(a => ({
+    date:      a.date,
+    dist_km:   a.summary.total_dist_km,
+    dur_min:   Math.round(((a.summary.moving_time_s || a.summary.total_duration_s || 0) / 60)),
+    tss:       _computeTSS(a.summary, settings),
+    avg_hr:    a.summary.avg_hr,
+    avg_power: a.summary.avg_power,
+  }));
+
+  const body = {
+    current: { ctl: _pmcAllData.ctl[n], atl: _pmcAllData.atl[n], tsb: _pmcAllData.tsb[n] },
+    trend: {
+      ctl_7d_ago:  n >= 7  ? _pmcAllData.ctl[n - 7]  : 0,
+      ctl_30d_ago: n >= 30 ? _pmcAllData.ctl[n - 30] : 0,
+    },
+    recent_rides:     recentActs,
+    settings:         { ftp: settings.ftp || null, rest_hr: settings.restHR, max_hr: settings.maxHR },
+    total_activities: _pmcAllData.activities.length,
+    first_date:       _pmcAllData.activities[0]?.date || '',
+  };
+
+  try {
+    const res = await fetch('/api/ai/pmc', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+
+    loading.style.display = 'none';
+
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      result.innerHTML = `<div class="ai-error">${d.error || '请求失败'}</div>`;
+      return;
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') { buffer = ''; break; }
+        try {
+          const chunk = JSON.parse(data);
+          if (chunk.error) { result.innerHTML = `<div class="ai-error">${chunk.error}</div>`; return; }
+          if (chunk.text) { fullText += chunk.text; result.innerHTML = _renderMarkdown(fullText); }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    loading.style.display = 'none';
+    result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+  }
 }

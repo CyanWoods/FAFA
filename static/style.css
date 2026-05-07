@@ -1311,3 +1311,278 @@ body {
   border-radius: 4px;
   color: #2ed573;
 }
+
+/* ── 训练状态 PMC (界面三) ─────────────────────────────────────────────────── */
+#pmc-btn {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 4px 13px;
+  font-size: 12px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.04);
+  color: #aaa;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+#pmc-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+#pmc-view {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  background: #0f0f14;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+#pmc-view.active { display: flex; animation: detailIn 0.18s ease; }
+
+#pmc-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: rgba(15, 15, 20, 0.98);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#pmc-back-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  background: transparent;
+  color: #aaa;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#pmc-back-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+.pmc-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ddd;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pmc-settings-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.pmc-settings-group label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #777;
+  white-space: nowrap;
+}
+
+.pmc-input {
+  width: 58px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #ccc;
+  font-size: 12px;
+  padding: 3px 6px;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.pmc-input:focus { border-color: rgba(46, 134, 222, 0.45); }
+
+.pmc-recalc-btn {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 3px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.04);
+  color: #666;
+  transition: background 0.15s, color 0.15s;
+}
+.pmc-recalc-btn:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+
+.pmc-ai-btn {
+  border: 1px solid rgba(46, 213, 115, 0.35);
+  border-radius: 20px;
+  padding: 5px 15px;
+  font-size: 12px;
+  cursor: pointer;
+  background: rgba(46, 213, 115, 0.08);
+  color: #2ed573;
+  transition: background 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.pmc-ai-btn:hover { background: rgba(46, 213, 115, 0.18); }
+
+#pmc-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+#pmc-body::-webkit-scrollbar { width: 4px; }
+#pmc-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+/* ── 状态卡片 ── */
+#pmc-cards-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.pmc-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.pmc-card-label {
+  font-size: 11px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.pmc-card-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  color: #ddd;
+}
+
+.pmc-card-sub {
+  font-size: 11px;
+  color: #555;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.pmc-card-ctl { border-top: 2px solid #2ed573; }
+.pmc-card-ctl .pmc-card-value { color: #2ed573; }
+.pmc-card-atl { border-top: 2px solid #e74c3c; }
+.pmc-card-atl .pmc-card-value { color: #e74c3c; }
+.pmc-card-tsb { border-top: 2px solid #f39c12; }
+.pmc-card-tsb .pmc-card-value { color: #f39c12; }
+.pmc-card-form { border-top: 2px solid #7ab0e8; }
+.pmc-card-form .pmc-card-value { font-size: 18px; color: #7ab0e8; }
+
+/* ── PMC 图表 ── */
+#pmc-chart-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+#pmc-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.pmc-chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #bbb;
+}
+
+.pmc-period-group { display: flex; gap: 4px; }
+
+.pmc-period-btn {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 3px 11px;
+  font-size: 11px;
+  cursor: pointer;
+  background: transparent;
+  color: #555;
+  transition: background 0.15s, color 0.15s;
+}
+.pmc-period-btn.active {
+  background: rgba(46, 134, 222, 0.18);
+  color: #7ab0e8;
+  border-color: rgba(46, 134, 222, 0.35);
+}
+.pmc-period-btn:hover:not(.active) { background: rgba(255,255,255,0.05); color: #999; }
+
+#pmc-chart-wrap { height: 300px; position: relative; }
+
+#pmc-no-data {
+  text-align: center;
+  color: #555;
+  font-size: 14px;
+  padding: 60px 0;
+}
+
+/* ── AI 分析区 ── */
+#pmc-ai-wrap {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+.pmc-ai-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.pmc-ai-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #bbb;
+}
+
+#pmc-ai-model-tag {
+  font-size: 11px;
+  color: #2ed573;
+  background: rgba(46, 213, 115, 0.1);
+  border: 1px solid rgba(46, 213, 115, 0.25);
+  border-radius: 10px;
+  padding: 2px 10px;
+}
+
+#pmc-ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #666;
+  font-size: 14px;
+  padding: 20px 0;
+}
+
+#pmc-ai-placeholder {
+  color: #444;
+  font-size: 13px;
+  padding: 16px 0;
+}
+
+/* PMC AI 结果复用 ai-result 样式 */
+#pmc-ai-result { max-width: 860px; line-height: 1.75; color: #ccc; font-size: 14px; }
+#pmc-ai-result h2 { font-size: 16px; font-weight: 700; color: #fff; margin: 24px 0 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+#pmc-ai-result h2:first-child { margin-top: 0; }
+#pmc-ai-result h3 { font-size: 13px; font-weight: 600; color: #aaa; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+#pmc-ai-result p { margin: 0 0 10px; color: #bbb; }
+#pmc-ai-result ul { margin: 6px 0 12px; padding-left: 20px; }
+#pmc-ai-result li { margin-bottom: 5px; color: #bbb; }
+#pmc-ai-result strong { color: #fff; font-weight: 600; }
+#pmc-ai-result em { color: #7ab0e8; font-style: normal; }

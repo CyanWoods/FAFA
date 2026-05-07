@@ -36,6 +36,7 @@
 
     <button id="library-btn" onclick="openLibrary()">文件库 <span id="lib-count">…</span></button>
     <button id="sync-btn"    onclick="openSyncModal()">顽鹿同步</button>
+    <button id="pmc-btn"     onclick="openPmcView()">训练状态</button>
 
     <div class="sep"></div>
 
@@ -212,7 +213,51 @@
     </div>
   </div>
 
-  <!-- 界面三：AI 骑行评估 -->
+  <!-- 界面三：训练状态 PMC -->
+  <div id="pmc-view">
+    <div id="pmc-topbar">
+      <button id="pmc-back-btn" onclick="closePmcView()">← 返回</button>
+      <span class="pmc-title">训练状态 · 体能管理</span>
+      <div class="pmc-settings-group">
+        <label>FTP <input id="pmc-ftp" class="pmc-input" type="number" placeholder="—" min="50" max="600"> W</label>
+        <label>静息心率 <input id="pmc-rest-hr" class="pmc-input" type="number" placeholder="50" min="30" max="100"> bpm</label>
+        <label>最大心率 <input id="pmc-max-hr" class="pmc-input" type="number" placeholder="190" min="100" max="220"> bpm</label>
+        <button class="pmc-recalc-btn" onclick="pmcRecalc()">重新计算</button>
+      </div>
+      <div style="flex:1"></div>
+      <button class="pmc-ai-btn" onclick="startPmcAi()">AI 分析</button>
+    </div>
+    <div id="pmc-body">
+      <div id="pmc-cards-row"></div>
+      <div id="pmc-chart-section">
+        <div id="pmc-chart-header">
+          <span class="pmc-chart-title">CTL / ATL / TSB · 训练管理图</span>
+          <div class="pmc-period-group">
+            <button class="pmc-period-btn" data-days="30">30天</button>
+            <button class="pmc-period-btn active" data-days="90">90天</button>
+            <button class="pmc-period-btn" data-days="180">180天</button>
+            <button class="pmc-period-btn" data-days="0">全部</button>
+          </div>
+        </div>
+        <div id="pmc-chart-wrap"><canvas id="pmc-canvas"></canvas></div>
+        <div id="pmc-no-data" style="display:none">暂无骑行数据，请先将 .fit 文件放入 input/ 目录</div>
+      </div>
+      <div id="pmc-ai-wrap">
+        <div class="pmc-ai-header">
+          <span class="pmc-ai-section-title">AI 体能评估</span>
+          <span id="pmc-ai-model-tag"></span>
+        </div>
+        <div id="pmc-ai-loading" style="display:none">
+          <div class="ai-spinner"></div>
+          <span>AI 正在分析训练状态…</span>
+        </div>
+        <div id="pmc-ai-placeholder">点击"AI 分析"获取个性化训练建议</div>
+        <div id="pmc-ai-result"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 界面四：AI 骑行评估 -->
   <div id="ai-view">
     <div id="ai-topbar">
       <button id="ai-back-btn" onclick="closeAiView()">← 返回</button>
