@@ -16,7 +16,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, send_file
@@ -96,10 +96,14 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
 
     try:
         time_stats_list = [asdict(s) for s in compute_time_stats(fit)]
-        time_stats_start = (
-            fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%S")
-            if fit.records else None
-        )
+        if fit.records:
+            ts = fit.records[0].timestamp
+            if fit.utc_offset_s is not None:
+                tz = timezone(timedelta(seconds=fit.utc_offset_s))
+                ts = ts.astimezone(tz)
+            time_stats_start = ts.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            time_stats_start = None
     except Exception as e:
         logging.warning("计算 time_stats 失败 (%s): %s", filename, e)
         time_stats_list  = []

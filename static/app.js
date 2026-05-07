@@ -1017,7 +1017,7 @@ function _renderDetailChart() {
         borderWidth: 2,
         pointRadius: stats.length > 30 ? 0 : 3,
         pointHoverRadius: 5,
-        tension: 0.35,
+        tension: 0,
         fill: true,
         spanGaps: true,
       }],

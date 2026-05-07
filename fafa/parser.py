@@ -1,6 +1,9 @@
 import sys
+import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List
+
+_FIT_EPOCH = datetime.datetime(1989, 12, 31, 0, 0, 0)
 
 
 @dataclass
@@ -30,6 +33,7 @@ class FitData:
     session: dict = field(default_factory=dict)
     laps: List[dict] = field(default_factory=list)
     manufacturer: Optional[str] = None
+    utc_offset_s: Optional[int] = None  # seconds east of UTC, derived from activity local_timestamp
 
 
 def parse_fit(filepath: str) -> FitData:
@@ -81,7 +85,19 @@ def parse_fit(filepath: str) -> FitData:
     file_id = messages["file_id_mesgs"][0] if messages.get("file_id_mesgs") else {}
     manufacturer = file_id.get("manufacturer")
 
-    return FitData(records=records, session=session, laps=laps, manufacturer=manufacturer)
+    utc_offset_s = None
+    act_mesgs = messages.get("activity_mesgs", [])
+    if act_mesgs and records:
+        act = act_mesgs[0]
+        lt_raw = act.get("local_timestamp")
+        ts_utc = act.get("timestamp")
+        if lt_raw is not None and ts_utc is not None and isinstance(lt_raw, (int, float)):
+            local_dt = _FIT_EPOCH + datetime.timedelta(seconds=int(lt_raw))
+            utc_naive = ts_utc.replace(tzinfo=None) if hasattr(ts_utc, "tzinfo") else ts_utc
+            utc_offset_s = int(round((local_dt - utc_naive).total_seconds()))
+
+    return FitData(records=records, session=session, laps=laps, manufacturer=manufacturer,
+                   utc_offset_s=utc_offset_s)
 
 
 def decode_lr_balance(raw: int) -> Optional[tuple]:
