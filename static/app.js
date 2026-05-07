@@ -1,6 +1,6 @@
 /* ── Tile configs ────────────────────────────────────────────────────────── */
 const _CARTO_OPTS = {
-  subdomains: 'abcd', maxZoom: 19, attribution: '&copy; CARTO',
+  subdomains: 'bcd', maxZoom: 19, attribution: '&copy; CARTO',
   crossOrigin: 'anonymous',
   tileSize: 512, zoomOffset: -1,
   keepBuffer: 4, updateWhenZooming: false,
@@ -150,12 +150,34 @@ let _pmcPeriod = 90;
 function initMap() {
   map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
   setTiles('dark');
+  setTimeout(() => map.invalidateSize(), 200);
 }
 
 function setTiles(name) {
   if (tileLayer) map.removeLayer(tileLayer);
   const t = TILES[name];
   tileLayer = L.tileLayer(t.url, t.opts).addTo(map);
+  tileLayer.on('tileerror', function (err) {
+    const tile = err.tile;
+    const retries = +(tile.dataset.retries || 0);
+    if (retries < 4) {
+      tile.dataset.retries = retries + 1;
+      const subs = Array.from(tileLayer.options.subdomains);
+      const { x, y } = err.coords;
+      // Leaflet assigns subdomains by |x+y| % n, so a diagonal stripe all hits the same server.
+      // On each retry, rotate to the next subdomain to avoid the same failing host.
+      const origIdx = Math.abs(x + y) % subs.length;
+      const nextIdx = (origIdx + retries + 1) % subs.length;
+      const baseUrl = tileLayer.getTileUrl(err.coords);
+      const retryUrl = baseUrl.replace(`//${subs[origIdx]}.`, `//${subs[nextIdx]}.`);
+      const delay = 1000 * Math.pow(2, retries); // 1s 2s 4s 8s
+      setTimeout(() => {
+        if (tile.parentNode) {
+          tile.src = retryUrl + (retryUrl.includes('?') ? '&' : '?') + '_r=' + Date.now();
+        }
+      }, delay);
+    }
+  });
 }
 
 /* ── Track coords ────────────────────────────────────────────────────────── */
