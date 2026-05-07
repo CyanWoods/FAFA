@@ -190,6 +190,7 @@
       </div>
       <button class="det-export-btn" onclick="exportDetailData('json')">导出 JSON</button>
       <button class="det-export-btn" onclick="exportDetailData('csv')">导出 CSV</button>
+      <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
     <div id="detail-summary-row"></div>
     <div id="detail-metric-tabs-wrap">
@@ -208,6 +209,24 @@
         <div id="detail-route-legend-bar"></div>
         <span id="detail-route-legend-high"></span>
       </div>
+    </div>
+  </div>
+
+  <!-- 界面三：AI 骑行评估 -->
+  <div id="ai-view">
+    <div id="ai-topbar">
+      <button id="ai-back-btn" onclick="closeAiView()">← 返回</button>
+      <span id="ai-filename-label"></span>
+      <span id="ai-model-tag"></span>
+      <button id="ai-retry-btn" onclick="startAiEval()">重新评估</button>
+    </div>
+    <div id="ai-summary-row"></div>
+    <div id="ai-body">
+      <div id="ai-loading">
+        <div class="ai-spinner"></div>
+        <span>AI 正在分析骑行数据…</span>
+      </div>
+      <div id="ai-result"></div>
     </div>
   </div>
 

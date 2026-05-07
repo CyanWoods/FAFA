@@ -485,6 +485,184 @@ def onelap_status():
         return jsonify(**_sync)
 
 
+# ── AI 骑行评估 ───────────────────────────────────────────────────────────────
+AI_CONFIG_FILE = PROJECT_ROOT / "ai_config.json"
+
+
+def _load_ai_config() -> dict | None:
+    if not AI_CONFIG_FILE.exists():
+        return None
+    try:
+        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        key = (cfg.get("api_key") or "").strip()
+        if not key or key.startswith("your-"):
+            return None
+        return cfg
+    except Exception:
+        return None
+
+
+def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str) -> str:
+    def fmt(v, unit="", digits=1):
+        return "无数据" if v is None else f"{round(v, digits)}{unit}"
+
+    lines = [
+        "你是一名专业公路自行车训练教练，请根据以下骑行数据进行全面分析，输出结构化中文评估报告。",
+        "",
+        "## 骑行基本信息",
+    ]
+    if start_time:
+        lines.append(f"- 骑行开始时间：{start_time}")
+    if filename:
+        lines.append(f"- 文件名：{filename}")
+
+    lines += [
+        "",
+        "## 骑行汇总数据",
+        f"- 总距离：{fmt(summary.get('total_dist_km'), ' km')}",
+        f"- 总时长：{fmt((summary.get('total_duration_s') or 0) / 60, ' 分钟', 0)}",
+        f"- 移动时长：{fmt((summary.get('moving_time_s') or 0) / 60, ' 分钟', 0)}",
+        f"- 平均速度：{fmt(summary.get('avg_speed_kmh'), ' km/h')}",
+        f"- 最大速度：{fmt(summary.get('max_speed_kmh'), ' km/h')}",
+        f"- 总爬升：{fmt(summary.get('total_elevation_gain_m'), ' m', 0)}",
+        f"- 总下降：{fmt(summary.get('total_elevation_loss_m'), ' m', 0)}",
+        f"- 平均心率：{fmt(summary.get('avg_hr'), ' bpm', 0)}",
+        f"- 最大心率：{fmt(summary.get('max_hr'), ' bpm', 0)}",
+        f"- 平均踏频：{fmt(summary.get('avg_cadence'), ' rpm', 0)}",
+        f"- 平均功率：{fmt(summary.get('avg_power'), ' W', 0)}",
+        f"- 最大功率：{fmt(summary.get('max_power'), ' W', 0)}",
+        f"- 归一化功率 (NP)：{fmt(summary.get('normalized_power'), ' W', 0)}",
+        f"- 卡路里消耗：{fmt(summary.get('total_calories_kcal'), ' kcal', 0)}",
+        f"- 平均气温：{fmt(summary.get('avg_temp_c'), ' °C')}",
+    ]
+    if summary.get("left_pct") is not None:
+        r = 100 - summary["left_pct"]
+        lines.append(f"- 左右功率平衡：左 {summary['left_pct']:.0f}% / 右 {r:.0f}%")
+
+    if km_stats:
+        lines.append("")
+        lines.append(f"## 逐公里分段数据（共 {len(km_stats)} 段）")
+        lines.append("公里段 | 时长(s) | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm) | 爬升(m) | 均坡度(%)")
+        lines.append("------|--------|-----------|------------|---------|-----------|--------|--------")
+
+        def _v(s, key, d=0):
+            val = s.get(key)
+            return "—" if val is None else str(round(val, d))
+
+        def km_row(s):
+            return (f"第{s.get('km','?')}km | {_v(s,'duration_s',0)}s | "
+                    f"{_v(s,'avg_speed_kmh',1)} | {_v(s,'avg_hr',0)} | "
+                    f"{_v(s,'avg_power',0)} | {_v(s,'avg_cadence',0)} | "
+                    f"{_v(s,'elevation_gain_m',0)} | {_v(s,'avg_grade_pct',1)}")
+
+        show = km_stats if len(km_stats) <= 15 else (km_stats[:7] + [None] + km_stats[-7:])
+        for s in show:
+            lines.append("…（中间段省略）" if s is None else km_row(s))
+
+    lines += [
+        "",
+        "## 评估报告章节（仅输出数据充分的章节，无相关数据的章节跳过）",
+        "",
+        "### 1. 骑行概览",
+        "一段话总结本次骑行的场景（距离/地形/强度定性）。",
+        "",
+        "### 2. 速度与配速分析",
+        "评估均速水平、逐公里速度稳定性（变异幅度）、是否存在明显掉速。",
+        "",
+        "### 3. 心率分析（如有心率数据）",
+        "评估有氧强度区间、心率漂移情况、有氧效率（如同时有功率：EF = NP / 均心率）。",
+        "",
+        "### 4. 功率分析（如有功率数据）",
+        "分析 AP/NP 差距（变异系数 VI = NP/AP，越接近1越匀速）、功率输出水平定性评价。",
+        "",
+        "### 5. 爬升表现（如爬升 > 50 m）",
+        "评估爬坡段速度/心率/功率的响应，以及整体爬升效率。",
+        "",
+        "### 6. 综合评分",
+        "给出本次训练质量评分（1–10分），列出2–3个亮点和1–2个改进方向。",
+        "",
+        "### 7. 训练建议",
+        "基于本次骑行数据，给出1–3条具体可执行的下次训练建议。",
+        "",
+        "格式要求：Markdown，## 做章节标题，**加粗**关键数值，- 做列表。语言简洁专业。",
+    ]
+    return "\n".join(lines)
+
+
+@app.route("/api/ai/config")
+def ai_config_status():
+    cfg = _load_ai_config()
+    if cfg:
+        return jsonify(configured=True, model=cfg.get("model", ""))
+    return jsonify(configured=False, model="")
+
+
+@app.route("/api/ai/evaluate", methods=["POST"])
+def ai_evaluate():
+    from flask import Response as _Resp, stream_with_context
+    import requests as _req
+
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑项目根目录下的 ai_config.json"), 503
+
+    body       = request.get_json(silent=True) or {}
+    summary    = body.get("summary") or {}
+    km_stats   = body.get("km_stats") or []
+    filename   = body.get("filename", "")
+    start_time = body.get("start_time", "")
+
+    prompt   = _build_eval_prompt(summary, km_stats, filename, start_time)
+    api_base = cfg.get("api_base", "https://api.openai.com/v1").rstrip("/")
+    headers  = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {cfg['api_key']}",
+    }
+    payload = {
+        "model":      cfg.get("model", "gpt-4o-mini"),
+        "messages":   [{"role": "user", "content": prompt}],
+        "max_tokens": cfg.get("max_tokens", 2500),
+        "stream":     True,
+    }
+
+    def generate():
+        try:
+            with _req.post(
+                f"{api_base}/chat/completions",
+                headers=headers, json=payload, stream=True, timeout=120,
+            ) as resp:
+                if not resp.ok:
+                    err = resp.text[:300]
+                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {err}'})}\n\n"
+                    return
+                for raw in resp.iter_lines():
+                    if not raw:
+                        continue
+                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk["choices"][0]["delta"].get("content", "")
+                        if delta:
+                            yield f"data: {json.dumps({'text': delta})}\n\n"
+                    except Exception:
+                        pass
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return _Resp(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     if debug:

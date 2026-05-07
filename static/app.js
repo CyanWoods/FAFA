@@ -139,6 +139,8 @@ let detailMetric = 'speed';
 let detailChart = null;
 let detailRouteMap = null;
 let detailRouteLayers = [];
+let aiTrackId = null;
+let _aiModel = '';
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
@@ -1211,13 +1213,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      if (detailTrackId != null) closeDetailView();
+      if (aiTrackId != null) closeAiView();
+      else if (detailTrackId != null) closeDetailView();
       else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
     }
   });
 
-  // 初始加载文件库计数
+  // 初始加载文件库计数 & AI 配置
   refreshLibraryCount();
+  _initAiConfig();
 });
 
 /* ── 文件库 ──────────────────────────────────────────────────────────────── */
@@ -1537,4 +1541,149 @@ function _setSyncUI(msg, pct, total) {
     bar.classList.remove('indeterminate');
     bar.style.width = pct + '%';
   }
+}
+
+/* ── AI 骑行评估（界面三） ────────────────────────────────────────────────── */
+async function _initAiConfig() {
+  try {
+    const res = await fetch('/api/ai/config');
+    const d   = await res.json();
+    _aiModel  = d.configured ? (d.model || 'AI') : '';
+  } catch {}
+}
+
+function openAiView() {
+  const id = detailTrackId;
+  const t  = tracks.get(id);
+  if (!t) return;
+  aiTrackId = id;
+
+  document.getElementById('ai-filename-label').textContent = t.name;
+  document.getElementById('ai-model-tag').textContent = _aiModel || '';
+  document.getElementById('ai-model-tag').style.display = _aiModel ? '' : 'none';
+
+  const sumRow = document.getElementById('ai-summary-row');
+  const chips  = _statChips(t.summary);
+  sumRow.innerHTML = chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
+
+  document.getElementById('ai-result').innerHTML = '';
+  document.getElementById('ai-view').classList.add('active');
+  startAiEval();
+}
+
+function closeAiView() {
+  document.getElementById('ai-view').classList.remove('active');
+  aiTrackId = null;
+}
+
+async function startAiEval() {
+  if (aiTrackId == null) return;
+  const t = tracks.get(aiTrackId);
+  if (!t) return;
+
+  const loading = document.getElementById('ai-loading');
+  const result  = document.getElementById('ai-result');
+  loading.style.display = 'flex';
+  result.innerHTML = '';
+
+  if (!_aiModel) {
+    loading.style.display = 'none';
+    result.innerHTML = `<div class="ai-unconfigured">
+      <strong>AI 评估未配置</strong><br>
+      请编辑项目根目录下的 <code>ai_config.json</code>，填入 API Key 后重启服务器。<br><br>
+      配置示例：<br>
+      <code>{ "api_base": "https://api.openai.com/v1", "api_key": "sk-...", "model": "gpt-4o-mini" }</code>
+    </div>`;
+    return;
+  }
+
+  const body = {
+    summary:    t.summary    || {},
+    km_stats:   t.kmStats    || [],
+    filename:   t.name       || '',
+    start_time: t.timeStatsStart || '',
+  };
+
+  try {
+    const res = await fetch('/api/ai/evaluate', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      loading.style.display = 'none';
+      result.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 ai_config.json 配置'}</div>`;
+      return;
+    }
+
+    loading.style.display = 'none';
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer   = '';
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') { buffer = ''; break; }
+        try {
+          const chunk = JSON.parse(data);
+          if (chunk.error) {
+            result.innerHTML = `<div class="ai-error">${chunk.error}</div>`;
+            return;
+          }
+          if (chunk.text) {
+            fullText += chunk.text;
+            result.innerHTML = _renderMarkdown(fullText);
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    loading.style.display = 'none';
+    result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+  }
+}
+
+function _renderMarkdown(text) {
+  const escHtml = s => s
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const inline = s => escHtml(s)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  const lines  = text.split('\n');
+  let html     = '';
+  let inList   = false;
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (line.startsWith('## ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h2>${inline(line.slice(3).trim())}</h2>`;
+    } else if (line.startsWith('### ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h3>${inline(line.slice(4).trim())}</h3>`;
+    } else if (/^[-*] /.test(line)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += `<li>${inline(line.slice(2).trim())}</li>`;
+    } else if (line.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  if (inList) html += '</ul>';
+  return html;
 }
