@@ -141,12 +141,12 @@ let detailRouteMap = null;
 let detailRouteLayers = [];
 let aiTrackId = null;
 let _aiModel  = '';
-let _pmcOpen  = false;
+let _analyticsOpen = false;
+let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 90;
 
-let _calOpen  = false;
 let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
 let _calActivities = null; // cached from /api/activities
@@ -1247,8 +1247,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Escape') {
       if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
       else if (aiTrackId != null) closeAiView();
-      else if (_calOpen) closeCalendarView();
-      else if (_pmcOpen) closePmcView();
+      else if (_analyticsOpen) closeAnalyticsView();
       else if (detailTrackId != null) closeDetailView();
       else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
     }
@@ -1769,36 +1768,90 @@ function _loadPmcSettings() {
   document.getElementById('pmc-weight').value  = weight;
 }
 
-function openPmcView() {
-  _pmcOpen = true;
-  document.getElementById('pmc-view').classList.add('active');
+/* ── 训练分析视图控制器 ────────────────────────────────────────────────────── */
+
+function openAnalyticsView(tab = 'pmc') {
+  _analyticsOpen = true;
+  _analyticsTab  = tab;
+  // 每次打开重置缓存，保证数据新鲜
+  _pmcAllData    = null;
+  _calActivities = null;
+  document.getElementById('analytics-view').classList.add('active');
   _loadPmcSettings();
-  document.getElementById('pmc-ai-model-tag').textContent  = _aiModel || '';
-  document.getElementById('pmc-ai-model-tag').style.display = _aiModel ? '' : 'none';
-  document.getElementById('pmc-ai-result').innerHTML   = '';
+  // AI model tag
+  const modelTag = document.getElementById('pmc-ai-model-tag');
+  modelTag.textContent  = _aiModel || '';
+  modelTag.style.display = _aiModel ? '' : 'none';
+  // 重置 PMC AI 区
+  document.getElementById('pmc-ai-result').innerHTML = '';
   document.getElementById('pmc-ai-loading').style.display = 'none';
   document.getElementById('pmc-ai-placeholder').style.display = '';
-  _loadAndRenderPmc();
+  _doSwitchTab(tab);
 }
 
-function closePmcView() {
-  _pmcOpen = false;
-  document.getElementById('pmc-view').classList.remove('active');
+function closeAnalyticsView() {
+  _analyticsOpen = false;
+  document.getElementById('analytics-view').classList.remove('active');
 }
+
+function switchAnalyticsTab(tab) {
+  if (tab === _analyticsTab) return;
+  _analyticsTab = tab;
+  _doSwitchTab(tab);
+}
+
+function _doSwitchTab(tab) {
+  // Tab 按钮高亮
+  document.querySelectorAll('.analytics-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  // 顶栏上下文控件切换
+  const isPmc = tab === 'pmc';
+  document.getElementById('analytics-pmc-controls').style.display = isPmc ? '' : 'none';
+  document.getElementById('analytics-cal-controls').style.display = isPmc ? 'none' : '';
+  document.getElementById('analytics-pmc-right').style.display    = isPmc ? '' : 'none';
+  document.getElementById('analytics-cal-right').style.display    = isPmc ? 'none' : '';
+  // 内容面板切换
+  document.getElementById('pmc-body').style.display = isPmc ? '' : 'none';
+  document.getElementById('cal-body').style.display = isPmc ? 'none' : '';
+  // 加载数据
+  if (isPmc) {
+    _loadAndRenderPmc();
+  } else {
+    _calYear  = new Date().getFullYear();
+    _calMonth = new Date().getMonth();
+    _loadAndRenderCalendar();
+  }
+}
+
+/* 向后兼容包装器 */
+function openPmcView()      { openAnalyticsView('pmc'); }
+function closePmcView()     { closeAnalyticsView(); }
+function openCalendarView() { openAnalyticsView('calendar'); }
+function closeCalendarView() { closeAnalyticsView(); }
 
 function pmcRecalc() {
   _savePmcSettings();
+  _pmcAllData = null; // 强制重算
   _loadAndRenderPmc();
 }
 
 async function _loadAndRenderPmc() {
+  if (_pmcAllData !== null) {
+    const settings = _pmcSettings();
+    _renderPmcCards(_pmcAllData);
+    _renderPmcChart(_pmcAllData, _pmcPeriod);
+    _renderPmcZones(_pmcAllData.activities, settings);
+    _renderPmcCurve(_pmcAllData.activities, settings);
+    return;
+  }
   try {
     const res  = await fetch('/api/activities');
     const data = await res.json();
     const acts = data.activities || [];
     const settings = _pmcSettings();
     _pmcAllData = _computePMC(acts, settings);
-    _pmcAllData.activities = acts;   // preserve full activity list for curve/zones
+    _pmcAllData.activities = acts;
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
     _renderPmcZones(acts, settings);
@@ -2370,20 +2423,6 @@ async function startPmcAi() {
 
 /* ── 训练日历 ────────────────────────────────────────────────────────────── */
 
-function openCalendarView() {
-  _calOpen = true;
-  _calYear  = new Date().getFullYear();
-  _calMonth = new Date().getMonth();
-  _calActivities = null;
-  document.getElementById('calendar-view').classList.add('active');
-  _loadAndRenderCalendar();
-}
-
-function closeCalendarView() {
-  _calOpen = false;
-  document.getElementById('calendar-view').classList.remove('active');
-}
-
 function calNavMonth(delta) {
   _calMonth += delta;
   if (_calMonth > 11) { _calMonth = 0; _calYear++; }
@@ -2399,6 +2438,10 @@ function calGoToday() {
 }
 
 async function _loadAndRenderCalendar() {
+  if (_calActivities !== null) {
+    _renderCalendarMonth(_calYear, _calMonth, _calActivities);
+    return;
+  }
   try {
     const res = await fetch('/api/activities');
     const data = await res.json();

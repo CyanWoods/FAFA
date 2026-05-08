@@ -1313,7 +1313,9 @@ body {
 }
 
 /* ── 训练状态 PMC (界面三) ─────────────────────────────────────────────────── */
-#pmc-btn {
+/* ── 训练分析视图（合并 PMC + 日历） ─────────────────────────────────────── */
+
+#analytics-btn {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   padding: 4px 13px;
@@ -1324,9 +1326,9 @@ body {
   transition: background 0.15s, color 0.15s;
   white-space: nowrap;
 }
-#pmc-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+#analytics-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
-#pmc-view {
+#analytics-view {
   position: fixed;
   inset: 0;
   z-index: 950;
@@ -1335,9 +1337,9 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
-#pmc-view.active { display: flex; animation: detailIn 0.18s ease; }
+#analytics-view.active { display: flex; animation: detailIn 0.18s ease; }
 
-#pmc-topbar {
+#analytics-topbar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1348,7 +1350,7 @@ body {
   flex-wrap: wrap;
 }
 
-#pmc-back-btn {
+#analytics-back-btn {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   padding: 5px 14px;
@@ -1360,8 +1362,50 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-#pmc-back-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+#analytics-back-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
+.analytics-tabs {
+  display: flex;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.analytics-tab {
+  border: none;
+  border-radius: 18px;
+  padding: 4px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: #666;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.analytics-tab.active {
+  background: rgba(46,134,222,0.22);
+  color: #7ab0e8;
+}
+.analytics-tab:not(.active):hover { color: #999; }
+
+.analytics-ctx-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.analytics-ctx-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 兼容旧 .pmc-title（已从 HTML 移除，保留备用） */
 .pmc-title {
   font-size: 14px;
   font-weight: 700;
@@ -1719,64 +1763,7 @@ body {
 .pmc-curve-table tr:last-child td { border-bottom: none; }
 .pmc-curve-wkg { font-size: 11px; color: #666; margin-left: 4px; }
 
-/* ── 训练日历 ────────────────────────────────────────────────────────────── */
-
-#cal-btn {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 4px 13px;
-  font-size: 12px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.04);
-  color: #aaa;
-  transition: background 0.15s, color 0.15s;
-  white-space: nowrap;
-}
-#cal-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-
-#calendar-view {
-  position: fixed;
-  inset: 0;
-  z-index: 950;
-  background: #0f0f14;
-  display: none;
-  flex-direction: column;
-  overflow: hidden;
-}
-#calendar-view.active { display: flex; animation: detailIn 0.18s ease; }
-
-#cal-topbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 20px;
-  background: rgba(15, 15, 20, 0.98);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-#cal-back-btn {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 20px;
-  padding: 5px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  background: transparent;
-  color: #aaa;
-  transition: background 0.15s, color 0.15s;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-#cal-back-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-
-.cal-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #ddd;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
+/* ── 训练日历内容样式（容器已并入 #analytics-view） ─────────────────────── */
 
 .cal-nav-group {
   display: flex;
