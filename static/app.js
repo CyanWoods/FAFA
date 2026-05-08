@@ -146,6 +146,11 @@ let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 90;
 
+let _calOpen  = false;
+let _calYear  = new Date().getFullYear();
+let _calMonth = new Date().getMonth(); // 0-indexed
+let _calActivities = null; // cached from /api/activities
+
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
   map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
@@ -215,6 +220,7 @@ function addTrack(data) {
   addTrackRow(track);
   syncBadge();
   syncEmptyHint();
+  return id;
 }
 
 function removeTrack(id) {
@@ -1239,7 +1245,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      if (aiTrackId != null) closeAiView();
+      if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
+      else if (aiTrackId != null) closeAiView();
+      else if (_calOpen) closeCalendarView();
       else if (_pmcOpen) closePmcView();
       else if (detailTrackId != null) closeDetailView();
       else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
@@ -1695,6 +1703,7 @@ async function startAiEval() {
     result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
   }
 }
+
 
 function _renderMarkdown(text) {
   const escHtml = s => s
@@ -2356,5 +2365,241 @@ async function startPmcAi() {
   } catch (e) {
     loading.style.display = 'none';
     result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+  }
+}
+
+/* ── 训练日历 ────────────────────────────────────────────────────────────── */
+
+function openCalendarView() {
+  _calOpen = true;
+  _calYear  = new Date().getFullYear();
+  _calMonth = new Date().getMonth();
+  _calActivities = null;
+  document.getElementById('calendar-view').classList.add('active');
+  _loadAndRenderCalendar();
+}
+
+function closeCalendarView() {
+  _calOpen = false;
+  document.getElementById('calendar-view').classList.remove('active');
+}
+
+function calNavMonth(delta) {
+  _calMonth += delta;
+  if (_calMonth > 11) { _calMonth = 0; _calYear++; }
+  if (_calMonth < 0)  { _calMonth = 11; _calYear--; }
+  if (_calActivities !== null) _renderCalendarMonth(_calYear, _calMonth, _calActivities);
+}
+
+function calGoToday() {
+  const now = new Date();
+  _calYear  = now.getFullYear();
+  _calMonth = now.getMonth();
+  if (_calActivities !== null) _renderCalendarMonth(_calYear, _calMonth, _calActivities);
+}
+
+async function _loadAndRenderCalendar() {
+  try {
+    const res = await fetch('/api/activities');
+    const data = await res.json();
+    _calActivities = data.activities || [];
+  } catch (e) {
+    console.error('Calendar load error:', e);
+    _calActivities = [];
+  }
+  _renderCalendarMonth(_calYear, _calMonth, _calActivities);
+}
+
+function _calTssColor(tss) {
+  if (tss <= 0)   return '#555';
+  if (tss < 50)   return '#4a9eff';
+  if (tss < 100)  return '#2ed573';
+  if (tss < 150)  return '#f39c12';
+  return '#e74c3c';
+}
+
+function _calFmtDur(secs) {
+  if (!secs) return '';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h ? `${h}h${m}m` : `${m}m`;
+}
+
+function _renderCalendarMonth(year, month, activities) {
+  document.getElementById('cal-month-label').textContent = `${year}年${month + 1}月`;
+
+  const monthStr  = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const settings  = typeof _pmcSettings === 'function' ? _pmcSettings()
+                    : { ftp: 0, restHR: 50, maxHR: 190, weight: 0 };
+
+  const actByDate = new Map();
+  for (const act of activities) {
+    const d = act.date;
+    if (!actByDate.has(d)) actByDate.set(d, []);
+    actByDate.get(d).push(act);
+  }
+
+  let mRides = 0, mKm = 0, mTSS = 0, mSecs = 0;
+  for (const [date, acts] of actByDate) {
+    if (!date.startsWith(monthStr)) continue;
+    for (const a of acts) {
+      mRides++;
+      mKm   += a.summary?.total_dist_km || 0;
+      mTSS  += _computeTSS(a.summary, settings);
+      mSecs += a.summary?.moving_time_s || a.summary?.total_duration_s || 0;
+    }
+  }
+
+  const chips = [];
+  if (mRides > 0) chips.push(`${mRides} 次`);
+  if (mKm > 0)    chips.push(`${mKm.toFixed(0)} km`);
+  if (mSecs > 0) {
+    const h = Math.floor(mSecs / 3600);
+    const m = Math.floor((mSecs % 3600) / 60);
+    chips.push(h ? `${h}h ${m}m` : `${m}m`);
+  }
+  if (mTSS > 0) chips.push(`TSS ${mTSS}`);
+  document.getElementById('cal-month-stats').innerHTML =
+    chips.map(c => `<span class="cal-stat-chip">${c}</span>`).join('');
+
+  const firstDOW    = new Date(year, month, 1).getDay();
+  const startOffset = (firstDOW + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const totalRows   = Math.ceil((startOffset + daysInMonth) / 7);
+  const todayStr    = new Date().toISOString().slice(0, 10);
+  const prevMoLen   = new Date(year, month, 0).getDate();
+
+  const grid = document.getElementById('cal-grid');
+  grid.innerHTML = '';
+
+  for (let row = 0; row < totalRows; row++) {
+    let weekKm = 0, weekTSS = 0;
+
+    for (let col = 0; col < 7; col++) {
+      const cellIndex = row * 7 + col;
+      const dayNum    = cellIndex - startOffset + 1;
+      const cell      = document.createElement('div');
+      cell.className  = 'cal-day';
+
+      if (dayNum < 1 || dayNum > daysInMonth) {
+        cell.classList.add('cal-day-other');
+        const n = dayNum < 1 ? prevMoLen + dayNum : dayNum - daysInMonth;
+        cell.innerHTML = `<div class="cal-day-head"><span class="cal-day-num">${n}</span></div>`;
+      } else {
+        const dateStr   = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+        const isToday   = dateStr === todayStr;
+        const isWeekend = col >= 5;
+
+        if (isToday)   cell.classList.add('cal-day-today');
+        if (isWeekend) cell.classList.add('cal-day-weekend');
+
+        const numEl = isToday
+          ? `<span class="cal-day-num cal-day-num-today">${dayNum}</span>`
+          : `<span class="cal-day-num cal-day-num-active">${dayNum}</span>`;
+        cell.innerHTML = `<div class="cal-day-head">${numEl}</div><div class="cal-day-chips"></div>`;
+
+        const chipsWrap = cell.querySelector('.cal-day-chips');
+        for (const act of actByDate.get(dateStr) || []) {
+          const tss    = _computeTSS(act.summary, settings);
+          weekKm  += act.summary?.total_dist_km || 0;
+          weekTSS += tss;
+
+          const km     = act.summary?.total_dist_km != null
+                         ? act.summary.total_dist_km.toFixed(1) : '—';
+          const durS   = act.summary?.moving_time_s || act.summary?.total_duration_s || 0;
+          const durStr = _calFmtDur(durS);
+          const color  = _calTssColor(tss);
+          const barPct = Math.min(100, tss > 0 ? (tss / 200) * 100 : 0).toFixed(0);
+
+          const chip = document.createElement('div');
+          chip.className = 'cal-activity-chip';
+          chip.style.borderTopColor = color;
+          chip.innerHTML = `
+            <div class="cal-tss-bar-track">
+              <div class="cal-tss-bar-fill" style="width:${barPct}%;background:${color}"></div>
+            </div>
+            <div class="cal-act-main">
+              <span class="cal-act-km">${km} km</span>
+              ${durStr ? `<span class="cal-act-dur">${durStr}</span>` : ''}
+            </div>
+            ${tss > 0 ? `<span class="cal-act-tss" style="color:${color}">TSS ${tss}</span>` : ''}
+          `;
+          chip.addEventListener('click', () => _calOpenActivityModal(act, tss));
+          chipsWrap.appendChild(chip);
+        }
+      }
+      grid.appendChild(cell);
+    }
+
+    const totalCell = document.createElement('div');
+    totalCell.className = 'cal-week-total';
+    if (weekKm > 0 || weekTSS > 0) {
+      totalCell.innerHTML = `
+        ${weekKm > 0  ? `<span class="cal-week-km">${weekKm.toFixed(0)} km</span>` : ''}
+        ${weekTSS > 0 ? `<span class="cal-week-tss">TSS ${weekTSS}</span>` : ''}
+      `;
+    }
+    grid.appendChild(totalCell);
+  }
+}
+
+function _calOpenActivityModal(act, tss) {
+  const s = act.summary || {};
+
+  document.getElementById('cal-act-modal-header').innerHTML = `
+    <div class="cal-act-modal-date">${act.date}</div>
+    <div class="cal-act-modal-file">${act.filename}</div>
+  `;
+
+  const durS = s.moving_time_s || s.total_duration_s || 0;
+  const h = Math.floor(durS / 3600), m = Math.floor((durS % 3600) / 60);
+  const durStr = durS > 0 ? (h ? `${h}h ${m}m` : `${m} min`) : null;
+
+  const items = [
+    ['距离',    s.total_dist_km != null ? `${s.total_dist_km.toFixed(2)} km` : null],
+    ['时长',    durStr],
+    ['爬升',    s.total_elevation_gain_m != null ? `${Math.round(s.total_elevation_gain_m)} m` : null],
+    ['均速',    s.avg_speed_kmh != null ? `${s.avg_speed_kmh.toFixed(1)} km/h` : null],
+    ['均心率',  s.avg_hr != null ? `${Math.round(s.avg_hr)} bpm` : null],
+    ['最大心率', s.max_hr != null ? `${s.max_hr} bpm` : null],
+    ['均功率',  s.avg_power != null ? `${Math.round(s.avg_power)} W` : null],
+    ['NP',     s.normalized_power != null ? `${Math.round(s.normalized_power)} W` : null],
+    ['TSS',    tss > 0 ? String(tss) : null],
+    ['卡路里',  s.total_calories_kcal != null ? `${s.total_calories_kcal} kcal` : null],
+  ].filter(([, v]) => v !== null);
+
+  document.getElementById('cal-act-modal-stats').innerHTML = items
+    .map(([k, v]) => `
+      <div class="cal-act-stat-item">
+        <span class="cal-act-stat-label">${k}</span>
+        <span class="cal-act-stat-value">${v}</span>
+      </div>
+    `).join('');
+
+  document.getElementById('cal-modal-detail-btn').onclick =
+    () => _calLoadAndOpenDetail(act.filename);
+
+  document.getElementById('cal-act-modal').classList.add('active');
+}
+
+function calCloseActivityModal() {
+  document.getElementById('cal-act-modal').classList.remove('active');
+}
+
+async function _calLoadAndOpenDetail(filename) {
+  calCloseActivityModal();
+  try {
+    const res = await fetch('/api/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (data.error) { toast(data.error); return; }
+    closeCalendarView();
+    const id = addTrack({ ...data, source: 'library' });
+    if (id != null) openDetailView(id);
+  } catch (e) {
+    toast('加载失败：' + e.message);
   }
 }

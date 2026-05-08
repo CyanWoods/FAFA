@@ -37,6 +37,7 @@
     <button id="library-btn" onclick="openLibrary()">文件库 <span id="lib-count">…</span></button>
     <button id="sync-btn"    onclick="openSyncModal()">顽鹿同步</button>
     <button id="pmc-btn"     onclick="openPmcView()">训练状态</button>
+    <button id="cal-btn"     onclick="openCalendarView()">训练日历</button>
 
     <div class="sep"></div>
 
@@ -272,6 +273,50 @@
         </div>
         <div id="pmc-ai-placeholder">点击"AI 分析"获取个性化训练建议</div>
         <div id="pmc-ai-result"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 界面五：训练日历 -->
+  <div id="calendar-view">
+    <div id="cal-topbar">
+      <button id="cal-back-btn" onclick="closeCalendarView()">← 返回</button>
+      <span class="cal-title">训练日历</span>
+      <div class="cal-nav-group">
+        <button class="cal-nav-btn" onclick="calNavMonth(-1)">‹</button>
+        <span id="cal-month-label"></span>
+        <button class="cal-nav-btn" onclick="calNavMonth(1)">›</button>
+      </div>
+      <button class="cal-today-btn" onclick="calGoToday()">今天</button>
+      <div style="flex:1"></div>
+      <div id="cal-month-stats"></div>
+    </div>
+    <div id="cal-body">
+      <div id="cal-grid-wrap">
+        <div id="cal-dow-header">
+          <div class="cal-dow">周一</div>
+          <div class="cal-dow">周二</div>
+          <div class="cal-dow">周三</div>
+          <div class="cal-dow">周四</div>
+          <div class="cal-dow">周五</div>
+          <div class="cal-dow cal-dow-weekend">周六</div>
+          <div class="cal-dow cal-dow-weekend">周日</div>
+          <div class="cal-dow cal-dow-total">周合计</div>
+        </div>
+        <div id="cal-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日历活动弹窗 -->
+  <div id="cal-act-modal">
+    <div class="modal-overlay" onclick="calCloseActivityModal()"></div>
+    <div class="modal-box cal-act-modal-box">
+      <div id="cal-act-modal-header" class="cal-act-modal-header"></div>
+      <div class="cal-act-modal-stats" id="cal-act-modal-stats"></div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="calCloseActivityModal()">关闭</button>
+        <button class="modal-export" id="cal-modal-detail-btn">查看骑行详情</button>
       </div>
     </div>
   </div>
