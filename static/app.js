@@ -1400,9 +1400,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Escape') {
       if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
       else if (aiTrackId != null) closeAiView();
-      else if (_analyticsOpen) closeAnalyticsView();
       else if (detailTrackId != null) closeDetailView();
-      else if (document.getElementById('library-drawer').classList.contains('open')) closeLibrary();
+      // analytics and files are sidebar views; no ESC needed
     }
   });
 
@@ -1450,14 +1449,11 @@ function refreshLibraryCount() {
 }
 
 function openLibrary() {
-  document.getElementById('library-drawer').classList.add('open');
-  document.getElementById('library-overlay').classList.add('show');
-  refreshLibrary();
+  switchSidebarView('files');
 }
 
 function closeLibrary() {
-  document.getElementById('library-drawer').classList.remove('open');
-  document.getElementById('library-overlay').classList.remove('show');
+  // No-op: files view has no close button; switch sidebar to navigate away
 }
 
 async function refreshLibrary() {
@@ -1733,9 +1729,7 @@ async function _pollSync() {
       }
       // 刷新文件库数量
       refreshLibraryCount();
-      if (document.getElementById('library-drawer').classList.contains('open')) {
-        refreshLibrary();
-      }
+      refreshLibrary();
     }
   } catch {}
 }
