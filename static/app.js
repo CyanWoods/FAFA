@@ -658,11 +658,12 @@ function setupDragDrop() {
   document.addEventListener('dragenter', e => { e.preventDefault(); depth++; overlay.classList.add('show'); });
   document.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; overlay.classList.remove('show'); } });
   document.addEventListener('dragover',  e => e.preventDefault());
-  document.addEventListener('drop', e => {
+  document.addEventListener('drop', async e => {
     e.preventDefault();
     depth = 0;
     overlay.classList.remove('show');
-    for (const file of e.dataTransfer.files) uploadFile(file);
+    for (const file of e.dataTransfer.files) await uploadFile(file);
+    if (_sidebarView === 'activities') openActivitiesView();
   });
 }
 
@@ -1728,6 +1729,10 @@ async function _pollSync() {
       // 刷新文件库数量
       refreshLibraryCount();
       refreshLibrary();
+      if (_sidebarView === 'activities') {
+        _actActivities = null;
+        openActivitiesView();
+      }
     }
   } catch {}
 }
