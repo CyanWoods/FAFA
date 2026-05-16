@@ -151,6 +151,45 @@ let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
 let _calActivities = null; // cached from /api/activities
 
+let _sidebarView = 'activities'; // 'activities' | 'map' | 'analytics' | 'files'
+
+function switchSidebarView(name) {
+  // Hide all main overlay views first (closeAnalyticsView reads _sidebarView,
+  // so update _sidebarView AFTER the close calls to avoid guard mis-firing)
+  document.getElementById('activities-view').classList.remove('active');
+  document.getElementById('files-view').classList.remove('active');
+  closeAnalyticsView();
+
+  // Now commit the new view
+  _sidebarView = name;
+
+  // Update sidebar button active state
+  document.querySelectorAll('.sb-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  });
+
+  // Show/hide map context controls (topbar, track-panel, zoom-slider only visible in map mode)
+  const mapCtrlsVisible = (name === 'map');
+  document.getElementById('topbar').style.display        = mapCtrlsVisible ? '' : 'none';
+  document.getElementById('track-panel').style.display   = mapCtrlsVisible ? '' : 'none';
+  document.getElementById('zoom-slider-wrap').style.display = mapCtrlsVisible ? '' : 'none';
+
+  if (name === 'activities') {
+    document.getElementById('activities-view').classList.add('active');
+    openActivitiesView();
+  } else if (name === 'analytics') {
+    openAnalyticsView(_analyticsTab || 'pmc');
+  } else if (name === 'files') {
+    document.getElementById('files-view').classList.add('active');
+    refreshLibrary();
+  }
+  // 'map': map is the background — show topbar/track-panel/zoom-slider (already set above)
+}
+
+function openActivitiesView() {
+  // Stub — full implementation in Task 4
+}
+
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
   map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
@@ -1792,6 +1831,18 @@ function openAnalyticsView(tab = 'pmc') {
 function closeAnalyticsView() {
   _analyticsOpen = false;
   document.getElementById('analytics-view').classList.remove('active');
+  // Sync sidebar: closing analytics returns to activities view
+  if (_sidebarView === 'analytics') {
+    _sidebarView = 'activities';
+    document.querySelectorAll('.sb-item').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === 'activities');
+    });
+    document.getElementById('activities-view').classList.add('active');
+    // Show map controls only if going to map view
+    document.getElementById('topbar').style.display        = 'none';
+    document.getElementById('track-panel').style.display   = 'none';
+    document.getElementById('zoom-slider-wrap').style.display = 'none';
+  }
 }
 
 function switchAnalyticsTab(tab) {
