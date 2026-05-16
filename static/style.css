@@ -150,7 +150,7 @@ body {
   position: fixed;
   bottom: 14px;
   left: 194px;
-  width: min(420px, calc(100vw - 28px));
+  width: min(420px, calc(100vw - 208px));
   z-index: 900;
   background: rgba(15, 15, 20, 0.88);
   backdrop-filter: blur(14px);
