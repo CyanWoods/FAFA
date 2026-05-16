@@ -1379,10 +1379,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initZoomSlider();
   initPanelResize();
 
-  // Panel starts expanded
-  const panel = document.getElementById('track-panel');
-  panel.classList.add('panel-expanded');
-  panel.style.maxHeight = panelExpandedHeight + 'px';
+  // Activities view is default home
+  switchSidebarView('activities');
 
   document.getElementById('tile-select').addEventListener('change', e => {
     setTiles(e.target.value);
