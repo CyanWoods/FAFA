@@ -18,6 +18,25 @@
 </head>
 <body>
 
+  <!-- ── 侧边导航 ─────────────────────────────────────────────────────────── -->
+  <nav id="sidebar">
+    <div class="sb-logo">FAFA</div>
+    <div class="sb-nav">
+      <button class="sb-item active" data-view="activities" onclick="switchSidebarView('activities')">
+        <span class="sb-icon">◈</span>
+        <span class="sb-label">骑行记录</span>
+      </button>
+      <button class="sb-item" data-view="analytics" onclick="switchSidebarView('analytics')">
+        <span class="sb-icon">⬡</span>
+        <span class="sb-label">训练分析</span>
+      </button>
+      <button class="sb-item" data-view="files" onclick="switchSidebarView('files')">
+        <span class="sb-icon">⊞</span>
+        <span class="sb-label">文件管理 <span id="lib-count" class="sb-badge"></span></span>
+      </button>
+    </div>
+  </nav>
+
   <!-- 顶部控制栏 -->
   <div id="topbar">
     <span class="logo">FAFA</span>
@@ -31,12 +50,6 @@
       <option value="light-nolabels">浅色路网</option>
       <option value="amap">高德地图</option>
     </select>
-
-    <div class="sep"></div>
-
-    <button id="library-btn"    onclick="openLibrary()">文件库 <span id="lib-count">…</span></button>
-    <button id="sync-btn"       onclick="openSyncModal()">顽鹿同步</button>
-    <button id="analytics-btn"  onclick="openAnalyticsView('pmc')">训练分析</button>
 
     <div class="sep"></div>
 
@@ -82,24 +95,42 @@
     </div>
   </div>
 
-  <!-- ── 文件库抽屉 ─────────────────────────────────────────────────────────── -->
-  <div id="library-drawer">
-    <div class="drawer-header">
-      <span class="drawer-title">文件库</span>
-      <div class="drawer-actions">
-        <button class="drawer-act-btn" onclick="loadAllFromLibrary()">全部加载</button>
-        <button class="drawer-act-btn" onclick="refreshLibrary()">刷新</button>
-        <button class="drawer-act-btn danger" onclick="deleteAllFromLibrary()">全部删除</button>
-        <button class="drawer-close-btn" onclick="closeLibrary()">×</button>
+  <!-- ── 界面一：骑行记录列表 ─────────────────────────────────────────────── -->
+  <div id="activities-view" class="active">
+    <div id="act-list-header">
+      <span class="act-list-title">骑行记录</span>
+      <div id="act-list-actions">
+        <button id="act-map-btn" onclick="switchSidebarView('map')">查看地图</button>
+        <label id="act-upload-label">
+          导入 FIT
+          <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
+        </label>
       </div>
     </div>
-    <div class="drawer-search">
+    <div id="act-list-body">
+      <div id="act-list"></div>
+      <div id="act-empty-hint">将 .fit 文件拖入此处，或点击「导入 FIT」</div>
+      <div id="act-loading-hint" style="display:none">正在加载…</div>
+    </div>
+  </div>
+
+  <!-- ── 界面：文件管理 ──────────────────────────────────────────────────── -->
+  <div id="files-view">
+    <div id="files-header">
+      <span class="act-list-title">文件管理</span>
+      <div id="files-actions">
+        <button onclick="loadAllFromLibrary()">全部加载到地图</button>
+        <button onclick="refreshLibrary()">刷新</button>
+        <button onclick="openSyncModal()">顽鹿同步</button>
+        <button class="danger-btn" onclick="deleteAllFromLibrary()">全部删除</button>
+      </div>
+    </div>
+    <div class="drawer-search" style="padding:12px 20px 0">
       <input id="lib-search" type="text" placeholder="搜索文件名…" oninput="filterLibrary()">
     </div>
     <div id="lib-filter"></div>
     <div id="lib-list"></div>
   </div>
-  <div id="library-overlay" onclick="closeLibrary()"></div>
 
   <!-- ── 顽鹿同步弹窗 ───────────────────────────────────────────────────────── -->
   <div id="sync-modal">
