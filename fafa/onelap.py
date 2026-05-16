@@ -329,6 +329,36 @@ def download_activity(
     return final
 
 
+# ── API 登录 ──────────────────────────────────────────────────────────────────
+LOGIN_API = f"{ONELAP_WEB}/api/login"
+
+
+def api_login(username: str, password: str) -> dict:
+    """账号密码直接 API 登录顽鹿，返回 {token, cookies}。"""
+    pwd_md5 = hashlib.md5(password.encode()).hexdigest()
+    payload = {"account": username, "password": pwd_md5}
+
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": UA, "Origin": ONELAP_WEB, "Referer": f"{ONELAP_WEB}/login.html"})
+
+    resp = sess.post(LOGIN_API, json=payload, headers=sign(payload), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if data.get("code") != 200:
+        msg = data.get("message") or data.get("msg") or json.dumps(data, ensure_ascii=False)
+        raise RuntimeError(f"登录失败（{data.get('code')}）：{msg}")
+
+    # data.data 是列表，取第一个元素的 token
+    items = data.get("data") or []
+    token = (items[0].get("token") or "") if items else ""
+    if not token:
+        raise RuntimeError(f"登录成功但未返回 token：{data}")
+
+    cookies = {c.name: c.value for c in sess.cookies}
+    return {"token": token, "cookies": cookies}
+
+
 # ── 浏览器登录 ─────────────────────────────────────────────────────────────────
 def browser_login() -> dict:
     """打开浏览器让用户登录顽鹿，返回 {token, cookies}。失败时抛出异常。"""

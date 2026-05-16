@@ -224,7 +224,7 @@ _MAX_DL_WORKERS = 6
 def _run_sync(full: bool, limit: int | None):
     """后台线程：登录顽鹿 → 拉取列表 → 并发下载 FIT。"""
     from fafa.onelap import (
-        browser_login, build_session, fetch_activity_list,
+        browser_login, api_login, build_session, fetch_activity_list,
         download_activity, rename_magene, parse_activity_time, activity_id,
     )
     from fafa.tools.fix_coords import auto_decrypt_if_gcj02
@@ -241,13 +241,21 @@ def _run_sync(full: bool, limit: int | None):
         STATE_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
 
     try:
-        _set_sync(state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
-
-        try:
-            auth = browser_login()
-        except Exception as e:
-            _set_sync(state="error", message=f"登录失败：{e}")
-            return
+        creds = _load_onelap_credentials()
+        if creds:
+            _set_sync(state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
+            try:
+                auth = api_login(creds["username"], creds["password"])
+            except Exception as e:
+                _set_sync(state="error", message=f"自动登录失败：{e}")
+                return
+        else:
+            _set_sync(state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
+            try:
+                auth = browser_login()
+            except Exception as e:
+                _set_sync(state="error", message=f"登录失败：{e}")
+                return
 
         state = {} if full else load_state()
         if state and not any(INPUT_DIR.glob("*.fit")):
@@ -569,6 +577,21 @@ def _load_ai_config() -> dict | None:
         return cfg
     except Exception:
         return None
+
+
+def _load_onelap_credentials() -> dict | None:
+    if not AI_CONFIG_FILE.exists():
+        return None
+    try:
+        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        username = (cfg.get("onelap_username") or "").strip()
+        password = (cfg.get("onelap_password") or "").strip()
+        if username and password:
+            return {"username": username, "password": password}
+    except Exception:
+        pass
+    return None
 
 
 def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str) -> str:
