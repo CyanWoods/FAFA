@@ -235,8 +235,8 @@ function _renderActivityList(activities) {
   emptyEl.style.display = 'none';
 
   // Summary bar totals
-  const totalKm = activities.reduce((s, a) => s + ((a.summary || {}).distance_km || 0), 0);
-  const totalS  = activities.reduce((s, a) => s + ((a.summary || {}).duration_s  || 0), 0);
+  const totalKm = activities.reduce((s, a) => s + ((a.summary || {}).total_dist_km     || 0), 0);
+  const totalS  = activities.reduce((s, a) => s + ((a.summary || {}).total_duration_s  || 0), 0);
   sumBarEl.style.display = '';
   sumBarEl.innerHTML =
     `<span class="sum-val">${activities.length}</span> 次骑行` +
@@ -268,8 +268,8 @@ function _buildActivityCard(act) {
   const day = dt ? dt.getDate() : '—';
   const mon = dt ? dt.toLocaleDateString('zh-CN', { month: 'short' }) : '';
 
-  const distKm = summary.distance_km          != null ? summary.distance_km.toFixed(1) + ' km' : '—';
-  const durStr = summary.duration_s            != null ? _fmtDur(summary.duration_s)            : '—';
+  const distKm = summary.total_dist_km         != null ? summary.total_dist_km.toFixed(1) + ' km' : '—';
+  const durStr = summary.total_duration_s      != null ? _fmtDur(summary.total_duration_s)        : '—';
   const speed  = summary.avg_speed_kmh         != null ? summary.avg_speed_kmh.toFixed(1) + ' km/h' : '—';
   const elev   = summary.total_elevation_gain_m != null ? Math.round(summary.total_elevation_gain_m) + ' m' : '—';
   const power  = summary.avg_power             != null ? Math.round(summary.avg_power) + ' W'   : '—';
