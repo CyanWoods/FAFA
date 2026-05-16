@@ -1059,11 +1059,10 @@ body {
 }
 
 .act-card-stats {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
   flex: 1;
-  gap: 24px;
   align-items: center;
-  flex-wrap: nowrap;
 }
 
 .act-stat {
