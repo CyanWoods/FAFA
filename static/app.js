@@ -268,8 +268,35 @@ function _buildActivityCard(act) {
   return card;
 }
 
-function _activityCardClick(act, cardEl) {
-  // Stub — full implementation in Task 5
+async function _activityCardClick(act, cardEl) {
+  // If already loaded in tracks map, open detail directly
+  for (const [id, t] of tracks) {
+    if (t.filename === act.filename) {
+      openDetailView(id);
+      return;
+    }
+  }
+
+  // Load via /api/load
+  cardEl.classList.add('loading');
+  try {
+    const res = await fetch('/api/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: act.filename }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || res.statusText);
+    }
+    const data = await res.json();
+    const id   = addTrack(data);
+    openDetailView(id);
+  } catch (e) {
+    toast('加载失败：' + e.message);
+  } finally {
+    cardEl.classList.remove('loading');
+  }
 }
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
@@ -325,7 +352,7 @@ function addTrack(data) {
   const decrypted = decryptCoords(raw);
   const encrypted = encryptCoords(raw);
   const polyline  = L.polyline(raw, { color, weight: 3, opacity: 0.82 }).addTo(map);
-  const track = { id, name: data.filename, raw, decrypted, encrypted, polyline, color, mode: 'raw',
+  const track = { id, name: data.filename, filename: data.filename, raw, decrypted, encrypted, polyline, color, mode: 'raw',
                   source: data.source || 'upload',
                   summary: data.summary || null, kmStats: data.km_stats || [],
                   distStats: data.dist_stats || [], timeStats: data.time_stats || [],
@@ -620,6 +647,7 @@ async function uploadFile(file) {
   const data = await res.json();
   if (!res.ok) { toast(`${file.name}：${data.error}`); return; }
   addTrack(data);
+  _actActivities = null; // invalidate cache so list refreshes
 }
 
 /* ── Drag-and-drop ───────────────────────────────────────────────────────── */
@@ -1065,6 +1093,10 @@ function closeDetailView() {
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; }
   detailRouteLayers = [];
   detailTrackId = null;
+  // Return to activities view if that's where we came from
+  if (_sidebarView === 'activities') {
+    document.getElementById('activities-view').classList.add('active');
+  }
 }
 
 function _renderDetailSummary(summary) {
@@ -1392,6 +1424,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // 初始加载文件库计数 & AI 配置
   refreshLibraryCount();
   _initAiConfig();
+
+  document.getElementById('act-upload-input')?.addEventListener('change', async e => {
+    for (const file of e.target.files) await uploadFile(file);
+    e.target.value = '';
+    _actActivities = null;
+    if (_sidebarView === 'activities') openActivitiesView();
+  });
 });
 
 /* ── 文件库 ──────────────────────────────────────────────────────────────── */
