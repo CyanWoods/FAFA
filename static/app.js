@@ -186,8 +186,90 @@ function switchSidebarView(name) {
   // 'map': map is the background — show topbar/track-panel/zoom-slider (already set above)
 }
 
-function openActivitiesView() {
-  // Stub — full implementation in Task 4
+let _actActivities = null; // cached from /api/activities
+
+async function openActivitiesView() {
+  const listEl    = document.getElementById('act-list');
+  const emptyEl   = document.getElementById('act-empty-hint');
+  const loadingEl = document.getElementById('act-loading-hint');
+
+  if (_actActivities) {
+    _renderActivityList(_actActivities);
+    return;
+  }
+
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'none';
+  loadingEl.style.display = '';
+
+  try {
+    const res  = await fetch('/api/activities');
+    const data = await res.json();
+    _actActivities = (data.activities || []).sort((a, b) =>
+      (b.start_time || '').localeCompare(a.start_time || ''));
+    loadingEl.style.display = 'none';
+    _renderActivityList(_actActivities);
+  } catch (e) {
+    loadingEl.style.display = 'none';
+    emptyEl.style.display = '';
+    emptyEl.textContent = '加载失败，请刷新重试';
+  }
+}
+
+function _renderActivityList(activities) {
+  const listEl  = document.getElementById('act-list');
+  const emptyEl = document.getElementById('act-empty-hint');
+
+  listEl.innerHTML = '';
+
+  if (!activities.length) {
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  activities.forEach(act => {
+    const card = _buildActivityCard(act);
+    listEl.appendChild(card);
+  });
+}
+
+function _buildActivityCard(act) {
+  // act shape from /api/activities:
+  // { filename, date, start_time, summary: { distance_km, duration_s, avg_power, avg_hr, ... } }
+  const summary = act.summary || {};
+
+  const dt  = act.start_time ? new Date(act.start_time.replace(' ', 'T')) : null;
+  const day = dt ? dt.getDate() : '—';
+  const mon = dt ? dt.toLocaleDateString('zh-CN', { month: 'short' }) : '';
+
+  const distKm = summary.distance_km != null ? summary.distance_km.toFixed(1) : '—';
+  const durStr = summary.duration_s   != null ? _fmtDur(summary.duration_s) : '—';
+  const power  = summary.avg_power    != null ? Math.round(summary.avg_power) + ' W' : '—';
+  const hr     = summary.avg_hr       != null ? Math.round(summary.avg_hr)   + ' bpm' : '—';
+
+  const card = document.createElement('div');
+  card.className = 'act-card';
+  card.innerHTML = `
+    <div class="act-card-date">
+      <div class="act-card-date-day">${day}</div>
+      <div class="act-card-date-month">${mon}</div>
+    </div>
+    <div class="act-card-divider"></div>
+    <div class="act-card-stats">
+      <div class="act-stat"><span class="act-stat-val">${distKm} km</span><span class="act-stat-lbl">距离</span></div>
+      <div class="act-stat"><span class="act-stat-val">${durStr}</span><span class="act-stat-lbl">时长</span></div>
+      <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">平均功率</span></div>
+      <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">平均心率</span></div>
+    </div>
+    <div class="act-card-name" title="${act.filename}">${act.filename}</div>
+  `;
+  card.addEventListener('click', () => _activityCardClick(act, card));
+  return card;
+}
+
+function _activityCardClick(act, cardEl) {
+  // Stub — full implementation in Task 5
 }
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
