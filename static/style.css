@@ -992,6 +992,26 @@ body {
   padding: 60px 0;
 }
 
+#act-summary-bar {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  color: #555;
+  padding: 0 2px 18px;
+  align-items: center;
+}
+#act-summary-bar .sum-val { color: #999; font-weight: 500; }
+#act-summary-bar .sum-dot { color: #333; }
+
+.act-month-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  letter-spacing: 0.06em;
+  padding: 20px 2px 10px;
+}
+.act-month-header:first-child { padding-top: 0; }
+
 /* Activity cards */
 .act-card {
   display: flex;
@@ -1001,25 +1021,26 @@ body {
   margin-bottom: 8px;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.07);
+  border-left: 3px solid rgba(99,153,255,0.35);
   border-radius: 14px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 
 .act-card:hover {
-  background: rgba(255,255,255,0.08);
-  border-color: rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(99,153,255,0.6);
 }
 
 .act-card-date {
   flex-shrink: 0;
   text-align: center;
-  min-width: 48px;
+  min-width: 44px;
 }
 
 .act-card-date-day {
-  font-size: 22px;
-  font-weight: 600;
+  font-size: 26px;
+  font-weight: 700;
   color: #e8e8e8;
   line-height: 1;
 }
@@ -1032,17 +1053,16 @@ body {
 
 .act-card-divider {
   width: 1px;
-  height: 36px;
-  background: rgba(255,255,255,0.08);
+  align-self: stretch;
+  background: rgba(255,255,255,0.07);
   flex-shrink: 0;
 }
 
 .act-card-stats {
-  display: flex;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 24px;
   flex: 1;
-  flex-wrap: wrap;
-  align-items: center;
 }
 
 .act-stat {
@@ -1057,21 +1077,16 @@ body {
   color: #ddd;
 }
 
-.act-stat-lbl {
-  font-size: 11px;
-  color: #555;
+.act-stat-primary .act-stat-val {
+  font-size: 16px;
+  font-weight: 600;
+  color: #eee;
 }
 
-.act-card-name {
-  font-size: 12px;
+.act-stat-lbl {
+  font-size: 10px;
   color: #555;
-  flex: 1;
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  max-width: 200px;
+  letter-spacing: 0.03em;
 }
 
 .act-card.loading { opacity: 0.5; pointer-events: none; }

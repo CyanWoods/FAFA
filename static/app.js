@@ -154,6 +154,10 @@ let _calActivities = null; // cached from /api/activities
 let _sidebarView = 'activities'; // 'activities' | 'map' | 'analytics' | 'files'
 
 function switchSidebarView(name) {
+  // Dismiss full-screen overlays first (z-index 950+) so they don't block new view
+  if (aiTrackId != null) closeAiView();
+  if (detailTrackId != null) closeDetailView();
+
   // Hide all main overlay views first (closeAnalyticsView reads _sidebarView,
   // so update _sidebarView AFTER the close calls to avoid guard mis-firing)
   document.getElementById('activities-view').classList.remove('active');
@@ -217,39 +221,63 @@ async function openActivitiesView() {
 }
 
 function _renderActivityList(activities) {
-  const listEl  = document.getElementById('act-list');
-  const emptyEl = document.getElementById('act-empty-hint');
+  const listEl   = document.getElementById('act-list');
+  const emptyEl  = document.getElementById('act-empty-hint');
+  const sumBarEl = document.getElementById('act-summary-bar');
 
   listEl.innerHTML = '';
 
   if (!activities.length) {
     emptyEl.style.display = '';
+    sumBarEl.style.display = 'none';
     return;
   }
   emptyEl.style.display = 'none';
 
-  activities.forEach(act => {
-    const card = _buildActivityCard(act);
-    listEl.appendChild(card);
-  });
+  // Summary bar totals
+  const totalKm = activities.reduce((s, a) => s + ((a.summary || {}).distance_km || 0), 0);
+  const totalS  = activities.reduce((s, a) => s + ((a.summary || {}).duration_s  || 0), 0);
+  sumBarEl.style.display = '';
+  sumBarEl.innerHTML =
+    `<span class="sum-val">${activities.length}</span> 次骑行` +
+    `<span class="sum-dot"> · </span>` +
+    `<span class="sum-val">${totalKm.toFixed(0)}</span> km` +
+    `<span class="sum-dot"> · </span>` +
+    `<span class="sum-val">${_fmtDur(totalS)}</span>`;
+
+  // Render cards grouped by year-month
+  let lastMonthKey = null;
+  for (const act of activities) {
+    const dt = act.start_time ? new Date(act.start_time.replace(' ', 'T')) : null;
+    const monthKey = dt ? `${dt.getFullYear()}年${dt.getMonth() + 1}月` : null;
+    if (monthKey && monthKey !== lastMonthKey) {
+      const header = document.createElement('div');
+      header.className = 'act-month-header';
+      header.textContent = monthKey;
+      listEl.appendChild(header);
+      lastMonthKey = monthKey;
+    }
+    listEl.appendChild(_buildActivityCard(act));
+  }
 }
 
 function _buildActivityCard(act) {
-  // act shape from /api/activities:
-  // { filename, date, start_time, summary: { distance_km, duration_s, avg_power, avg_hr, ... } }
   const summary = act.summary || {};
 
   const dt  = act.start_time ? new Date(act.start_time.replace(' ', 'T')) : null;
   const day = dt ? dt.getDate() : '—';
   const mon = dt ? dt.toLocaleDateString('zh-CN', { month: 'short' }) : '';
 
-  const distKm = summary.distance_km != null ? summary.distance_km.toFixed(1) : '—';
-  const durStr = summary.duration_s   != null ? _fmtDur(summary.duration_s) : '—';
-  const power  = summary.avg_power    != null ? Math.round(summary.avg_power) + ' W' : '—';
-  const hr     = summary.avg_hr       != null ? Math.round(summary.avg_hr)   + ' bpm' : '—';
+  const distKm = summary.distance_km          != null ? summary.distance_km.toFixed(1) + ' km' : '—';
+  const durStr = summary.duration_s            != null ? _fmtDur(summary.duration_s)            : '—';
+  const speed  = summary.avg_speed_kmh         != null ? summary.avg_speed_kmh.toFixed(1) + ' km/h' : '—';
+  const elev   = summary.total_elevation_gain_m != null ? Math.round(summary.total_elevation_gain_m) + ' m' : '—';
+  const power  = summary.avg_power             != null ? Math.round(summary.avg_power) + ' W'   : '—';
+  const hr     = summary.avg_hr                != null ? Math.round(summary.avg_hr)   + ' bpm'  : '—';
 
   const card = document.createElement('div');
   card.className = 'act-card';
+  card.title = act.filename;
   card.innerHTML = `
     <div class="act-card-date">
       <div class="act-card-date-day">${day}</div>
@@ -257,12 +285,13 @@ function _buildActivityCard(act) {
     </div>
     <div class="act-card-divider"></div>
     <div class="act-card-stats">
-      <div class="act-stat"><span class="act-stat-val">${distKm} km</span><span class="act-stat-lbl">距离</span></div>
-      <div class="act-stat"><span class="act-stat-val">${durStr}</span><span class="act-stat-lbl">时长</span></div>
-      <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">平均功率</span></div>
-      <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">平均心率</span></div>
+      <div class="act-stat act-stat-primary"><span class="act-stat-val">${distKm}</span><span class="act-stat-lbl">距离</span></div>
+      <div class="act-stat act-stat-primary"><span class="act-stat-val">${durStr}</span><span class="act-stat-lbl">时长</span></div>
+      <div class="act-stat"><span class="act-stat-val">${speed}</span><span class="act-stat-lbl">均速</span></div>
+      <div class="act-stat"><span class="act-stat-val">${elev}</span><span class="act-stat-lbl">爬升</span></div>
+      <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">均功率</span></div>
+      <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">均心率</span></div>
     </div>
-    <div class="act-card-name" title="${act.filename}">${act.filename}</div>
   `;
   card.addEventListener('click', () => _activityCardClick(act, card));
   return card;
