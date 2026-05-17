@@ -414,6 +414,26 @@ def list_files():
     return jsonify(files=files)
 
 
+@app.route("/api/files/delete", methods=["POST"])
+def delete_file():
+    """删除 input/ 中单个 .fit 文件，同步清理内存和磁盘缓存。"""
+    body     = request.get_json(silent=True) or {}
+    filename = body.get("filename", "")
+    if not filename or not filename.endswith(".fit"):
+        return jsonify(error="invalid filename"), 400
+    path = (INPUT_DIR / filename).resolve()
+    if path.parent != INPUT_DIR.resolve():
+        return jsonify(error="invalid path"), 403
+    try:
+        path.unlink(missing_ok=True)
+        with _cache_lock:
+            _parse_cache.pop(str(path), None)
+        (_DISK_CACHE_DIR / (filename + ".json")).unlink(missing_ok=True)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    return jsonify(deleted=1)
+
+
 @app.route("/api/files/delete_all", methods=["POST"])
 def delete_all_files():
     """删除 input/ 目录下所有 .fit 文件。"""

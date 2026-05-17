@@ -158,6 +158,9 @@ function switchSidebarView(name) {
   if (aiTrackId != null) closeAiView();
   if (detailTrackId != null) closeDetailView();
 
+  // Exit select mode when leaving activities view
+  if (_actSelectMode) _exitSelectMode();
+
   // Hide all main overlay views first (closeAnalyticsView reads _sidebarView,
   // so update _sidebarView AFTER the close calls to avoid guard mis-firing)
   document.getElementById('activities-view').classList.remove('active');
@@ -190,7 +193,141 @@ function switchSidebarView(name) {
   // 'map': map is the background — show topbar/track-panel/zoom-slider (already set above)
 }
 
-let _actActivities = null; // cached from /api/activities
+let _actActivities  = null; // cached from /api/activities
+let _actFilter      = { year: '', month: '', minKm: null, maxKm: null };
+let _actSelectMode  = false;
+let _actSelected    = new Set(); // filenames
+
+function _actFilteredList() {
+  if (!_actActivities) return [];
+  return _actActivities.filter(a => {
+    if (_actFilter.year  && (!a.start_time || !a.start_time.startsWith(_actFilter.year))) return false;
+    if (_actFilter.month) {
+      const m = String(new Date(a.start_time.replace(' ', 'T')).getMonth() + 1);
+      if (m !== _actFilter.month) return false;
+    }
+    const km = (a.summary || {}).total_dist_km || 0;
+    if (_actFilter.minKm != null && km < _actFilter.minKm) return false;
+    if (_actFilter.maxKm != null && km >= _actFilter.maxKm) return false;
+    return true;
+  });
+}
+
+function _actFilterChanged() {
+  _actFilter.year  = document.getElementById('act-filter-year').value;
+  _actFilter.month = document.getElementById('act-filter-month').value;
+  _actSelected.clear();
+  _updateSelectBar();
+  _renderActivityList(_actFilteredList());
+}
+
+function _actDistPreset(btn) {
+  document.querySelectorAll('.dist-preset').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const min = btn.dataset.min;
+  const max = btn.dataset.max;
+  _actFilter.minKm = min !== '' ? Number(min) : null;
+  _actFilter.maxKm = max !== '' ? Number(max) : null;
+  _actSelected.clear();
+  _updateSelectBar();
+  _renderActivityList(_actFilteredList());
+}
+
+function _populateYearFilter() {
+  const yearEl = document.getElementById('act-filter-year');
+  const years = [...new Set(
+    (_actActivities || [])
+      .filter(a => a.start_time)
+      .map(a => a.start_time.slice(0, 4))
+  )].sort().reverse();
+  yearEl.innerHTML = '<option value="">全部年份</option>';
+  years.forEach(y => {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y + '年';
+    if (y === _actFilter.year) opt.selected = true;
+    yearEl.appendChild(opt);
+  });
+}
+
+function _enterSelectMode() {
+  _actSelectMode = true;
+  _actSelected.clear();
+  document.getElementById('activities-view').classList.add('select-mode');
+  document.getElementById('act-select-bar').style.display = '';
+  _updateSelectBar();
+}
+
+function _exitSelectMode() {
+  _actSelectMode = false;
+  _actSelected.clear();
+  document.getElementById('activities-view').classList.remove('select-mode');
+  document.getElementById('act-select-bar').style.display = 'none';
+  document.querySelectorAll('.act-card.selected').forEach(c => c.classList.remove('selected'));
+}
+
+function _updateSelectBar() {
+  document.getElementById('act-select-count').textContent = `已选 ${_actSelected.size} 项`;
+}
+
+function _actSelectAll() {
+  document.querySelectorAll('.act-card').forEach(card => {
+    const fn = card.dataset.filename;
+    if (fn) { _actSelected.add(fn); card.classList.add('selected'); }
+  });
+  _updateSelectBar();
+}
+
+async function _actBulkLoad() {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  const filenames = [..._actSelected];
+  _exitSelectMode();
+  switchSidebarView('map');
+  for (const filename of filenames) {
+    let already = false;
+    for (const [, t] of tracks) { if (t.filename === filename) { already = true; break; } }
+    if (already) continue;
+    try {
+      const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      addTrack(data);
+    } catch {}
+  }
+}
+
+async function _actBulkDelete() {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  const filenames = [..._actSelected];
+  if (!confirm(`确定删除选中的 ${filenames.length} 个文件？此操作不可撤销。`)) return;
+  _exitSelectMode();
+  for (const filename of filenames) {
+    try {
+      await fetch('/api/files/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+      // Remove from in-memory track list if loaded
+      for (const [id, t] of tracks) { if (t.filename === filename) { removeTrack(id); break; } }
+    } catch {}
+  }
+  _actActivities = null;
+  openActivitiesView();
+}
+
+async function _actLoadAllVisible() {
+  const list = _actFilteredList();
+  if (!list.length) { toast('当前列表没有活动'); return; }
+  switchSidebarView('map');
+  for (const act of list) {
+    let already = false;
+    for (const [, t] of tracks) { if (t.filename === act.filename) { already = true; break; } }
+    if (already) continue;
+    try {
+      const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      addTrack(data);
+    } catch {}
+  }
+}
 
 async function openActivitiesView() {
   const listEl    = document.getElementById('act-list');
@@ -198,7 +335,8 @@ async function openActivitiesView() {
   const loadingEl = document.getElementById('act-loading-hint');
 
   if (_actActivities) {
-    _renderActivityList(_actActivities);
+    _populateYearFilter();
+    _renderActivityList(_actFilteredList());
     return;
   }
 
@@ -212,7 +350,8 @@ async function openActivitiesView() {
     _actActivities = (data.activities || []).sort((a, b) =>
       (b.start_time || '').localeCompare(a.start_time || ''));
     loadingEl.style.display = 'none';
-    _renderActivityList(_actActivities);
+    _populateYearFilter();
+    _renderActivityList(_actFilteredList());
   } catch (e) {
     loadingEl.style.display = 'none';
     emptyEl.style.display = '';
@@ -278,7 +417,9 @@ function _buildActivityCard(act) {
   const card = document.createElement('div');
   card.className = 'act-card';
   card.title = act.filename;
+  card.dataset.filename = act.filename;
   card.innerHTML = `
+    <div class="act-card-check"></div>
     <div class="act-card-date">
       <div class="act-card-date-day">${day}</div>
       <div class="act-card-date-month">${mon}</div>
@@ -293,7 +434,20 @@ function _buildActivityCard(act) {
       <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">均心率</span></div>
     </div>
   `;
-  card.addEventListener('click', () => _activityCardClick(act, card));
+  card.addEventListener('click', () => {
+    if (_actSelectMode) {
+      if (_actSelected.has(act.filename)) {
+        _actSelected.delete(act.filename);
+        card.classList.remove('selected');
+      } else {
+        _actSelected.add(act.filename);
+        card.classList.add('selected');
+      }
+      _updateSelectBar();
+    } else {
+      _activityCardClick(act, card);
+    }
+  });
   return card;
 }
 

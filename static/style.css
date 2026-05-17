@@ -948,8 +948,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  padding: 20px 24px 14px;
   flex-shrink: 0;
 }
 
@@ -976,6 +975,76 @@ body {
 }
 
 #act-list-actions button:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+/* Select mode bar */
+#act-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  background: rgba(99,153,255,0.07);
+  border-top: 1px solid rgba(99,153,255,0.15);
+  border-bottom: 1px solid rgba(99,153,255,0.15);
+  flex-shrink: 0;
+}
+#act-select-count {
+  font-size: 12px;
+  color: #888;
+  flex: 1;
+}
+#act-select-bar button {
+  padding: 4px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+#act-select-bar button:hover { background: rgba(255,255,255,0.08); color: #fff; }
+#act-select-bar button.danger-btn { border-color: rgba(231,76,60,0.4); color: #e07070; }
+#act-select-bar button.danger-btn:hover { background: rgba(231,76,60,0.15); }
+
+/* Filter bar */
+#act-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+#act-filter-year,
+#act-filter-month {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: #aaa;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+}
+#act-filter-year:focus,
+#act-filter-month:focus { border-color: rgba(255,255,255,0.2); }
+#act-filter-dist { display: flex; gap: 6px; }
+.dist-preset {
+  padding: 4px 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  background: transparent;
+  color: #777;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.dist-preset:hover { color: #bbb; border-color: rgba(255,255,255,0.2); }
+.dist-preset.active {
+  background: rgba(99,153,255,0.18);
+  border-color: rgba(99,153,255,0.45);
+  color: #6399ff;
+}
 
 #act-list-body {
   flex: 1;
@@ -1028,6 +1097,35 @@ body {
 .act-card:hover {
   background: rgba(255,255,255,0.07);
   border-color: rgba(99,153,255,0.6);
+}
+
+/* Select mode */
+.act-card-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.2);
+  flex-shrink: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+#activities-view.select-mode .act-card-check { display: flex; }
+#activities-view.select-mode .act-card.selected { background: rgba(99,153,255,0.1); border-color: rgba(99,153,255,0.5); }
+#activities-view.select-mode .act-card.selected .act-card-check {
+  background: #6399ff;
+  border-color: #6399ff;
+}
+#activities-view.select-mode .act-card.selected .act-card-check::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+  margin-top: -2px;
 }
 
 .act-card-date {
