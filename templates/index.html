@@ -117,24 +117,30 @@
 
     <!-- 筛选栏 -->
     <div id="act-filter-bar">
-      <select id="act-filter-year" onchange="_actFilterChanged()">
-        <option value="">全部年份</option>
-      </select>
-      <select id="act-filter-month" onchange="_actFilterChanged()">
-        <option value="">全部月份</option>
-        <option value="1">1月</option><option value="2">2月</option>
-        <option value="3">3月</option><option value="4">4月</option>
-        <option value="5">5月</option><option value="6">6月</option>
-        <option value="7">7月</option><option value="8">8月</option>
-        <option value="9">9月</option><option value="10">10月</option>
-        <option value="11">11月</option><option value="12">12月</option>
-      </select>
-      <div id="act-filter-dist">
-        <button class="dist-preset active" data-min="" data-max="" onclick="_actDistPreset(this)">全部</button>
-        <button class="dist-preset" data-min="0" data-max="20" onclick="_actDistPreset(this)">&lt;20km</button>
-        <button class="dist-preset" data-min="20" data-max="50" onclick="_actDistPreset(this)">20–50</button>
-        <button class="dist-preset" data-min="50" data-max="100" onclick="_actDistPreset(this)">50–100</button>
-        <button class="dist-preset" data-min="100" data-max="" onclick="_actDistPreset(this)">100km+</button>
+      <div class="act-filter-row">
+        <span class="act-filter-label">时间</span>
+        <select id="act-filter-year" onchange="_actFilterChanged()">
+          <option value="">全部年份</option>
+        </select>
+        <select id="act-filter-month" onchange="_actFilterChanged()">
+          <option value="">全部月份</option>
+          <option value="1">1月</option><option value="2">2月</option>
+          <option value="3">3月</option><option value="4">4月</option>
+          <option value="5">5月</option><option value="6">6月</option>
+          <option value="7">7月</option><option value="8">8月</option>
+          <option value="9">9月</option><option value="10">10月</option>
+          <option value="11">11月</option><option value="12">12月</option>
+        </select>
+      </div>
+      <div class="act-filter-row">
+        <span class="act-filter-label">距离</span>
+        <div id="act-filter-dist">
+          <button class="dist-preset active" data-min="" data-max="" onclick="_actDistPreset(this)">全部</button>
+          <button class="dist-preset" data-min="0" data-max="20" onclick="_actDistPreset(this)">&lt;20km</button>
+          <button class="dist-preset" data-min="20" data-max="50" onclick="_actDistPreset(this)">20–50</button>
+          <button class="dist-preset" data-min="50" data-max="100" onclick="_actDistPreset(this)">50–100</button>
+          <button class="dist-preset" data-min="100" data-max="" onclick="_actDistPreset(this)">100km+</button>
+        </div>
       </div>
     </div>
 
