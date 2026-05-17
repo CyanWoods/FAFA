@@ -145,7 +145,7 @@ let _analyticsOpen = false;
 let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
-let _pmcPeriod = 90;
+let _pmcPeriod = 0; // 0 = 全部数据
 
 let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
@@ -2378,8 +2378,9 @@ function _renderPmcChart(pmc, periodDays) {
   const atl   = pmc.atl.slice(start);
   const tsb   = pmc.tsb.slice(start);
 
-  // X 轴标签：每隔 N 天显示一次
-  const step = Math.max(1, Math.ceil(days.length / 20));
+  // X 轴标签：根据跨度自适应密度（目标约 15-25 个刻度）
+  const targetTicks = days.length > 365 ? 20 : days.length > 90 ? 15 : 12;
+  const step = Math.max(1, Math.ceil(days.length / targetTicks));
   const labels = days.map((d, i) => i % step === 0 ? d.slice(5) : '');
 
   if (_pmcChart) { _pmcChart.destroy(); _pmcChart = null; }
