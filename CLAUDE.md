@@ -14,23 +14,37 @@ FIT (Flexible and Interoperable Data Transfer) is a binary format used by Garmin
 
 Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
-**Two interfaces, single page:**
+**Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for four top-level views. The rest of the viewport is view-specific content.
 
-- **Interface 1 (map view)**: Multiple FIT files loaded via drag-and-drop or from the file library drawer. Leaflet renders polylines. Bottom panel shows per-track stats summary chips and JSON/CSV export buttons. Hovering a panel row flashes its polyline. Top-right zoom slider. Top-center topbar with tile selector and PNG export modal.
+**Five views:**
 
-- **Interface 2 (detail view)**: Full-screen overlay (`z-index: 950`) shown when clicking a track name. Displays a Chart.js line chart (metric selectable, x-axis: km / per-100 m distance / cumulative time) and a per-km data table. Closed via back button or Esc.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map and bulk delete. Summary bar shows totals for the filtered set. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+
+- **Map view** (`#map`): Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active.
+
+- **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger OneLap sync. Upload via file input (导入 FIT button).
+
+- **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. Chart.js line chart (metric selectable, x-axis: km / per-100 m / cumulative time) + per-km data table. Opened from either activities or map view; closing returns to the originating view.
+
+- **Analytics view** (`#analytics-view`, z-index 960): Full-screen overlay with two tabs — **PMC** (Performance Management Chart: CTL/ATL/TSB, power curve, zone distribution, AI commentary) and **Training Calendar**. Opened via the sidebar analytics icon.
 
 **Upload flow** (`/api/upload`):
 1. Saves `.fit` to a temp file, parses via `parse_fit()`, immediately deletes temp file.
 2. Extracts GPS coords (semicircles → degrees).
-3. Computes `Summary`, `List[KmStats]`, `List[KmStats]` (per-100 m), `List[KmStats]` (per-1 min) via `fafa/stats.py`.
+3. Computes `Summary`, `List[KmStats]` (per-km), `List[KmStats]` (per-100 m), `List[KmStats]` (per-1 min) via `fafa/stats.py`.
 4. Returns `{ coords, filename, is_gcj02, summary, km_stats, dist_stats, time_stats, time_stats_start }`.
 
 **Client-side coordinate handling**: On upload, all three coordinate variants are pre-computed in JS (`raw`, `decrypted`, `encrypted`) and stored on the track object. Switching modes re-renders the polyline without any server round-trip.
 
-**File library** (`/api/files`, `/api/load`): Side drawer listing all `.fit` files in `input/`. Supports loading individual files or all at once. Library tracks can trigger coordinate write-back via `/api/fix_coords`.
+**Activities API** (`/api/activities`): Returns lightweight summary of every `.fit` in `input/` — filename, date, start_time, summary fields, peak_power, zone_time_s. Uses the same parse cache as `/api/load`. Used by both the activities view and the PMC computation.
+
+**Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses `ThreadPoolExecutor` (up to 8 workers) + the cache to parse the full library quickly on first load.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files with software version > 18 (new Magene firmware that stores GCJ-02).
+
+**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `base_url`, `api_key`, `model`. Two AI endpoints:
+- `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
+- `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC commentary.
 
 **Global JSON export** (`/api/export/all`): Downloads a JSON of all parsed activities in `input/`. Accepts `no_km_stats=1` and `min_km=N` query params. Used by AI analysis workflows.
 
@@ -60,6 +74,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `garmin_fit_sdk.Encoder.write_mesg()` requires a `mesg_num` key in every message dict (needed by `fafa/tools/fix_coords.py`)
 - New Magene firmware (software version > 18) stores GCJ-02 in raw FIT files; `_run_sync` in `app.py` auto-decrypts these after download.
 - The `/api/fix_coords` endpoint and the `_run_sync` auto-decrypt both import from `fafa.tools.fix_coords`, not from any top-level script.
+- Files view year/month filter (`_MAGENE_DATE_RE`) only matches Magene filename format — Garmin files get no filter chip and show raw filename as label.
 
 ## Frontend structure (`static/app.js`)
 
@@ -69,7 +84,9 @@ Key sections in order:
 |---|---|
 | Constants | `TILES`, `PALETTE`, `METRICS`, `TABLE_COLS`, `EXPORT_TILE_URLS`, `EXPORT_RESOLUTIONS` |
 | GCJ-02 | `wgs84ToGcj02`, `gcj02ToWgs84`, `encryptCoords`, `decryptCoords` |
-| State | `map`, `tracks` (Map), `exportState`, panel state, detail view state |
+| State | `map`, `tracks` (Map), `exportState`, sidebar/panel/detail/analytics state |
+| Sidebar nav | `switchSidebarView` — switches between `activities`, `map`, `files`, `analytics` |
+| Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers, `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, bulk actions |
 | Map init | `initMap`, `setTiles` |
 | Track coords | `getCoords`, `renderTrack` |
 | Track management | `addTrack`, `removeTrack`, `clearAllTracks`, `setTrackMode` |
@@ -83,8 +100,11 @@ Key sections in order:
 | Zoom slider | `initZoomSlider` |
 | PNG export | `openExportModal`, `doExport`, canvas tile/track drawing helpers |
 | Detail view | `openDetailView`, `closeDetailView`, chart/table rendering, `exportDetailData` |
-| File library | `openLibrary`, `closeLibrary`, `refreshLibrary`, `loadFromLibrary`, `loadAllFromLibrary` |
+| File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, `loadAllFromLibrary`, `deleteAllFromLibrary` |
 | Global export | export-all modal, calls `/api/export/all` |
+| Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcCurve`, `pmcRecalc` |
+| Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
+| AI | `_initAiConfig`, `_llmStream`, AI evaluate panel in detail view, AI PMC commentary |
 | Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |
 | Boot | `DOMContentLoaded` wires everything up |
 
@@ -93,8 +113,13 @@ Key sections in order:
 | Value | Element |
 |---|---|
 | 1 | `#map` |
+| 500 | `#activities-view`, `#files-view` (sidebar content, below map controls) |
+| 800 | `#sidebar` |
 | 900 | `#topbar`, `#track-panel`, `#zoom-slider-wrap` |
-| 950 | `#detail-view` (covers main UI, below modals) |
+| 950 | `#detail-view` (covers main UI) |
+| 960 | `#analytics-view`, `#ai-view` |
+| 1000 | detail route legend |
+| 1500 | `#cal-act-modal` (calendar activity detail) |
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
-| 2100 | `#export-modal` |
+| 2100 | `#export-modal`, `#sync-modal` |
