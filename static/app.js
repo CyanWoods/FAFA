@@ -2260,7 +2260,7 @@ function _computePMC(activities, settings) {
   const kCTL = 1 - Math.exp(-1 / 42);
   const kATL = 1 - Math.exp(-1 / 7);
 
-  const firstDate = new Date(activities[0].date);
+  const firstDate = new Date(activities.reduce((min, a) => a.date < min ? a.date : min, activities[0].date));
   const today     = new Date();
   today.setHours(0, 0, 0, 0);
 
