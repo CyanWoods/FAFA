@@ -37,6 +37,7 @@ SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
 _parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
 _cache_lock  = threading.Lock()
 _CACHE_MAX   = 300
+_DISK_CACHE_DIR = INPUT_DIR / ".cache"
 
 
 def _cache_get(path_str: str, mtime: float) -> dict | None:
@@ -45,6 +46,30 @@ def _cache_get(path_str: str, mtime: float) -> dict | None:
         if entry and entry["mtime"] == mtime:
             return entry["data"]
     return None
+
+
+def _disk_cache_load(path_str: str, mtime: float) -> dict | None:
+    cache_file = _DISK_CACHE_DIR / (Path(path_str).name + ".json")
+    try:
+        with cache_file.open(encoding="utf-8") as f:
+            entry = json.load(f)
+        if entry.get("mtime") == mtime:
+            return entry["data"]
+    except Exception:
+        pass
+    return None
+
+
+def _disk_cache_save(path_str: str, mtime: float, data: dict) -> None:
+    try:
+        _DISK_CACHE_DIR.mkdir(exist_ok=True)
+        cache_file = _DISK_CACHE_DIR / (Path(path_str).name + ".json")
+        tmp_file   = cache_file.with_suffix(".tmp")
+        with tmp_file.open("w", encoding="utf-8") as f:
+            json.dump({"mtime": mtime, "data": data}, f)
+        tmp_file.replace(cache_file)
+    except Exception as e:
+        logging.warning("disk cache write failed (%s): %s", Path(path_str).name, e)
 
 
 def _cache_put(path_str: str, mtime: float, data: dict) -> None:
@@ -124,8 +149,14 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
     if p.exists():
         try:
             mtime = p.stat().st_mtime
+            # L1: memory cache
             cached = _cache_get(fit_path, mtime)
             if cached is not None:
+                return cached
+            # L2: disk cache (survives restarts)
+            cached = _disk_cache_load(fit_path, mtime)
+            if cached is not None:
+                _cache_put(fit_path, mtime, cached)
                 return cached
         except OSError:
             pass
@@ -195,7 +226,9 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
 
     if p.exists():
         try:
-            _cache_put(fit_path, p.stat().st_mtime, result)
+            mtime = p.stat().st_mtime
+            _cache_put(fit_path, mtime, result)
+            _disk_cache_save(fit_path, mtime, result)
         except OSError:
             pass
 
