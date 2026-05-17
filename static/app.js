@@ -216,8 +216,7 @@ function _actFilteredList() {
 function _actFilterChanged() {
   _actFilter.year  = document.getElementById('act-filter-year').value;
   _actFilter.month = document.getElementById('act-filter-month').value;
-  _actSelected.clear();
-  _updateSelectBar();
+  if (_actSelectMode) _exitSelectMode();
   _renderActivityList(_actFilteredList());
 }
 
@@ -228,8 +227,7 @@ function _actDistPreset(btn) {
   const max = btn.dataset.max;
   _actFilter.minKm = min !== '' ? Number(min) : null;
   _actFilter.maxKm = max !== '' ? Number(max) : null;
-  _actSelected.clear();
-  _updateSelectBar();
+  if (_actSelectMode) _exitSelectMode();
   _renderActivityList(_actFilteredList());
 }
 
@@ -1823,6 +1821,7 @@ async function deleteAllFromLibrary() {
     const data = await res.json();
     if (res.ok) {
       toast(`已删除 ${data.deleted} 个文件`);
+      _actActivities = null;
       refreshLibrary();
       refreshLibraryCount();
     } else {
