@@ -964,8 +964,7 @@ body {
   gap: 8px;
 }
 
-#act-list-actions button,
-#act-upload-label {
+#act-list-actions button {
   padding: 6px 14px;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 20px;
@@ -976,8 +975,7 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 
-#act-list-actions button:hover,
-#act-upload-label:hover { background: rgba(255,255,255,0.08); color: #fff; }
+#act-list-actions button:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
 #act-list-body {
   flex: 1;
@@ -1119,7 +1117,8 @@ body {
   gap: 8px;
 }
 
-#files-actions button {
+#files-actions button,
+#files-actions #act-upload-label {
   padding: 6px 14px;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 20px;
@@ -1130,7 +1129,8 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 
-#files-actions button:hover { background: rgba(255,255,255,0.08); color: #fff; }
+#files-actions button:hover,
+#files-actions #act-upload-label:hover { background: rgba(255,255,255,0.08); color: #fff; }
 #files-actions button.danger-btn { border-color: rgba(231,76,60,0.4); color: #e07070; }
 #files-actions button.danger-btn:hover { background: rgba(231,76,60,0.15); }
 

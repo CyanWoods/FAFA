@@ -101,16 +101,12 @@
       <span class="act-list-title">骑行记录</span>
       <div id="act-list-actions">
         <button id="act-map-btn" onclick="switchSidebarView('map')">查看地图</button>
-        <label id="act-upload-label">
-          导入 FIT
-          <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
-        </label>
       </div>
     </div>
     <div id="act-list-body">
       <div id="act-summary-bar" style="display:none"></div>
       <div id="act-list"></div>
-      <div id="act-empty-hint">将 .fit 文件拖入此处，或点击「导入 FIT」</div>
+      <div id="act-empty-hint">将 .fit 文件拖入此处，或在「文件管理」中导入</div>
       <div id="act-loading-hint" style="display:none">正在加载…</div>
     </div>
   </div>
@@ -120,6 +116,10 @@
     <div id="files-header">
       <span class="act-list-title">文件管理</span>
       <div id="files-actions">
+        <label id="act-upload-label">
+          导入 FIT
+          <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
+        </label>
         <button onclick="loadAllFromLibrary()">全部加载到地图</button>
         <button onclick="refreshLibrary()">刷新</button>
         <button onclick="openSyncModal()">顽鹿同步</button>
