@@ -793,31 +793,44 @@ def get_activities():
     if not INPUT_DIR.exists():
         return jsonify(activities=[])
 
-    result = []
-    for path in sorted(INPUT_DIR.glob("*.fit")):
+    paths = list(INPUT_DIR.glob("*.fit"))
+
+    def _load_one(path):
         path_str = str(path)
         try:
             mtime  = path.stat().st_mtime
             cached = _cache_get(path_str, mtime)
             if not cached:
-                cached = _parse_and_build(path_str, path.name)
-
+                cached = _disk_cache_load(path_str, mtime)
+                if cached:
+                    _cache_put(path_str, mtime, cached)
+                else:
+                    cached = _parse_and_build(path_str, path.name)
             ts_start = cached.get("time_stats_start")
             if not ts_start:
-                continue
+                return None
             summary = cached.get("summary") or {}
-            result.append({
+            return {
                 "filename":    path.name,
                 "date":        ts_start[:10],
                 "start_time":  ts_start,
                 "summary":     {k: v for k, v in summary.items() if v is not None},
                 "peak_power":  cached.get("peak_power") or {},
                 "zone_time_s": cached.get("zone_time_s"),
-            })
+            }
         except Exception as e:
             logging.warning("activities: %s: %s", path.name, e)
+            return None
 
-    result.sort(key=lambda a: a["date"])
+    workers = min(8, len(paths)) if paths else 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        items = pool.map(_load_one, paths)
+
+    result = sorted(
+        (x for x in items if x is not None),
+        key=lambda a: a["start_time"],
+        reverse=True,
+    )
     return jsonify(activities=result)
 
 
