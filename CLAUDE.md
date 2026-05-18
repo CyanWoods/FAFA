@@ -42,7 +42,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files with software version > 18 (new Magene firmware that stores GCJ-02).
 
-**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `base_url`, `api_key`, `model`. Two AI endpoints:
+**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`. Two AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
 - `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC commentary.
 
