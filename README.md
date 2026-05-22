@@ -22,7 +22,8 @@ FAFA/
 │       ├── fix_coords.py   # FIT 文件坐标系批量纠偏
 │       ├── rename_fit.py   # Magene FIT 文件批量重命名
 │       ├── export_all.py   # 批量导出 JSON（供 AI 使用）
-│       └── download_fit.py # 从顽鹿批量下载 FIT 文件（CLI）
+│       ├── download_fit.py # 从顽鹿批量下载 FIT 文件（CLI）
+│       └── ant_analysis.py # ANT+ 设备连接时长分析
 ├── templates/
 │   └── index.html      # Web 前端页面（双界面）
 └── static/
@@ -245,6 +246,24 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 .venv\Scripts\python -m fafa.tools.download_fit --all
 .venv\Scripts\python -m fafa.tools.download_fit --dry-run
 .venv\Scripts\python -m fafa.tools.download_fit --limit 10
+```
+
+---
+
+### `fafa.tools.ant_analysis` — ANT+ 设备连接时长分析
+
+分析 FIT 文件中各 ANT+ 设备（心率带、功率计、踏频/速度传感器、Di2 变速、BLE 车灯等）的连接时长及占骑行时间的百分比。连接窗口从 `record_mesgs` 逐帧推算；Di2、雷达等无帧级指标的设备仅显示「已注册」。
+
+```bash
+# macOS / Linux
+.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit
+.venv/bin/python -m fafa.tools.ant_analysis input/          # 批量分析整个目录
+.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --gap 10   # 合并 10s 内的短暂断连
+.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --json     # JSON 输出
+
+# Windows
+.venv\Scripts\python -m fafa.tools.ant_analysis input\xxx.fit
+.venv\Scripts\python -m fafa.tools.ant_analysis input\
 ```
 
 ---
