@@ -1,9 +1,17 @@
 {
-  "_comment": "复制此文件并重命名为 ai_config.json，填入你的 API 信息。api_key 留空或保留占位符时 AI 功能自动禁用。onelap_username/password 填写后同步时自动登录，无需弹出浏览器。",
+  "_comment": "复制此文件并重命名为 ai_config.json，填入你的 API 信息。api_key 留空或保留占位符时 AI 功能自动禁用。onelap_username/password 填写后同步时自动登录，无需弹出浏览器。strava_client_id/secret 填写后可将骑行数据同步到 Strava。",
   "api_base": "https://api.openai.com/v1",
   "api_key": "your-api-key-here",
   "model": "gpt-4o-mini",
   "max_tokens": 2500,
   "onelap_username": "",
-  "onelap_password": ""
+  "onelap_password": "",
+  "strava_client_id": "",
+  "strava_client_secret": "",
+  "strava_access_token": "",
+  "strava_refresh_token": "",
+  "strava_expires_at": 0,
+  "strava_redirect_port": 5173,
+  "strava_athlete_id": "",
+  "strava_athlete_name": ""
 }

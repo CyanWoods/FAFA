@@ -1931,6 +1931,123 @@ function _setSyncUI(msg, pct, total) {
   }
 }
 
+/* ── Strava 上传 ─────────────────────────────────────────────────────────── */
+let _stravaPollTimer = null;
+
+function openStravaModal() {
+  document.getElementById('strava-modal').style.display = 'flex';
+}
+
+function closeStravaModal() {
+  if (_stravaPollTimer) { clearInterval(_stravaPollTimer); _stravaPollTimer = null; }
+  document.getElementById('strava-modal').style.display = 'none';
+  document.getElementById('strava-auth-view').style.display = '';
+  document.getElementById('strava-upload-view').style.display = 'none';
+  document.getElementById('strava-close-btn').disabled = true;
+  document.getElementById('strava-done-files').innerHTML = '';
+  document.getElementById('strava-progress-bar').style.width = '';
+  document.getElementById('strava-progress-bar').classList.remove('indeterminate');
+}
+
+async function stravaStartAuth() {
+  try {
+    const res = await fetch('/api/strava/auth_url');
+    const d = await res.json();
+    if (d.error) { toast('Strava 授权失败: ' + d.error); return; }
+    window.open(d.url, '_blank');
+    toast('请在新标签页完成 Strava 授权，完成后刷新页面');
+  } catch (e) {
+    toast('无法获取授权链接: ' + e);
+  }
+}
+
+async function _stravaUploadSelected() {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  const filenames = [..._actSelected];
+
+  const statusRes = await fetch('/api/strava/status');
+  const status = await statusRes.json();
+
+  if (!status.configured) {
+    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    return;
+  }
+  if (!status.has_tokens) {
+    openStravaModal();
+    return;
+  }
+
+  _exitSelectMode();
+  openStravaModal();
+  document.getElementById('strava-auth-view').style.display = 'none';
+  document.getElementById('strava-upload-view').style.display = '';
+  _setStravaUI(`准备上传 ${filenames.length} 个文件...`, 0, filenames.length);
+
+  try {
+    const res = await fetch('/api/strava/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames }),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      toast('上传失败: ' + (d.error || res.status));
+      closeStravaModal();
+      return;
+    }
+    _stravaPollTimer = setInterval(_pollStravaUpload, 1500);
+  } catch (e) {
+    toast('上传请求失败: ' + e);
+    closeStravaModal();
+  }
+}
+
+async function _pollStravaUpload() {
+  try {
+    const res = await fetch('/api/strava/upload/status');
+    const data = await res.json();
+    const pct = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
+    const msg = data.state === 'uploading'
+      ? `正在上传: ${data.current || ''}  (${data.done}/${data.total})`
+      : data.state === 'done'
+        ? `完成: 成功 ${data.success || 0} 个，跳过 ${data.skipped || 0} 个，失败 ${data.failed || 0} 个`
+        : data.state === 'error'
+          ? `错误: ${data.error || ''}`
+          : '';
+    _setStravaUI(msg, pct, data.total);
+
+    if (data.state === 'done' || data.state === 'error') {
+      clearInterval(_stravaPollTimer);
+      _stravaPollTimer = null;
+      document.getElementById('strava-close-btn').disabled = false;
+
+      if (data.results && data.results.length) {
+        const el = document.getElementById('strava-done-files');
+        el.innerHTML = '';
+        data.results.forEach(r => {
+          const div = document.createElement('div');
+          div.className = 'sync-new-file';
+          const icon = r.status === 'ok' ? '✓' : r.status === 'skipped' ? '→' : '✗';
+          div.textContent = `${icon} ${r.filename}${r.msg ? '  ' + r.msg : ''}`;
+          el.appendChild(div);
+        });
+      }
+    }
+  } catch {}
+}
+
+function _setStravaUI(msg, pct, total) {
+  document.getElementById('strava-status-msg').textContent = msg;
+  const bar = document.getElementById('strava-progress-bar');
+  if (total === 0) {
+    bar.classList.add('indeterminate');
+    bar.style.width = '';
+  } else {
+    bar.classList.remove('indeterminate');
+    bar.style.width = pct + '%';
+  }
+}
+
 /* ── AI 骑行评估（界面三） ────────────────────────────────────────────────── */
 async function _initAiConfig() {
   try {

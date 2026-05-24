@@ -18,7 +18,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Five views:**
 
-- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map and bulk delete. Summary bar shows totals for the filtered set. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
 - **Map view** (`#map`): Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active.
 
@@ -42,7 +42,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files with software version > 18 (new Magene firmware that stores GCJ-02).
 
-**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`. Two AI endpoints:
+**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Two AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
 - `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC commentary.
 
@@ -56,6 +56,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
+- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `ai_config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`.
 
 ### CLI tools (`fafa/tools/` — run as Python modules)
 
@@ -107,6 +108,7 @@ Key sections in order:
 | Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
 | AI | `_initAiConfig`, `_llmStream`, AI evaluate panel in detail view, AI PMC commentary |
 | Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |
+| Strava upload | `_stravaUploadSelected`, `stravaStartAuth`, `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
 | Boot | `DOMContentLoaded` wires everything up |
 
 ## z-index layers
@@ -123,4 +125,4 @@ Key sections in order:
 | 1500 | `#cal-act-modal` (calendar activity detail) |
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
-| 2100 | `#export-modal`, `#sync-modal` |
+| 2100 | `#export-modal`, `#sync-modal`, `#strava-modal` |

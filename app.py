@@ -19,11 +19,14 @@ from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from html import escape as _html_escape
+
 from flask import Flask, render_template, request, jsonify, send_file
 
 from fafa.parser import parse_fit
 from fafa.gcj02 import needs_wgs84_conversion
 from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats, compute_summary
+import fafa.strava as _strava
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -946,6 +949,97 @@ def ai_pmc():
     data   = request.get_json(silent=True) or {}
     prompt = _build_pmc_prompt(data)
     return _llm_stream(cfg, prompt)
+
+
+# ── Strava ───────────────────────────────────────────────────────────────────
+
+_strava_upload: dict = {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}
+_strava_lock = threading.Lock()
+
+
+def _run_strava_upload(filenames: list[str], force: bool):
+    global _strava_upload
+    with _strava_lock:
+        _strava_upload = {"state": "uploading", "current": "", "done": 0,
+                          "total": len(filenames), "results": []}
+
+    def on_progress(filename, done, total):
+        with _strava_lock:
+            _strava_upload["current"] = filename
+            _strava_upload["done"] = done
+
+    try:
+        summary = _strava.upload_files(filenames, force=force, progress_cb=on_progress)
+        with _strava_lock:
+            _strava_upload.update({"state": "done", "done": len(filenames), **summary})
+    except Exception as e:
+        with _strava_lock:
+            _strava_upload.update({"state": "error", "error": str(e)})
+
+
+@app.route("/strava/callback")
+def strava_callback():
+    code = request.args.get("code", "")
+    error = request.args.get("error", "")
+    if error:
+        return f"<html><body><p>授权被拒绝: {_html_escape(error)}</p><script>setTimeout(()=>window.close(),3000)</script></body></html>", 400
+    if not code:
+        return "<html><body><p>未收到授权码</p></body></html>", 400
+    try:
+        info = _strava.exchange_code(code)
+        name = _html_escape(info.get("athlete_name") or "未知")
+        return (
+            f"<html><body><p>Strava 授权成功！账号: {name}</p>"
+            f"<p>此页面将自动关闭...</p>"
+            f"<script>setTimeout(()=>window.close(),2000)</script></body></html>"
+        )
+    except Exception as e:
+        return f"<html><body><p>授权失败: {e}</p></body></html>", 500
+
+
+@app.route("/api/strava/status")
+def strava_status():
+    cfg = _strava.load_config()
+    if not cfg:
+        return jsonify(configured=False, has_tokens=False)
+    return jsonify(
+        configured=True,
+        has_tokens=bool(cfg["refresh_token"]),
+        athlete_name=cfg["athlete_name"],
+        athlete_id=cfg["athlete_id"],
+    )
+
+
+@app.route("/api/strava/auth_url")
+def strava_auth_url():
+    try:
+        url = _strava.build_auth_url(port=5173)
+        return jsonify(url=url)
+    except Exception as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.route("/api/strava/upload", methods=["POST"])
+def strava_upload():
+    with _strava_lock:
+        if _strava_upload["state"] == "uploading":
+            return jsonify(error="上传正在进行中"), 409
+
+    body = request.get_json(silent=True) or {}
+    filenames = body.get("filenames", [])
+    force = bool(body.get("force", False))
+    if not filenames:
+        return jsonify(error="未指定文件"), 400
+
+    t = threading.Thread(target=_run_strava_upload, args=(filenames, force), daemon=True)
+    t.start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/strava/upload/status")
+def strava_upload_status():
+    with _strava_lock:
+        return jsonify(**_strava_upload)
 
 
 if __name__ == "__main__":

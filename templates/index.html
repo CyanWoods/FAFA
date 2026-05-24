@@ -111,6 +111,7 @@
       <span id="act-select-count">已选 0 项</span>
       <button onclick="_actSelectAll()">全选</button>
       <button onclick="_actBulkLoad()">加载到地图</button>
+      <button onclick="_stravaUploadSelected()">上传到 Strava</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
       <button onclick="_exitSelectMode()">取消</button>
     </div>
@@ -199,6 +200,33 @@
         <div id="sync-done-files" class="sync-done-files"></div>
         <div class="modal-actions" style="margin-top:16px">
           <button class="modal-cancel" id="sync-close-btn" onclick="closeSyncModal()" disabled>关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Strava 上传弹窗 ──────────────────────────────────────────────────── -->
+  <div id="strava-modal">
+    <div class="modal-overlay" onclick="closeStravaModal()"></div>
+    <div class="modal-box sync-box">
+      <div class="modal-title">上传到 Strava</div>
+
+      <div id="strava-auth-view">
+        <p class="sync-desc">需要先完成 Strava 授权。请在 <code>ai_config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。</p>
+        <div class="modal-actions">
+          <button class="modal-cancel" onclick="closeStravaModal()">取消</button>
+          <button class="modal-export" onclick="stravaStartAuth()">授权 Strava</button>
+        </div>
+      </div>
+
+      <div id="strava-upload-view" style="display:none">
+        <div id="strava-status-msg" class="sync-status-msg"></div>
+        <div class="sync-progress-wrap">
+          <div id="strava-progress-bar" class="sync-progress-bar"></div>
+        </div>
+        <div id="strava-done-files" class="sync-done-files"></div>
+        <div class="modal-actions" style="margin-top:16px">
+          <button class="modal-cancel" id="strava-close-btn" onclick="closeStravaModal()" disabled>关闭</button>
         </div>
       </div>
     </div>

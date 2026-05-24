@@ -18,6 +18,7 @@ FAFA/
 │   ├── stats.py        # 分段统计（KmStats / Summary）
 │   ├── reporter.py     # 表格 / JSON / CSV 输出
 │   ├── onelap.py       # 顽鹿 API 客户端（登录 / 列表 / 下载）
+│   ├── strava.py       # Strava 上传集成（OAuth / token 刷新 / 去重状态）
 │   └── tools/
 │       ├── fix_coords.py   # FIT 文件坐标系批量纠偏
 │       ├── rename_fit.py   # Magene FIT 文件批量重命名
@@ -71,7 +72,7 @@ python -m venv .venv
 |---|---|
 | 月份分组 | 活动按年月分组，每组显示当月总里程 |
 | 筛选 | 年份 / 月份下拉 + 距离预设按钮，实时过滤 |
-| 多选模式 | 长按或点击「选择」进入多选，支持批量加载到地图、批量删除 |
+| 多选模式 | 长按或点击「选择」进入多选，支持批量加载到地图、批量上传到 Strava、批量删除 |
 | 汇总栏 | 显示当前筛选集的总骑行次数、总里程、总时长 |
 | 点击卡片 | 打开骑行详情视图（全屏覆盖层） |
 
@@ -154,6 +155,16 @@ python -m venv .venv
 - `ai_config.json` 中配置 `onelap_username` / `onelap_password` 后同步时自动登录，无需弹出浏览器
 - 未配置账密则弹出 Chromium 浏览器窗口完成登录（90 秒超时）
 - 新版 Magene 固件（software version > 18）的 FIT 文件下载后自动进行火星解密
+
+### Strava 上传
+
+将 `input/` 中的骑行活动上传到 Strava，支持多选批量上传和去重。
+
+**配置步骤：**
+1. 在 [Strava 开发者控制台](https://www.strava.com/settings/api) 创建 App，将回调域名设为 `localhost`
+2. 将 `Client ID` 和 `Client Secret` 填入 `ai_config.json` 的 `strava_client_id` / `strava_client_secret`
+3. 在活动视图进入多选模式，选择活动后点击「上传到 Strava」→ 点击弹窗中的「授权 Strava」完成 OAuth（token 自动保存到 `ai_config.json`）
+4. 之后选择活动直接上传，已上传过的文件自动跳过（去重记录保存在 `input/.strava_state.json`）
 
 ---
 
@@ -291,7 +302,15 @@ cp ai_config.template.json ai_config.json
   "model": "gpt-4o-mini",
   "max_tokens": 2500,
   "onelap_username": "",
-  "onelap_password": ""
+  "onelap_password": "",
+  "strava_client_id": "",
+  "strava_client_secret": "",
+  "strava_access_token": "",
+  "strava_refresh_token": "",
+  "strava_expires_at": 0,
+  "strava_redirect_port": 5173,
+  "strava_athlete_id": "",
+  "strava_athlete_name": ""
 }
 ```
 
@@ -303,6 +322,11 @@ cp ai_config.template.json ai_config.json
 | `max_tokens` | ❌ | 单次回复最大 token 数，默认 `2500` |
 | `onelap_username` | ❌ | 顽鹿账号，填写后顽鹿同步自动登录，无需弹出浏览器 |
 | `onelap_password` | ❌ | 顽鹿密码 |
+| `strava_client_id` | ❌ | Strava API App 的 Client ID，填写后可将活动上传到 Strava |
+| `strava_client_secret` | ❌ | Strava API App 的 Client Secret |
+| `strava_access_token` | ❌ | 由 OAuth 授权流程自动写入，无需手动填写 |
+| `strava_refresh_token` | ❌ | 同上，OAuth 授权后自动写入 |
+| `strava_redirect_port` | ❌ | OAuth 回调端口，默认 `5173`（与 Flask 服务端口一致） |
 
 ### 常见 API 服务示例
 

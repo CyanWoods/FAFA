@@ -1335,7 +1335,8 @@ body {
 .lib-load-btn:disabled { opacity: .4; cursor: default; }
 
 /* ── 顽鹿同步弹窗 ────────────────────────────────────────────────────────── */
-#sync-modal {
+#sync-modal,
+#strava-modal {
   position: fixed;
   inset: 0;
   z-index: 2100;
