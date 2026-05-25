@@ -161,7 +161,7 @@ venv\Scripts\python app.py
 - 支持增量下载（只拉取本地尚未存在的新活动）或全量下载
 - `ai_config.json` 中配置 `onelap_username` / `onelap_password` 后同步时自动登录，无需弹出浏览器
 - 未配置账密则弹出 Chromium 浏览器窗口完成登录（90 秒超时）
-- 新版 Magene 固件（software version > 18）的 FIT 文件下载后自动进行火星解密
+- 新版 Magene 固件的 FIT 文件下载后自动进行火星解密：C506 版本 ≥ 19，C706 版本 ≥ 20
 
 ### Strava 上传
 

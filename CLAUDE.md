@@ -42,7 +42,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses `ThreadPoolExecutor` (up to 8 workers) + the cache to parse the full library quickly on first load.
 
-**Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files with software version > 18 (new Magene firmware that stores GCJ-02).
+**Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files when: C506 with software version ≥ 19, or C706 with software version ≥ 20 (new Magene firmware that stores GCJ-02).
 
 **AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
@@ -79,7 +79,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - CartoDB tiles (dark/light) support CORS (`crossOrigin='anonymous'`) — safe for `canvas.toBlob()` PNG export
 - Gaode/Amap tiles do **not** support CORS — excluded from the PNG export tile options
 - `garmin_fit_sdk.Encoder.write_mesg()` requires a `mesg_num` key in every message dict (needed by `fafa/tools/fix_coords.py`)
-- New Magene firmware (software version > 18) stores GCJ-02 in raw FIT files; `_run_sync` in `app.py` auto-decrypts these after download.
+- New Magene firmware stores GCJ-02 in raw FIT files; `_run_sync` auto-decrypts after download: C506 with version ≥ 19, C706 with version ≥ 20.
 - The `/api/fix_coords` endpoint and the `_run_sync` auto-decrypt both import from `fafa.tools.fix_coords`, not from any top-level script.
 - Files view year/month filter (`_MAGENE_DATE_RE`) only matches Magene filename format — Garmin files get no filter chip and show raw filename as label.
 

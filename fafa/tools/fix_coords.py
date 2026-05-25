@@ -146,8 +146,8 @@ def fix_file(src: Path, dst: Path, method: str) -> int:
 
 def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None, bool]:
     """Read FIT once: check software part_number and version, decrypt GCJ-02
-    in-place only when part_number contains 'c506' (case-insensitive) and ver > 18,
-    and extract the device model string (e.g. 'C506') from file_id_mesgs.
+    in-place when: part_number contains 'c506' and ver >= 19, or part_number
+    contains 'c706' and ver >= 20. Extracts device model (e.g. 'C506') from file_id_mesgs.
 
     Returns (software_version, model_or_None, decrypted).
     Raises on write failure so the caller can log it.
@@ -169,9 +169,13 @@ def auto_decrypt_if_gcj02(path: Path) -> tuple[float | None, str | None, bool]:
             pass
         part_number = str(sw_list[0].get("part_number") or "")
 
-    is_c506 = "c506" in part_number.lower()
+    pn = part_number.lower()
+    should_decrypt = (
+        ("c506" in pn and ver is not None and ver >= 19) or
+        ("c706" in pn and ver is not None and ver >= 20)
+    )
     decrypted = False
-    if is_c506 and ver is not None and ver > 18:
+    if should_decrypt:
         for key in list(msgs.keys()):
             msgs[key] = [_convert_mesg(m, "decrypt") for m in msgs[key]]
         data = _encode(msgs)
