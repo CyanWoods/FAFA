@@ -38,14 +38,14 @@ FAFA/
 
 **macOS / Linux：**
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 ```
 
 **Windows：**
 ```bat
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
 ```
 
 ---
@@ -56,11 +56,11 @@ python -m venv .venv
 
 **macOS / Linux：**
 ```bash
-.venv/bin/python app.py
+venv/bin/python app.py
 ```
 **Windows：**
 ```bat
-.venv\Scripts\python app.py
+venv\Scripts\python app.py
 ```
 然后访问 http://localhost:5173
 
@@ -190,14 +190,14 @@ python -m venv .venv
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m fafa.tools.fix_coords --method decrypt          # 火星解密：GCJ-02 → WGS-84
-.venv/bin/python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
-.venv/bin/python -m fafa.tools.fix_coords --method decrypt --dry-run
+venv/bin/python -m fafa.tools.fix_coords --method decrypt          # 火星解密：GCJ-02 → WGS-84
+venv/bin/python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
+venv/bin/python -m fafa.tools.fix_coords --method decrypt --dry-run
 
 # Windows
-.venv\Scripts\python -m fafa.tools.fix_coords --method decrypt
-.venv\Scripts\python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
-.venv\Scripts\python -m fafa.tools.fix_coords --method decrypt --dry-run
+venv\Scripts\python -m fafa.tools.fix_coords --method decrypt
+venv\Scripts\python -m fafa.tools.fix_coords --method encrypt input/ -o output/fixed/
+venv\Scripts\python -m fafa.tools.fix_coords --method decrypt --dry-run
 ```
 
 ---
@@ -213,12 +213,12 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m fafa.tools.rename_fit
-.venv/bin/python -m fafa.tools.rename_fit --dry-run
+venv/bin/python -m fafa.tools.rename_fit
+venv/bin/python -m fafa.tools.rename_fit --dry-run
 
 # Windows
-.venv\Scripts\python -m fafa.tools.rename_fit
-.venv\Scripts\python -m fafa.tools.rename_fit --dry-run
+venv\Scripts\python -m fafa.tools.rename_fit
+venv\Scripts\python -m fafa.tools.rename_fit --dry-run
 ```
 
 ---
@@ -229,16 +229,16 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m fafa.tools.export_all
-.venv/bin/python -m fafa.tools.export_all --no-km-stats
-.venv/bin/python -m fafa.tools.export_all --min-km 5
-.venv/bin/python -m fafa.tools.export_all -o ~/Desktop/data.json
+venv/bin/python -m fafa.tools.export_all
+venv/bin/python -m fafa.tools.export_all --no-km-stats
+venv/bin/python -m fafa.tools.export_all --min-km 5
+venv/bin/python -m fafa.tools.export_all -o ~/Desktop/data.json
 
 # Windows
-.venv\Scripts\python -m fafa.tools.export_all
-.venv\Scripts\python -m fafa.tools.export_all --no-km-stats
-.venv\Scripts\python -m fafa.tools.export_all --min-km 5
-.venv\Scripts\python -m fafa.tools.export_all -o %USERPROFILE%\Desktop\data.json
+venv\Scripts\python -m fafa.tools.export_all
+venv\Scripts\python -m fafa.tools.export_all --no-km-stats
+venv\Scripts\python -m fafa.tools.export_all --min-km 5
+venv\Scripts\python -m fafa.tools.export_all -o %USERPROFILE%\Desktop\data.json
 ```
 
 输出格式：
@@ -259,16 +259,16 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m fafa.tools.download_fit
-.venv/bin/python -m fafa.tools.download_fit --all
-.venv/bin/python -m fafa.tools.download_fit --dry-run
-.venv/bin/python -m fafa.tools.download_fit --limit 10
+venv/bin/python -m fafa.tools.download_fit
+venv/bin/python -m fafa.tools.download_fit --all
+venv/bin/python -m fafa.tools.download_fit --dry-run
+venv/bin/python -m fafa.tools.download_fit --limit 10
 
 # Windows
-.venv\Scripts\python -m fafa.tools.download_fit
-.venv\Scripts\python -m fafa.tools.download_fit --all
-.venv\Scripts\python -m fafa.tools.download_fit --dry-run
-.venv\Scripts\python -m fafa.tools.download_fit --limit 10
+venv\Scripts\python -m fafa.tools.download_fit
+venv\Scripts\python -m fafa.tools.download_fit --all
+venv\Scripts\python -m fafa.tools.download_fit --dry-run
+venv\Scripts\python -m fafa.tools.download_fit --limit 10
 ```
 
 ---
@@ -279,14 +279,14 @@ MAGENE_C506_1734220883_1266269_1734224483.fit
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit
-.venv/bin/python -m fafa.tools.ant_analysis input/          # 批量分析整个目录
-.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --gap 10   # 合并 10s 内的短暂断连
-.venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --json     # JSON 输出
+venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit
+venv/bin/python -m fafa.tools.ant_analysis input/          # 批量分析整个目录
+venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --gap 10   # 合并 10s 内的短暂断连
+venv/bin/python -m fafa.tools.ant_analysis input/xxx.fit --json     # JSON 输出
 
 # Windows
-.venv\Scripts\python -m fafa.tools.ant_analysis input\xxx.fit
-.venv\Scripts\python -m fafa.tools.ant_analysis input\
+venv\Scripts\python -m fafa.tools.ant_analysis input\xxx.fit
+venv\Scripts\python -m fafa.tools.ant_analysis input\
 ```
 
 ---

@@ -368,9 +368,9 @@ def browser_login() -> dict:
         from DrissionPage import ChromiumPage, ChromiumOptions
     except ImportError:
         if sys.platform == "win32":
-            pip_cmd = r".venv\Scripts\pip install DrissionPage"
+            pip_cmd = r"venv\Scripts\pip install DrissionPage"
         else:
-            pip_cmd = ".venv/bin/pip install DrissionPage"
+            pip_cmd = "venv/bin/pip install DrissionPage"
         raise RuntimeError(f"请先安装 DrissionPage：{pip_cmd}")
 
     if sys.platform == "linux" and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
