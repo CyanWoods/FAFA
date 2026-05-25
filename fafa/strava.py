@@ -191,6 +191,40 @@ def is_uploaded(filename: str) -> bool:
     return bool(_load_state().get(sig, {}).get("uploaded"))
 
 
+# ── Activity list ─────────────────────────────────────────────────────────────
+
+def fetch_all_activities(access_token: str, per_page: int = 200) -> list[dict]:
+    """Fetch all Strava activities. Returns [{id, external_id, start_unix}]."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    all_acts: list[dict] = []
+    page = 1
+    while True:
+        resp = requests.get(
+            "https://www.strava.com/api/v3/athlete/activities",
+            headers=headers,
+            params={"per_page": per_page, "page": page},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        for act in batch:
+            try:
+                dt = datetime.strptime(act["start_date"], "%Y-%m-%dT%H:%M:%SZ")
+                all_acts.append({
+                    "id": act["id"],
+                    "external_id": (act.get("external_id") or "").strip(),
+                    "start_unix": int(dt.timestamp()),
+                })
+            except Exception:
+                pass
+        if len(batch) < per_page:
+            break
+        page += 1
+    return all_acts
+
+
 # ── Upload core ───────────────────────────────────────────────────────────────
 
 def _classify_error(err_text: str) -> tuple[str, str]:

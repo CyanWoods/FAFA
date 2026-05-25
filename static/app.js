@@ -184,8 +184,10 @@ function switchSidebarView(name) {
   if (name === 'activities') {
     document.getElementById('activities-view').classList.add('active');
     openActivitiesView();
-  } else if (name === 'analytics') {
-    openAnalyticsView(_analyticsTab || 'pmc');
+  } else if (name === 'pmc') {
+    openAnalyticsView('pmc');
+  } else if (name === 'calendar') {
+    openAnalyticsView('calendar');
   } else if (name === 'files') {
     document.getElementById('files-view').classList.add('active');
     refreshLibrary();
@@ -248,11 +250,17 @@ function _populateYearFilter() {
   });
 }
 
+function _toggleSelectMode() {
+  if (_actSelectMode) _exitSelectMode();
+  else _enterSelectMode();
+}
+
 function _enterSelectMode() {
   _actSelectMode = true;
   _actSelected.clear();
   document.getElementById('activities-view').classList.add('select-mode');
   document.getElementById('act-select-bar').style.display = '';
+  document.getElementById('act-mode-btn').textContent = '取消选择';
   _updateSelectBar();
 }
 
@@ -261,18 +269,29 @@ function _exitSelectMode() {
   _actSelected.clear();
   document.getElementById('activities-view').classList.remove('select-mode');
   document.getElementById('act-select-bar').style.display = 'none';
+  document.getElementById('act-mode-btn').textContent = '选择';
+  document.getElementById('act-select-all-btn').textContent = '全选';
   document.querySelectorAll('.act-card.selected').forEach(c => c.classList.remove('selected'));
 }
 
 function _updateSelectBar() {
   document.getElementById('act-select-count').textContent = `已选 ${_actSelected.size} 项`;
+  const allCards = document.querySelectorAll('.act-card[data-filename]');
+  const btn = document.getElementById('act-select-all-btn');
+  if (btn) {
+    const allSelected = allCards.length > 0 && [...allCards].every(c => _actSelected.has(c.dataset.filename));
+    btn.textContent = allSelected ? '取消全选' : '全选';
+  }
 }
 
 function _actSelectAll() {
-  document.querySelectorAll('.act-card').forEach(card => {
-    const fn = card.dataset.filename;
-    if (fn) { _actSelected.add(fn); card.classList.add('selected'); }
-  });
+  const allCards = document.querySelectorAll('.act-card[data-filename]');
+  const allSelected = allCards.length > 0 && [...allCards].every(c => _actSelected.has(c.dataset.filename));
+  if (allSelected) {
+    allCards.forEach(c => { _actSelected.delete(c.dataset.filename); c.classList.remove('selected'); });
+  } else {
+    allCards.forEach(c => { _actSelected.add(c.dataset.filename); c.classList.add('selected'); });
+  }
   _updateSelectBar();
 }
 
@@ -431,7 +450,14 @@ function _buildActivityCard(act) {
       <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">均功率</span></div>
       <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">均心率</span></div>
     </div>
+    <div class="act-card-actions">
+      <button class="act-card-ai-btn">AI 分析</button>
+    </div>
   `;
+  card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    openActAiModal(act);
+  });
   card.addEventListener('click', () => {
     if (_actSelectMode) {
       if (_actSelected.has(act.filename)) {
@@ -1609,6 +1635,8 @@ document.addEventListener('DOMContentLoaded', () => {
     e.target.value = '';
     _actActivities = null;
     if (_sidebarView === 'activities') openActivitiesView();
+    else if (_sidebarView === 'files') refreshLibrary();
+    refreshLibraryCount();
   });
 });
 
@@ -1617,6 +1645,8 @@ let _libFiles = [];       // [{filename, size_kb, mtime}]
 let _libLoading = false;
 let _libFilterYear  = null;
 let _libFilterMonth = null;
+let _libSelectMode  = false;
+let _libSelectedSet = new Set();
 
 function refreshLibraryCount() {
   fetch('/api/files')
@@ -1718,6 +1748,12 @@ function _buildLibFilter() {
   }
 }
 
+function _libSortKey(f) {
+  const m = f.filename.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})?/);
+  if (m) return `${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}${m[6] || '00'}`;
+  return String(Math.round(f.mtime * 1000)).padStart(20, '0');
+}
+
 function _applyLibFilter() {
   const q = document.getElementById('lib-search').value.toLowerCase();
   let files = _libFiles;
@@ -1728,11 +1764,87 @@ function _applyLibFilter() {
     });
   }
   if (q) files = files.filter(f => f.filename.toLowerCase().includes(q));
+  files = [...files].sort((a, b) => _libSortKey(b).localeCompare(_libSortKey(a)));
   _renderLibrary(files);
 }
 
 function filterLibrary() {
   _applyLibFilter();
+}
+
+function _enterLibSelectMode() {
+  _libSelectMode = true;
+  _libSelectedSet.clear();
+  document.getElementById('lib-select-bar').style.display = 'flex';
+  document.getElementById('lib-select-btn').style.display = 'none';
+  _applyLibFilter();
+  _updateLibSelectCount();
+}
+
+function _exitLibSelectMode() {
+  _libSelectMode = false;
+  _libSelectedSet.clear();
+  document.getElementById('lib-select-bar').style.display = 'none';
+  document.getElementById('lib-select-btn').style.display = '';
+  _applyLibFilter();
+}
+
+function _updateLibSelectCount() {
+  document.getElementById('lib-select-count').textContent = `已选 ${_libSelectedSet.size} 项`;
+  const allBtn = document.getElementById('lib-select-all-btn');
+  if (allBtn) allBtn.textContent = _libSelectedSet.size > 0 ? '取消全选' : '全选';
+}
+
+function _libSelectAll() {
+  const rows = document.querySelectorAll('#lib-list .lib-row');
+  const visibleNames = [...rows].map(r => r.dataset.filename);
+  if (_libSelectedSet.size === visibleNames.length && visibleNames.length > 0) {
+    _libSelectedSet.clear();
+  } else {
+    visibleNames.forEach(n => _libSelectedSet.add(n));
+  }
+  _updateLibSelectCount();
+  document.querySelectorAll('#lib-list .lib-row').forEach(row => {
+    const cb = row.querySelector('.lib-cb');
+    const sel = _libSelectedSet.has(row.dataset.filename);
+    if (cb) cb.checked = sel;
+    row.classList.toggle('lib-row-selected', sel);
+  });
+}
+
+async function _libBulkDelete() {
+  if (!_libSelectedSet.size) { toast('请先选择文件'); return; }
+  if (!confirm(`确定要删除选中的 ${_libSelectedSet.size} 个文件吗？此操作不可撤销。`)) return;
+  const filenames = [..._libSelectedSet];
+  let deleted = 0;
+  for (const fn of filenames) {
+    try {
+      const res = await fetch('/api/files/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: fn }) });
+      if (res.ok) deleted++;
+    } catch {}
+  }
+  toast(`已删除 ${deleted} 个文件`);
+  _actActivities = null;
+  _exitLibSelectMode();
+  refreshLibrary();
+  refreshLibraryCount();
+}
+
+async function _libDeleteFile(filename) {
+  if (!confirm(`确定要删除此文件吗？此操作不可撤销。`)) return;
+  try {
+    const res = await fetch('/api/files/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+    if (res.ok) {
+      toast('已删除');
+      _actActivities = null;
+      refreshLibrary();
+      refreshLibraryCount();
+    } else {
+      toast('删除失败');
+    }
+  } catch {
+    toast('删除失败');
+  }
 }
 
 function _libDateLabel(filename) {
@@ -1749,13 +1861,28 @@ function _renderLibrary(files) {
     list.innerHTML = '<div class="lib-loading">没有 .fit 文件</div>';
     return;
   }
-  const loadedNames = new Set([...tracks.values()].map(t => t.name));
   list.innerHTML = '';
   for (const f of files) {
-    const loaded = loadedNames.has(f.filename);
+    const selected = _libSelectedSet.has(f.filename);
     const row = document.createElement('div');
-    row.className = 'lib-row' + (loaded ? ' lib-row-loaded' : '');
+    row.className = 'lib-row' + (selected ? ' lib-row-selected' : '');
     row.dataset.filename = f.filename;
+
+    if (_libSelectMode) {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'lib-cb';
+      cb.checked = selected;
+      cb.onchange = () => {
+        if (cb.checked) _libSelectedSet.add(f.filename);
+        else _libSelectedSet.delete(f.filename);
+        row.classList.toggle('lib-row-selected', cb.checked);
+        _updateLibSelectCount();
+      };
+      row.appendChild(cb);
+      row.style.cursor = 'pointer';
+      row.onclick = (e) => { if (e.target === cb) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); };
+    }
 
     const info = document.createElement('div');
     info.className = 'lib-row-info';
@@ -1769,66 +1896,17 @@ function _renderLibrary(files) {
     size.textContent = f.size_kb + ' KB';
 
     info.append(date, size);
+    row.appendChild(info);
 
-    const btn = document.createElement('button');
-    btn.className = 'lib-load-btn' + (loaded ? ' lib-load-btn-loaded' : '');
-    btn.textContent = loaded ? '已加载' : '加载';
-    btn.disabled = loaded;
-    btn.onclick = () => loadFromLibrary(f.filename, btn);
-
-    row.append(info, btn);
-    list.appendChild(row);
-  }
-}
-
-async function loadFromLibrary(filename, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = '加载中…'; }
-  try {
-    const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
-    const data = await res.json();
-    if (!res.ok) { toast(data.error || '加载失败'); if (btn) { btn.disabled = false; btn.textContent = '加载'; } return; }
-    addTrack(data);
-    if (btn) { btn.disabled = true; btn.textContent = '已加载'; btn.closest('.lib-row')?.classList.add('lib-row-loaded'); }
-  } catch {
-    toast('加载失败：网络错误');
-    if (btn) { btn.disabled = false; btn.textContent = '加载'; }
-  }
-}
-
-async function loadAllFromLibrary() {
-  const loadedNames = new Set([...tracks.values()].map(t => t.name));
-  const toLoad = _libFiles.filter(f => !loadedNames.has(f.filename));
-  if (!toLoad.length) { toast('所有文件已加载'); return; }
-  toast(`正在加载 ${toLoad.length} 个文件…`);
-  const CHUNK = 4;
-  for (let i = 0; i < toLoad.length; i += CHUNK) {
-    await Promise.all(toLoad.slice(i, i + CHUNK).map(async f => {
-      try {
-        const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: f.filename }) });
-        const data = await res.json();
-        if (res.ok) addTrack(data);
-      } catch {}
-    }));
-  }
-  _renderLibrary(_libFiles);
-  toast('加载完成');
-}
-
-async function deleteAllFromLibrary() {
-  if (!confirm('确定要删除文件库中所有 .fit 文件吗？此操作不可撤销。')) return;
-  try {
-    const res = await fetch('/api/files/delete_all', { method: 'POST' });
-    const data = await res.json();
-    if (res.ok) {
-      toast(`已删除 ${data.deleted} 个文件`);
-      _actActivities = null;
-      refreshLibrary();
-      refreshLibraryCount();
-    } else {
-      toast('删除失败');
+    if (!_libSelectMode) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'lib-delete-btn';
+      delBtn.textContent = '删除';
+      delBtn.onclick = (e) => { e.stopPropagation(); _libDeleteFile(f.filename); };
+      row.appendChild(delBtn);
     }
-  } catch {
-    toast('删除失败');
+
+    list.appendChild(row);
   }
 }
 
@@ -1942,6 +2020,7 @@ function closeStravaModal() {
   if (_stravaPollTimer) { clearInterval(_stravaPollTimer); _stravaPollTimer = null; }
   document.getElementById('strava-modal').style.display = 'none';
   document.getElementById('strava-auth-view').style.display = '';
+  document.getElementById('strava-diff-view').style.display = 'none';
   document.getElementById('strava-upload-view').style.display = 'none';
   document.getElementById('strava-close-btn').disabled = true;
   document.getElementById('strava-done-files').innerHTML = '';
@@ -1953,36 +2032,28 @@ async function stravaStartAuth() {
   try {
     const res = await fetch('/api/strava/auth_url');
     const d = await res.json();
-    if (d.error) { toast('Strava 授权失败: ' + d.error); return; }
+    if (d.error) { toast('Strava 授权失败：' + d.error); return; }
     window.open(d.url, '_blank');
     toast('请在新标签页完成 Strava 授权，完成后刷新页面');
   } catch (e) {
-    toast('无法获取授权链接: ' + e);
+    toast('无法获取授权链接：' + e);
   }
 }
 
-async function _stravaUploadSelected() {
-  if (!_actSelected.size) { toast('请先选择活动'); return; }
-  const filenames = [..._actSelected];
+async function _stravaCheckStatus() {
+  const res = await fetch('/api/strava/status');
+  return res.json();
+}
 
-  const statusRes = await fetch('/api/strava/status');
-  const status = await statusRes.json();
-
-  if (!status.configured) {
-    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
-    return;
-  }
-  if (!status.has_tokens) {
-    openStravaModal();
-    return;
-  }
-
-  _exitSelectMode();
+function _stravaOpenUploadModal(filenames) {
   openStravaModal();
   document.getElementById('strava-auth-view').style.display = 'none';
+  document.getElementById('strava-diff-view').style.display = 'none';
   document.getElementById('strava-upload-view').style.display = '';
   _setStravaUI(`准备上传 ${filenames.length} 个文件...`, 0, filenames.length);
+}
 
+async function _stravaStartUpload(filenames) {
   try {
     const res = await fetch('/api/strava/upload', {
       method: 'POST',
@@ -1991,15 +2062,93 @@ async function _stravaUploadSelected() {
     });
     if (!res.ok) {
       const d = await res.json();
-      toast('上传失败: ' + (d.error || res.status));
+      toast('上传失败：' + (d.error || res.status));
       closeStravaModal();
       return;
     }
     _stravaPollTimer = setInterval(_pollStravaUpload, 1500);
   } catch (e) {
-    toast('上传请求失败: ' + e);
+    toast('上传请求失败：' + e);
     closeStravaModal();
   }
+}
+
+async function _stravaUploadSingle(filename) {
+  const status = await _stravaCheckStatus();
+  if (!status.configured) {
+    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    return;
+  }
+  if (!status.has_tokens) { openStravaModal(); return; }
+  _stravaOpenUploadModal([filename]);
+  await _stravaStartUpload([filename]);
+}
+
+let _stravaDiffFilenames = [];
+
+function _stravaShowDiffView() {
+  openStravaModal();
+  document.getElementById('strava-auth-view').style.display = 'none';
+  document.getElementById('strava-diff-view').style.display = '';
+  document.getElementById('strava-upload-view').style.display = 'none';
+  document.getElementById('strava-diff-msg').textContent = '正在查询 Strava 活动列表...';
+  document.getElementById('strava-diff-confirm-btn').disabled = true;
+  document.getElementById('strava-diff-confirm-btn').textContent = '开始上传';
+}
+
+async function _stravaFetchDiff() {
+  _stravaShowDiffView();
+  try {
+    const res = await fetch('/api/strava/diff');
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById('strava-diff-msg').textContent = '错误：' + data.error;
+      return;
+    }
+    _stravaDiffFilenames = data.to_upload || [];
+    document.getElementById('strava-diff-msg').textContent =
+      `本地 ${data.local_count} 个，Strava 已有 ${data.match_count} 个，待上传 ${_stravaDiffFilenames.length} 个`;
+    const btn = document.getElementById('strava-diff-confirm-btn');
+    if (_stravaDiffFilenames.length > 0) {
+      btn.textContent = `开始上传 ${_stravaDiffFilenames.length} 个文件`;
+      btn.disabled = false;
+    } else {
+      btn.textContent = '已全部上传';
+      btn.disabled = true;
+    }
+  } catch (e) {
+    document.getElementById('strava-diff-msg').textContent = '查询失败：' + e;
+  }
+}
+
+async function _stravaConfirmDiff() {
+  if (!_stravaDiffFilenames.length) return;
+  _stravaOpenUploadModal(_stravaDiffFilenames);
+  await _stravaStartUpload(_stravaDiffFilenames);
+}
+
+async function _stravaUploadAllVisible() {
+  const status = await _stravaCheckStatus();
+  if (!status.configured) {
+    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    return;
+  }
+  if (!status.has_tokens) { openStravaModal(); return; }
+  await _stravaFetchDiff();
+}
+
+async function _stravaUploadSelected() {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  const filenames = [..._actSelected];
+  const status = await _stravaCheckStatus();
+  if (!status.configured) {
+    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    return;
+  }
+  if (!status.has_tokens) { openStravaModal(); return; }
+  _exitSelectMode();
+  _stravaOpenUploadModal(filenames);
+  await _stravaStartUpload(filenames);
 }
 
 async function _pollStravaUpload() {
@@ -2161,37 +2310,11 @@ async function startAiEval() {
 
 
 function _renderMarkdown(text) {
-  const escHtml = s => s
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  const inline = s => escHtml(s)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  const lines  = text.split('\n');
-  let html     = '';
-  let inList   = false;
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (line.startsWith('## ')) {
-      if (inList) { html += '</ul>'; inList = false; }
-      html += `<h2>${inline(line.slice(3).trim())}</h2>`;
-    } else if (line.startsWith('### ')) {
-      if (inList) { html += '</ul>'; inList = false; }
-      html += `<h3>${inline(line.slice(4).trim())}</h3>`;
-    } else if (/^[-*] /.test(line)) {
-      if (!inList) { html += '<ul>'; inList = true; }
-      html += `<li>${inline(line.slice(2).trim())}</li>`;
-    } else if (line.trim() === '') {
-      if (inList) { html += '</ul>'; inList = false; }
-    } else {
-      if (inList) { html += '</ul>'; inList = false; }
-      html += `<p>${inline(line)}</p>`;
-    }
+  if (typeof marked !== 'undefined') {
+    return marked.parse(text, { breaks: true, gfm: true });
   }
-  if (inList) html += '</ul>';
-  return html;
+  // fallback: plain text with line breaks
+  return '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>';
 }
 
 /* ── 训练状态 PMC（界面三） ──────────────────────────────────────────────── */
@@ -2233,15 +2356,9 @@ function openAnalyticsView(tab = 'pmc') {
   _pmcAllData    = null;
   _calActivities = null;
   document.getElementById('analytics-view').classList.add('active');
+  document.getElementById('analytics-title').textContent = tab === 'calendar' ? '训练日历' : '体能管理';
   _loadPmcSettings();
-  // AI model tag
-  const modelTag = document.getElementById('pmc-ai-model-tag');
-  modelTag.textContent  = _aiModel || '';
-  modelTag.style.display = _aiModel ? '' : 'none';
   // 重置 PMC AI 区
-  document.getElementById('pmc-ai-result').innerHTML = '';
-  document.getElementById('pmc-ai-loading').style.display = 'none';
-  document.getElementById('pmc-ai-placeholder').style.display = '';
   _doSwitchTab(tab);
 }
 
@@ -2249,13 +2366,12 @@ function closeAnalyticsView() {
   _analyticsOpen = false;
   document.getElementById('analytics-view').classList.remove('active');
   // Sync sidebar: closing analytics returns to activities view
-  if (_sidebarView === 'analytics') {
+  if (_sidebarView === 'pmc' || _sidebarView === 'calendar') {
     _sidebarView = 'activities';
     document.querySelectorAll('.sb-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === 'activities');
     });
     document.getElementById('activities-view').classList.add('active');
-    // Show map controls only if going to map view
     document.getElementById('topbar').style.display        = 'none';
     document.getElementById('track-panel').style.display   = 'none';
     document.getElementById('zoom-slider-wrap').style.display = 'none';
@@ -2757,6 +2873,107 @@ function _renderPmcCurve(activities, settings) {
   wrap.innerHTML = html;
 }
 
+/* ── 共享 AI 弹窗 helper ───────────────────────────────────────────────────── */
+async function _openAndStreamModal(title, summaryHtml, fetchFn) {
+  const summaryEl = document.getElementById('act-ai-modal-summary');
+  document.getElementById('act-ai-modal-title').textContent = title;
+  document.getElementById('act-ai-modal-result').innerHTML  = '';
+  document.getElementById('act-ai-modal-loading').style.display = 'none';
+  if (summaryHtml) {
+    summaryEl.innerHTML    = summaryHtml;
+    summaryEl.style.display = '';
+  } else {
+    summaryEl.innerHTML    = '';
+    summaryEl.style.display = 'none';
+  }
+  document.getElementById('act-ai-modal').style.display = 'flex';
+
+  const loading  = document.getElementById('act-ai-modal-loading');
+  const resultEl = document.getElementById('act-ai-modal-result');
+  loading.style.display = 'flex';
+
+  try {
+    const res = await fetchFn();
+    loading.style.display = 'none';
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      resultEl.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 ai_config.json 配置'}</div>`;
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', fullText = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const ds = line.slice(6).trim();
+        if (ds === '[DONE]') break;
+        try {
+          const chunk = JSON.parse(ds);
+          if (chunk.error) { resultEl.innerHTML = `<div class="ai-error">${chunk.error}</div>`; return; }
+          if (chunk.text)  { fullText += chunk.text; resultEl.innerHTML = _renderMarkdown(fullText); }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    loading.style.display = 'none';
+    resultEl.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+  }
+}
+
+function closeActAiModal() {
+  document.getElementById('act-ai-modal').style.display = 'none';
+}
+
+/* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
+async function openActAiModal(act) {
+  if (!_aiModel) { toast('AI 未配置，请先编辑 ai_config.json'); return; }
+  const chips = _statChips(act.summary || {});
+  let kmStats = [];
+  try {
+    const lr = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) });
+    if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
+  } catch {}
+  await _openAndStreamModal(
+    (act.filename || '').replace(/\.fit$/i, ''),
+    chips.map(c => `<span class="stat-chip">${c}</span>`).join(''),
+    () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '' }) })
+  );
+}
+
+/* ── 训练日历 AI 建议 ──────────────────────────────────────────────────────── */
+async function startCalendarAi(period) {
+  if (!_aiModel) { toast('AI 未配置，请先编辑 ai_config.json'); return; }
+  const acts    = _calActivities || [];
+  const now     = new Date();
+  const cutoff  = new Date(now);
+  if (period === '7d') cutoff.setDate(cutoff.getDate() - 7);
+  else                 cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const filtered  = acts.filter(a => a.date >= cutoffStr);
+  const label     = period === '7d' ? 'AI 建议 · 过去一周' : 'AI 建议 · 过去一个月';
+  await _openAndStreamModal(label, null, () => fetch('/api/ai/calendar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      period,
+      current_date: now.toISOString().slice(0, 10),
+      activities: filtered.map(a => ({
+        date: a.date,
+        dist_km:     a.summary?.total_dist_km,
+        dur_min:     Math.round(((a.summary?.moving_time_s || a.summary?.total_duration_s || 0) / 60)),
+        avg_hr:      a.summary?.avg_hr,
+        avg_power:   a.summary?.avg_power,
+        elevation_m: a.summary?.total_elevation_gain_m,
+      })),
+    }),
+  }));
+}
+
 async function startPmcAi() {
   if (!_pmcAllData || !_pmcAllData.days.length) {
     toast('暂无骑行数据，无法进行 AI 分析');
@@ -2767,15 +2984,7 @@ async function startPmcAi() {
     return;
   }
 
-  const loading     = document.getElementById('pmc-ai-loading');
-  const placeholder = document.getElementById('pmc-ai-placeholder');
-  const result      = document.getElementById('pmc-ai-result');
-
-  loading.style.display     = 'flex';
-  placeholder.style.display = 'none';
-  result.innerHTML          = '';
-
-  const n        = _pmcAllData.days.length - 1;
+  const n = _pmcAllData.days.length - 1;
   const settings = _pmcSettings();
 
   // 构建发送给 AI 的数据
@@ -2848,46 +3057,9 @@ async function startPmcAi() {
     first_date:       _pmcAllData.activities[0]?.date || '',
   };
 
-  try {
-    const res = await fetch('/api/ai/pmc', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
-    });
-
-    loading.style.display = 'none';
-
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      result.innerHTML = `<div class="ai-error">${d.error || '请求失败'}</div>`;
-      return;
-    }
-
-    const reader  = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '', fullText = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') { buffer = ''; break; }
-        try {
-          const chunk = JSON.parse(data);
-          if (chunk.error) { result.innerHTML = `<div class="ai-error">${chunk.error}</div>`; return; }
-          if (chunk.text) { fullText += chunk.text; result.innerHTML = _renderMarkdown(fullText); }
-        } catch {}
-      }
-    }
-  } catch (e) {
-    loading.style.display = 'none';
-    result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
-  }
+  await _openAndStreamModal('体能管理 · AI 评估', null, () => fetch('/api/ai/pmc', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }));
 }
 
 /* ── 训练日历 ────────────────────────────────────────────────────────────── */

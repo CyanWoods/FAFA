@@ -14,7 +14,7 @@ FIT (Flexible and Interoperable Data Transfer) is a binary format used by Garmin
 
 Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
-**Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for four top-level views. The rest of the viewport is view-specific content.
+**Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for five top-level views. The rest of the viewport is view-specific content.
 
 **Five views:**
 
@@ -26,7 +26,9 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 - **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. Chart.js line chart (metric selectable, x-axis: km / per-100 m / cumulative time) + per-km data table. Opened from either activities or map view; closing returns to the originating view.
 
-- **Analytics view** (`#analytics-view`, z-index 960): Full-screen overlay with two tabs — **PMC** (Performance Management Chart: CTL/ATL/TSB, power curve, zone distribution, AI commentary) and **Training Calendar**. Opened via the sidebar analytics icon.
+- **PMC view** (`#analytics-view`, `data-view="pmc"`, z-index 960): Full-screen overlay showing Performance Management Chart — CTL/ATL/TSB curves, power curve, zone distribution, and AI training-state commentary (`startPmcAi`). Opened via the sidebar 体能管理 icon.
+
+- **Training Calendar view** (`#analytics-view`, `data-view="calendar"`, z-index 960): Full-screen overlay showing a monthly calendar grid of daily rides. Per-day detail modal on click. AI period buttons trigger `startCalendarAi(period)` for weekly or monthly training suggestions. Opened via the sidebar 训练日历 icon.
 
 **Upload flow** (`/api/upload`):
 1. Saves `.fit` to a temp file, parses via `parse_fit()`, immediately deletes temp file.
@@ -42,9 +44,12 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files with software version > 18 (new Magene firmware that stores GCJ-02).
 
-**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Two AI endpoints:
+**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
-- `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC commentary.
+- `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC training-state commentary.
+- `/api/ai/calendar` (POST `{period, current_date, activities}`) — streams weekly or monthly training suggestions.
+
+**Strava diff** (`/api/strava/diff`): Compares all local `.fit` files against the user's Strava activity list. Match strategy: (1) `external_id == filename` (set at upload time — exact, no FIT parse needed); (2) fallback ±60 s start-time match using `start_time_utc` from cache or a direct `parse_fit()` read. Returns `{to_upload, local_count, strava_count, match_count}`. Frontend `_stravaUploadAllVisible` calls this first, shows a confirm dialog with counts, then uploads only the diff set.
 
 **Global JSON export** (`/api/export/all`): Downloads a JSON of all parsed activities in `input/`. Accepts `no_km_stats=1` and `min_km=N` query params. Used by AI analysis workflows.
 
@@ -56,7 +61,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
-- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `ai_config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`.
+- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `ai_config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
 
 ### CLI tools (`fafa/tools/` — run as Python modules)
 
@@ -87,8 +92,8 @@ Key sections in order:
 | Constants | `TILES`, `PALETTE`, `METRICS`, `TABLE_COLS`, `EXPORT_TILE_URLS`, `EXPORT_RESOLUTIONS` |
 | GCJ-02 | `wgs84ToGcj02`, `gcj02ToWgs84`, `encryptCoords`, `decryptCoords` |
 | State | `map`, `tracks` (Map), `exportState`, sidebar/panel/detail/analytics state |
-| Sidebar nav | `switchSidebarView` — switches between `activities`, `map`, `files`, `analytics` |
-| Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers, `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, bulk actions |
+| Sidebar nav | `switchSidebarView` — switches between `activities`, `map`, `files`, `pmc`, `calendar` |
+| Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers (`_toggleSelectMode`, `_enterSelectMode`, `_exitSelectMode`, `_updateSelectBar`, `_actSelectAll`), `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, `openActAiModal`, bulk actions |
 | Map init | `initMap`, `setTiles` |
 | Track coords | `getCoords`, `renderTrack` |
 | Track management | `addTrack`, `removeTrack`, `clearAllTracks`, `setTrackMode` |
@@ -102,13 +107,13 @@ Key sections in order:
 | Zoom slider | `initZoomSlider` |
 | PNG export | `openExportModal`, `doExport`, canvas tile/track drawing helpers |
 | Detail view | `openDetailView`, `closeDetailView`, chart/table rendering, `exportDetailData` |
-| File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, `loadAllFromLibrary`, `deleteAllFromLibrary` |
+| File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, select mode helpers (`_enterLibSelectMode`, `_exitLibSelectMode`, `_libBulkDelete`) |
 | Global export | export-all modal, calls `/api/export/all` |
 | Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcCurve`, `pmcRecalc` |
 | Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
-| AI | `_initAiConfig`, `_llmStream`, AI evaluate panel in detail view, AI PMC commentary |
+| AI | `_initAiConfig`, `_llmStream`, `_renderMarkdown`, `_openAndStreamModal` (shared SSE modal helper), `openActAiModal`, `startPmcAi`, `startCalendarAi` |
 | Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |
-| Strava upload | `_stravaUploadSelected`, `stravaStartAuth`, `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
+| Strava upload | `_stravaCheckStatus`, `_stravaOpenUploadModal`, `_stravaStartUpload`, `_stravaFetchDiff`, `_stravaShowDiffView`, `_stravaConfirmDiff`, `_stravaUploadAllVisible`, `_stravaUploadSelected`, `stravaStartAuth`, `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
 | Boot | `DOMContentLoaded` wires everything up |
 
 ## z-index layers

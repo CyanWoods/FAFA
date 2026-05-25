@@ -6,6 +6,7 @@
   <title>FAFA Track Viewer</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
   <!-- DNS prefetch for tile servers -->
   <link rel="dns-prefetch" href="//a.basemaps.cartocdn.com">
   <link rel="dns-prefetch" href="//b.basemaps.cartocdn.com">
@@ -26,9 +27,13 @@
         <span class="sb-icon">◈</span>
         <span class="sb-label">骑行记录</span>
       </button>
-      <button class="sb-item" data-view="analytics" onclick="switchSidebarView('analytics')">
+      <button class="sb-item" data-view="pmc" onclick="switchSidebarView('pmc')">
         <span class="sb-icon">⬡</span>
-        <span class="sb-label">训练分析</span>
+        <span class="sb-label">体能管理</span>
+      </button>
+      <button class="sb-item" data-view="calendar" onclick="switchSidebarView('calendar')">
+        <span class="sb-icon">⊟</span>
+        <span class="sb-label">训练日历</span>
       </button>
       <button class="sb-item" data-view="files" onclick="switchSidebarView('files')">
         <span class="sb-icon">⊞</span>
@@ -100,20 +105,19 @@
     <div id="act-list-header">
       <span class="act-list-title">骑行记录</span>
       <div id="act-list-actions">
-        <button onclick="_enterSelectMode()">选择</button>
-        <button onclick="_actLoadAllVisible()">加载到地图</button>
-        <button onclick="switchSidebarView('map')">查看地图</button>
+        <button onclick="_stravaUploadAllVisible()">全部上传 Strava</button>
+        <button onclick="_actLoadAllVisible()">全部加载至地图</button>
+        <button id="act-mode-btn" onclick="_toggleSelectMode()">选择</button>
       </div>
     </div>
 
     <!-- 选择模式操作栏 -->
     <div id="act-select-bar" style="display:none">
       <span id="act-select-count">已选 0 项</span>
-      <button onclick="_actSelectAll()">全选</button>
-      <button onclick="_actBulkLoad()">加载到地图</button>
-      <button onclick="_stravaUploadSelected()">上传到 Strava</button>
+      <button id="act-select-all-btn" onclick="_actSelectAll()">全选</button>
+      <button onclick="_stravaUploadSelected()">上传 Strava</button>
+      <button onclick="_actBulkLoad()">加载至地图</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
-      <button onclick="_exitSelectMode()">取消</button>
     </div>
 
     <!-- 筛选栏 -->
@@ -162,14 +166,18 @@
           导入 FIT
           <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
         </label>
-        <button onclick="loadAllFromLibrary()">全部加载到地图</button>
-        <button onclick="refreshLibrary()">刷新</button>
         <button onclick="openSyncModal()">顽鹿同步</button>
-        <button class="danger-btn" onclick="deleteAllFromLibrary()">全部删除</button>
+        <button id="lib-select-btn" onclick="_enterLibSelectMode()">选择</button>
       </div>
     </div>
-    <div class="drawer-search" style="padding:12px 20px 0">
-      <input id="lib-search" type="text" placeholder="搜索文件名…" oninput="filterLibrary()">
+    <div id="lib-select-bar" style="display:none">
+      <span id="lib-select-count">已选 0 项</span>
+      <button id="lib-select-all-btn" onclick="_libSelectAll()">全选</button>
+      <button class="danger-btn" onclick="_libBulkDelete()">删除</button>
+      <button onclick="_exitLibSelectMode()">取消</button>
+    </div>
+    <div class="lib-search-bar">
+      <input type="text" id="lib-search" placeholder="搜索文件名…" oninput="filterLibrary()">
     </div>
     <div id="lib-filter"></div>
     <div id="lib-list"></div>
@@ -216,6 +224,14 @@
         <div class="modal-actions">
           <button class="modal-cancel" onclick="closeStravaModal()">取消</button>
           <button class="modal-export" onclick="stravaStartAuth()">授权 Strava</button>
+        </div>
+      </div>
+
+      <div id="strava-diff-view" style="display:none">
+        <div id="strava-diff-msg" class="sync-status-msg"></div>
+        <div class="modal-actions" style="margin-top:16px">
+          <button class="modal-cancel" onclick="closeStravaModal()">取消</button>
+          <button class="modal-export" id="strava-diff-confirm-btn" onclick="_stravaConfirmDiff()" disabled>开始上传</button>
         </div>
       </div>
 
@@ -317,12 +333,7 @@
   <!-- 界面三/五 合并：训练分析 -->
   <div id="analytics-view">
     <div id="analytics-topbar">
-      <button id="analytics-back-btn" onclick="closeAnalyticsView()">← 返回</button>
-
-      <div class="analytics-tabs">
-        <button class="analytics-tab active" data-tab="pmc"      onclick="switchAnalyticsTab('pmc')">体能管理</button>
-        <button class="analytics-tab"        data-tab="calendar" onclick="switchAnalyticsTab('calendar')">训练日历</button>
-      </div>
+      <span class="act-list-title" id="analytics-title"></span>
 
       <!-- PMC 专属控件 -->
       <div id="analytics-pmc-controls" class="analytics-ctx-controls">
@@ -343,13 +354,14 @@
           <button class="cal-nav-btn" onclick="calNavMonth(1)">›</button>
           <button class="cal-today-btn" onclick="calGoToday()">今天</button>
         </div>
+        <button class="cal-ai-period-btn" onclick="startCalendarAi('7d')">AI 一周建议</button>
+        <button class="cal-ai-period-btn" onclick="startCalendarAi('30d')">AI 月度建议</button>
       </div>
 
       <div style="flex:1"></div>
 
       <!-- PMC 右侧 -->
       <div id="analytics-pmc-right" class="analytics-ctx-right">
-        <span id="pmc-ai-model-tag"></span>
         <button class="pmc-ai-btn" onclick="startPmcAi()">AI 分析</button>
       </div>
 
@@ -389,17 +401,6 @@
         </div>
         <div id="pmc-curve-wrap"></div>
       </div>
-      <div id="pmc-ai-wrap">
-        <div class="pmc-ai-header">
-          <span class="pmc-ai-section-title">AI 体能评估</span>
-        </div>
-        <div id="pmc-ai-loading" style="display:none">
-          <div class="ai-spinner"></div>
-          <span>AI 正在分析训练状态…</span>
-        </div>
-        <div id="pmc-ai-placeholder">点击"AI 分析"获取个性化训练建议</div>
-        <div id="pmc-ai-result"></div>
-      </div>
     </div>
 
     <!-- 日历内容面板 -->
@@ -429,6 +430,25 @@
       <div class="modal-actions">
         <button class="modal-cancel" onclick="calCloseActivityModal()">关闭</button>
         <button class="modal-export" id="cal-modal-detail-btn">查看骑行详情</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 活动列表单条 AI 分析弹窗 -->
+  <div id="act-ai-modal" style="display:none">
+    <div id="act-ai-modal-overlay" onclick="closeActAiModal()"></div>
+    <div id="act-ai-modal-box">
+      <div id="act-ai-modal-header">
+        <span id="act-ai-modal-title"></span>
+        <button onclick="closeActAiModal()">✕</button>
+      </div>
+      <div id="act-ai-modal-summary"></div>
+      <div id="act-ai-modal-body">
+        <div id="act-ai-modal-loading" class="pmc-ai-loading-row" style="display:none">
+          <div class="ai-spinner"></div>
+          <span>AI 正在分析骑行数据…</span>
+        </div>
+        <div id="act-ai-modal-result" class="ai-result-body"></div>
       </div>
     </div>
   </div>

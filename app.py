@@ -6,6 +6,7 @@
 然后访问 http://localhost:5173
 """
 
+import bisect
 import io
 import json
 import logging
@@ -192,17 +193,22 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
     try:
         time_stats_list = [asdict(s) for s in compute_time_stats(fit)]
         if fit.records:
-            ts = fit.records[0].timestamp
+            ts_utc = fit.records[0].timestamp  # always UTC per FIT spec
+            start_time_utc = ts_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
             if fit.utc_offset_s is not None:
                 tz = timezone(timedelta(seconds=fit.utc_offset_s))
-                ts = ts.astimezone(tz)
-            time_stats_start = ts.strftime("%Y-%m-%dT%H:%M:%S")
+                ts_local = ts_utc.astimezone(tz)
+            else:
+                ts_local = ts_utc
+            time_stats_start = ts_local.strftime("%Y-%m-%dT%H:%M:%S")
         else:
             time_stats_start = None
+            start_time_utc   = None
     except Exception as e:
         logging.warning("计算 time_stats 失败 (%s): %s", filename, e)
         time_stats_list  = []
         time_stats_start = None
+        start_time_utc   = None
 
     try:
         peak_power = _peak_powers(fit.records)
@@ -223,6 +229,7 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
         dist_stats=dist_stats_list,
         time_stats=time_stats_list,
         time_stats_start=time_stats_start,
+        start_time_utc=start_time_utc,
         peak_power=peak_power,
         zone_time_s=zone_time,
     )
@@ -951,6 +958,84 @@ def ai_pmc():
     return _llm_stream(cfg, prompt)
 
 
+def _build_calendar_prompt(data: dict) -> str:
+    period       = data.get("period", "30d")
+    current_date = data.get("current_date", "")
+    acts         = data.get("activities", [])
+    period_label = "过去7天" if period == "7d" else "过去30天"
+
+    def fmt(v, unit="", digits=1):
+        return "无数据" if v is None else f"{round(v, digits)}{unit}"
+
+    total_dist = sum((a.get("dist_km") or 0) for a in acts)
+    total_dur  = sum((a.get("dur_min") or 0) for a in acts)
+    total_elev = sum((a.get("elevation_m") or 0) for a in acts)
+
+    lines = [
+        f"你是一名专业公路自行车训练教练，请根据用户{period_label}的骑行数据，给出个性化的训练建议，用中文输出。",
+        "",
+        "## 训练概况",
+        f"- 当前日期：{current_date}",
+        f"- 统计范围：{period_label}",
+        f"- 骑行次数：{len(acts)} 次",
+        f"- 总距离：{total_dist:.1f} km",
+        f"- 总时长：{total_dur:.0f} 分钟",
+        f"- 总爬升：{total_elev:.0f} m",
+    ]
+
+    if acts:
+        lines += [
+            "",
+            "## 骑行记录",
+            "日期 | 距离 | 时长 | 均心率 | 均功率 | 爬升",
+            "-----|------|------|-------|-------|------",
+        ]
+        def _rv(v, f="{:.0f}", fb="—"):
+            return fb if v is None else f.format(v)
+        for a in sorted(acts, key=lambda x: x.get("date", "")):
+            lines.append(
+                f"{a.get('date','?')} | {_rv(a.get('dist_km'), '{:.1f}')} km | "
+                f"{_rv(a.get('dur_min'))} min | {_rv(a.get('avg_hr'))} bpm | "
+                f"{_rv(a.get('avg_power'))} W | {_rv(a.get('elevation_m'))} m"
+            )
+    else:
+        lines.append("（该时间段内无骑行记录）")
+
+    lines += ["", "## 请输出以下分析（Markdown格式，简洁专业）："]
+
+    if period == "7d":
+        lines += [
+            "### 1. 本周训练总结",
+            "评估本周训练量、强度、频率是否合理。",
+            "### 2. 恢复状态",
+            "根据本周负荷判断疲劳程度，是否需要安排恢复日。",
+            "### 3. 下周训练建议",
+            "给出具体的下周训练安排（哪几天训练、休息日、重点训练类型）。",
+        ]
+    else:
+        lines += [
+            "### 1. 过去一个月训练回顾",
+            "总结训练量、强度分布、训练规律性。",
+            "### 2. 进步与不足",
+            "从数据中找出亮点和需要改进的地方。",
+            "### 3. 接下来四周训练建议",
+            "给出分周的具体训练建议（量、强度、重点训练类型）。",
+            "### 4. 短期目标",
+            "基于当前水平，设定合理可达的月度目标。",
+        ]
+    return "\n".join(lines)
+
+
+@app.route("/api/ai/calendar", methods=["POST"])
+def ai_calendar():
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑 ai_config.json"), 503
+    data   = request.get_json(silent=True) or {}
+    prompt = _build_calendar_prompt(data)
+    return _llm_stream(cfg, prompt)
+
+
 # ── Strava ───────────────────────────────────────────────────────────────────
 
 _strava_upload: dict = {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}
@@ -1007,6 +1092,66 @@ def strava_status():
         has_tokens=bool(cfg["refresh_token"]),
         athlete_name=cfg["athlete_name"],
         athlete_id=cfg["athlete_id"],
+    )
+
+
+@app.route("/api/strava/diff")
+def strava_diff():
+    """Compare local FIT files against Strava activities by start time (±60 s).
+
+    Returns {to_upload, local_count, strava_count, match_count}.
+    """
+    try:
+        token = _strava.get_access_token()
+    except Exception as e:
+        return jsonify(error=str(e)), 400
+
+    try:
+        strava_acts = _strava.fetch_all_activities(token)
+    except Exception as e:
+        return jsonify(error=f"获取 Strava 活动列表失败：{e}"), 502
+
+    # Build two lookup structures: exact filename set + sorted start times fallback.
+    strava_external_ids = {a["external_id"] for a in strava_acts if a["external_id"]}
+    strava_times = sorted(a["start_unix"] for a in strava_acts)
+
+    paths = list(INPUT_DIR.glob("*.fit"))
+    to_upload: list[str] = []
+    match_count = 0
+
+    for path in paths:
+        try:
+            # Primary match: external_id == filename (set when we uploaded via this app).
+            if path.name in strava_external_ids:
+                match_count += 1
+                continue
+
+            # Fallback: start time ±60 s (covers activities uploaded elsewhere).
+            mtime = path.stat().st_mtime
+            cached = _cache_get(str(path), mtime) or _disk_cache_load(str(path), mtime)
+            ts_utc = (cached or {}).get("start_time_utc")
+            if not ts_utc:
+                fit = parse_fit(str(path))
+                if fit.records and fit.records[0].timestamp:
+                    ts_utc = fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if not ts_utc:
+                to_upload.append(path.name)
+                continue
+            local_unix = int(datetime.fromisoformat(ts_utc.replace("Z", "+00:00")).timestamp())
+            lo = bisect.bisect_left(strava_times, local_unix - 60)
+            hi = bisect.bisect_right(strava_times, local_unix + 60)
+            if lo < hi:
+                match_count += 1
+            else:
+                to_upload.append(path.name)
+        except Exception as e:
+            logging.warning("strava_diff: %s: %s", path.name, e)
+
+    return jsonify(
+        to_upload=sorted(to_upload),
+        local_count=len(paths),
+        strava_count=len(strava_acts),
+        match_count=match_count,
     )
 
 
