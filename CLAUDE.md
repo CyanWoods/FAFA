@@ -18,7 +18,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Five views:**
 
-- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "地图" button — clicking "地图" clears all current tracks, loads only that file into the map, and switches to map view. The header also has a "打开地图" button that switches to map view without loading any file. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
 - **Map view** (`#map`): Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active.
 
@@ -99,7 +99,7 @@ Key sections in order:
 | Track management | `addTrack`, `removeTrack`, `clearAllTracks`, `setTrackMode` |
 | Coord write-back | `applyCoordTransform` (library tracks only, calls `/api/fix_coords`) |
 | Stats helpers | `_fmtDur`, `_statChips`, `_downloadText`, `_toCSV`, `exportTrackData` |
-| Track list UI | `addTrackRow`, `syncBadge`, `syncEmptyHint` |
+| Track list UI | `addTrackRow`, `syncBadge`, `syncEmptyHint`, `_sortTrackList` (reverse-chronological), `_trackSortKey`, `_trackDateLabel` |
 | Flash effect | `startFlash`, `stopFlash` (polyline opacity toggle on panel hover) |
 | Upload / drag-drop | `uploadFile`, `setupDragDrop` |
 | Toast | `toast` |

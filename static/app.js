@@ -452,11 +452,34 @@ function _buildActivityCard(act) {
     </div>
     <div class="act-card-actions">
       <button class="act-card-ai-btn">AI 分析</button>
+      <button class="act-card-ai-btn act-card-map-btn">地图</button>
     </div>
   `;
   card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
     e.stopPropagation();
     openActAiModal(act);
+  });
+  card.querySelector('.act-card-map-btn').addEventListener('click', async e => {
+    e.stopPropagation();
+    const mapBtn = e.currentTarget;
+    if (mapBtn.disabled) return;
+    mapBtn.disabled = true;
+    clearAllTracks();
+    switchSidebarView('map');
+    try {
+      const res = await fetch('/api/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: act.filename }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const data = await res.json();
+      addTrack(data);
+    } catch (err) {
+      toast('加载失败：' + err.message);
+    } finally {
+      mapBtn.disabled = false;
+    }
   });
   card.addEventListener('click', () => {
     if (_actSelectMode) {
@@ -799,7 +822,7 @@ function _sortTrackList() {
     const ta = tracks.get(+a.id.slice(3));
     const tb = tracks.get(+b.id.slice(3));
     if (!ta || !tb) return 0;
-    return _trackSortKey(ta).localeCompare(_trackSortKey(tb));
+    return _trackSortKey(tb).localeCompare(_trackSortKey(ta));
   });
   items.forEach(el => list.appendChild(el));
 }
