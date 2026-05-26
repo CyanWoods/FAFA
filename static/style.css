@@ -2962,7 +2962,7 @@ body {
 .light-theme .leaflet-control-zoom a:hover { background: #fff !important; color: #111 !important; }
 
 .light-theme #analytics-view { border: none; }
-.light-theme #analytics-header { border-bottom-color: rgba(0,0,0,0.15); background: #f2f2f6; }
+.light-theme #analytics-topbar { border-bottom-color: rgba(0,0,0,0.15); background: #f2f2f6; }
 .light-theme #analytics-title { color: #111; }
 .light-theme #analytics-close-btn { color: #444; border-color: rgba(0,0,0,0.20); }
 .light-theme #analytics-close-btn:hover { background: rgba(0,0,0,0.07); color: #111; }
