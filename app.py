@@ -485,6 +485,41 @@ def load_file():
     return jsonify(**data, source="library")
 
 
+@app.route("/api/records/<path:filename>")
+def get_records(filename):
+    """Return raw FIT record data for detail-view charting (real-time x-axis)."""
+    if not filename.lower().endswith(".fit"):
+        return jsonify(error="invalid filename"), 400
+    path = (INPUT_DIR / filename).resolve()
+    if path.parent != INPUT_DIR.resolve():
+        return jsonify(error="forbidden"), 403
+    if not path.exists():
+        return jsonify(error="not found"), 404
+
+    try:
+        fit = parse_fit(str(path))
+    except Exception as e:
+        return jsonify(error=f"解析失败: {e}"), 422
+
+    utc_offset_s = fit.utc_offset_s or 0
+    tz = timezone(timedelta(seconds=utc_offset_s))
+
+    out = []
+    for r in fit.records:
+        ts_local = r.timestamp.astimezone(tz)
+        out.append({
+            "t":         ts_local.strftime("%H:%M:%S"),
+            "speed_kmh": round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
+            "hr":        r.heart_rate,
+            "power":     r.power,
+            "cadence":   r.cadence,
+            "altitude":  round(r.altitude, 1) if r.altitude is not None else None,
+            "grade":     round(r.grade, 2) if r.grade is not None else None,
+        })
+
+    return jsonify(records=out)
+
+
 # ── 路由：坐标写回 ─────────────────────────────────────────────────────────────
 @app.route("/api/fix_coords", methods=["POST"])
 def fix_coords_api():
@@ -751,6 +786,43 @@ def ai_config_status():
     if cfg:
         return jsonify(configured=True, model=cfg.get("model", ""))
     return jsonify(configured=False, model="")
+
+
+@app.route("/api/config/raw", methods=["GET"])
+def get_config_raw():
+    if not AI_CONFIG_FILE.exists():
+        template = PROJECT_ROOT / "config.template.json"
+        if template.exists():
+            with open(template, encoding="utf-8") as f:
+                data = json.load(f)
+            data.pop("_comment", None)
+        else:
+            data = {}
+        return jsonify(data)
+    with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    data.pop("_comment", None)
+    return jsonify(data)
+
+
+@app.route("/api/config/raw", methods=["POST"])
+def save_config_raw():
+    data = request.get_json(force=True, silent=True)
+    if data is None:
+        return jsonify(error="invalid JSON"), 400
+    existing: dict = {}
+    if AI_CONFIG_FILE.exists():
+        try:
+            with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+    _READONLY_KEYS = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
+    filtered = {k: v for k, v in data.items() if k not in _READONLY_KEYS}
+    existing.update(filtered)
+    with open(AI_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
+    return jsonify(ok=True)
 
 
 def _llm_stream(cfg: dict, prompt: str):

@@ -44,10 +44,14 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files when: C506 with software version ≥ 19, or C706 with software version ≥ 20 (new Magene firmware that stores GCJ-02).
 
-**AI features** (`ai_config.json`): Template at `ai_config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
+**AI features** (`ai_config.json`): Template at `config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
 - `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC training-state commentary.
 - `/api/ai/calendar` (POST `{period, current_date, activities}`) — streams weekly or monthly training suggestions.
+
+**Config API** (`/api/config/raw`): GET returns current `ai_config.json` (or template defaults if file absent); POST merges editable fields into `ai_config.json` (read-only Strava OAuth tokens are filtered out). Used by the settings modal and PMC parameter persistence (`pmc_ftp`, `pmc_max_hr`, etc.).
+
+**Records API** (`/api/records/<filename>`): Returns per-second FIT record data (`t`, `speed_kmh`, `hr`, `power`, `cadence`, `altitude`, `grade`) with timestamps converted to local clock time via `fit.utc_offset_s`. Used by the detail view for real-time x-axis charts (falls back to `timeStats` for uploaded-only tracks).
 
 **Strava diff** (`/api/strava/diff`): Compares all local `.fit` files against the user's Strava activity list. Match strategy: (1) `external_id == filename` (set at upload time — exact, no FIT parse needed); (2) fallback ±60 s start-time match using `start_time_utc` from cache or a direct `parse_fit()` read. Returns `{to_upload, local_count, strava_count, match_count}`. Frontend `_stravaUploadAllVisible` calls this first, shows a confirm dialog with counts, then uploads only the diff set.
 

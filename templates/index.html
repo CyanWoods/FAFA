@@ -28,20 +28,30 @@
         <span class="sb-label">骑行记录</span>
       </button>
       <button class="sb-item" data-view="map" onclick="switchSidebarView('map')">
-        <span class="sb-icon">◉</span>
+        <span class="sb-icon">⤳</span>
         <span class="sb-label">骑行轨迹 <span id="track-badge" class="sb-badge"></span></span>
       </button>
       <button class="sb-item" data-view="pmc" onclick="switchSidebarView('pmc')">
-        <span class="sb-icon">⬡</span>
+        <span class="sb-icon sb-icon--lg">⬡</span>
         <span class="sb-label">体能管理</span>
       </button>
       <button class="sb-item" data-view="calendar" onclick="switchSidebarView('calendar')">
-        <span class="sb-icon">⊟</span>
+        <span class="sb-icon sb-icon--lg">⊟</span>
         <span class="sb-label">训练日历</span>
       </button>
       <button class="sb-item" data-view="files" onclick="switchSidebarView('files')">
-        <span class="sb-icon">⊞</span>
+        <span class="sb-icon sb-icon--lg">⊞</span>
         <span class="sb-label">文件管理 <span id="lib-count" class="sb-badge"></span></span>
+      </button>
+    </div>
+    <div class="sb-bottom">
+      <button class="sb-bottom-btn" id="theme-toggle-btn" onclick="toggleTheme()">
+        <span class="sb-bottom-icon" id="theme-toggle-icon">◑</span>
+        <span class="sb-bottom-label" id="theme-toggle-label">深色</span>
+      </button>
+      <button class="sb-bottom-btn" onclick="openSettingsModal()">
+        <span class="sb-bottom-icon sb-bottom-icon--lg">⚙</span>
+        <span class="sb-bottom-label">设置</span>
       </button>
     </div>
   </nav>
@@ -52,8 +62,8 @@
       <span class="act-list-title">骑行轨迹</span>
       <div id="map-actions">
         <select id="tile-select">
-          <option value="dark" selected>深色地图</option>
-          <option value="dark-nolabels">深色路网</option>
+          <option value="dark">深色地图</option>
+          <option value="dark-nolabels" selected>深色路网</option>
           <option value="light">浅色地图</option>
           <option value="light-nolabels">浅色路网</option>
           <option value="amap">高德地图</option>
@@ -79,7 +89,7 @@
         <span class="panel-title">已加载路径</span>
         <div class="panel-header-right">
           <span id="panel-track-count">0</span>
-          <button id="panel-toggle" title="展开/收起">▼</button>
+          <button id="panel-toggle" title="展开/收起">▲</button>
         </div>
       </div>
       <div id="panel-body">
@@ -113,7 +123,7 @@
       <span id="act-select-count">已选 0 项</span>
       <button id="act-select-all-btn" onclick="_actSelectAll()">全选</button>
       <button onclick="_stravaUploadSelected()">上传 Strava</button>
-      <button onclick="_actBulkLoad()">加载至地图</button>
+      <button onclick="_actBulkLoad()">加载轨迹</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
     </div>
 
@@ -164,14 +174,13 @@
           <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
         </label>
         <button onclick="openSyncModal()">顽鹿同步</button>
-        <button id="lib-select-btn" onclick="_enterLibSelectMode()">选择</button>
+        <button id="lib-select-btn" onclick="_toggleLibSelectMode()">选择</button>
       </div>
     </div>
     <div id="lib-select-bar" style="display:none">
       <span id="lib-select-count">已选 0 项</span>
       <button id="lib-select-all-btn" onclick="_libSelectAll()">全选</button>
       <button class="danger-btn" onclick="_libBulkDelete()">删除</button>
-      <button onclick="_exitLibSelectMode()">取消</button>
     </div>
     <div class="lib-search-bar">
       <input type="text" id="lib-search" placeholder="搜索文件名…" oninput="filterLibrary()">
@@ -253,8 +262,8 @@
       <div class="modal-section">
         <div class="modal-label">地图背景</div>
         <div class="opt-group" id="ex-tile-group">
-          <button class="opt-btn active" data-val="dark">深色地图</button>
-          <button class="opt-btn" data-val="dark-nolabels">深色路网</button>
+          <button class="opt-btn" data-val="dark">深色地图</button>
+          <button class="opt-btn active" data-val="dark-nolabels">深色路网</button>
           <button class="opt-btn" data-val="light">浅色地图</button>
           <button class="opt-btn" data-val="light-nolabels">浅色路网</button>
         </div>
@@ -298,30 +307,34 @@
     <div id="detail-topbar">
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
+      <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
       <div id="detail-mode-group">
-        <button class="det-mode-btn" data-mode="dist">按距离</button>
-        <button class="det-mode-btn active" data-mode="time">按时间</button>
-        <button class="det-mode-btn" data-mode="route">路线图</button>
+        <button class="det-mode-btn active" id="detail-data-btn">数据详情</button>
+        <button class="det-mode-btn" id="detail-route-btn">路线热图</button>
       </div>
       <button class="det-export-btn" onclick="exportDetailData('json')">导出 JSON</button>
       <button class="det-export-btn" onclick="exportDetailData('csv')">导出 CSV</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
     <div id="detail-summary-row"></div>
-    <div id="detail-metric-tabs-wrap">
-      <div id="detail-metric-tabs"></div>
-    </div>
     <div id="detail-chart-section">
-      <div id="detail-chart-wrap"><canvas id="detail-canvas"></canvas></div>
+      <div id="detail-charts-wrap"></div>
     </div>
     <div id="detail-table-section">
+      <div id="detail-table-handle"><div id="detail-table-handle-bar"></div></div>
       <div id="detail-table-wrap"></div>
     </div>
     <div id="detail-route-section" style="display:none">
+      <div id="detail-route-metric-bar"></div>
       <div id="detail-route-map"></div>
+      <div id="detail-route-tooltip" style="display:none"></div>
       <div id="detail-route-legend">
         <span id="detail-route-legend-low"></span>
-        <div id="detail-route-legend-bar"></div>
+        <div id="detail-route-legend-bar-wrap">
+          <div id="detail-route-legend-bar"></div>
+          <div id="detail-route-legend-marker" style="display:none"></div>
+          <div id="detail-route-legend-ftp-marker" style="display:none"></div>
+        </div>
         <span id="detail-route-legend-high"></span>
       </div>
     </div>
@@ -465,6 +478,99 @@
         <span>AI 正在分析骑行数据…</span>
       </div>
       <div id="ai-result"></div>
+    </div>
+  </div>
+
+  <!-- ── 设置弹窗 ───────────────────────────────────────────────────────── -->
+  <div id="settings-modal" style="display:none">
+    <div class="modal-overlay" onclick="closeSettingsModal()"></div>
+    <div class="modal-box settings-box">
+      <div class="modal-title">设置</div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">PMC 参数</div>
+        <div class="settings-row">
+          <label class="settings-label">FTP</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-pmc-ftp" type="number" min="50" max="600" placeholder="—">
+            <span class="settings-unit">W</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">静息心率</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-pmc-rest-hr" type="number" min="30" max="100" placeholder="50">
+            <span class="settings-unit">bpm</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">最大心率</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-pmc-max-hr" type="number" min="100" max="220" placeholder="190">
+            <span class="settings-unit">bpm</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">体重</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-pmc-weight" type="number" min="30" max="150" placeholder="—">
+            <span class="settings-unit">kg</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">AI 配置</div>
+        <div class="settings-row">
+          <label class="settings-label">API 地址</label>
+          <input id="cfg-api-base" type="text" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">API 密钥</label>
+          <input id="cfg-api-key" type="password" placeholder="sk-…">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">模型</label>
+          <input id="cfg-model" type="text" placeholder="gpt-4o-mini">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">最大 Token</label>
+          <input id="cfg-max-tokens" type="number" min="256" max="16000" placeholder="2500">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">顽鹿同步</div>
+        <div class="settings-row">
+          <label class="settings-label">用户名</label>
+          <input id="cfg-onelap-user" type="text" placeholder="">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">密码</label>
+          <input id="cfg-onelap-pass" type="password" placeholder="">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Strava</div>
+        <div class="settings-row">
+          <label class="settings-label">Client ID</label>
+          <input id="cfg-strava-id" type="text" placeholder="">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">Client Secret</label>
+          <input id="cfg-strava-secret" type="password" placeholder="">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">回调端口</label>
+          <input id="cfg-strava-port" type="number" min="1024" max="65535" placeholder="5173">
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="closeSettingsModal()">取消</button>
+        <button class="modal-export" onclick="saveSettingsModal()">保存</button>
+      </div>
     </div>
   </div>
 

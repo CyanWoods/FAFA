@@ -36,13 +36,26 @@ const PALETTE = [
 
 /* ── Detail view constants ───────────────────────────────────────────────── */
 const METRICS = [
-  { key: 'speed',    label: '速度', field: 'avg_speed_kmh',  unit: 'km/h', color: '#2e86de' },
-  { key: 'hr',       label: '心率', field: 'avg_hr',         unit: 'bpm',  color: '#e74c3c' },
-  { key: 'power',    label: '功率', field: 'avg_power',      unit: 'W',    color: '#f39c12' },
-  { key: 'cadence',  label: '踏频', field: 'avg_cadence',    unit: 'rpm',  color: '#9b59b6' },
-  { key: 'altitude', label: '海拔', field: 'end_alt_m',      unit: 'm',    color: '#2ecc71' },
-  { key: 'grade',    label: '坡度', field: 'avg_grade_pct',  unit: '%',    color: '#1abc9c' },
+  { key: 'speed',    label: '速度', field: 'avg_speed_kmh',  rField: 'speed_kmh', unit: 'km/h', color: '#2e86de' },
+  { key: 'hr',       label: '心率', field: 'avg_hr',         rField: 'hr',        unit: 'bpm',  color: '#e74c3c' },
+  { key: 'power',    label: '功率', field: 'avg_power',      rField: 'power',     unit: 'W',    color: '#f39c12' },
+  { key: 'cadence',  label: '踏频', field: 'avg_cadence',    rField: 'cadence',   unit: 'rpm',  color: '#9b59b6' },
+  { key: 'altitude', label: '海拔', field: 'end_alt_m',      rField: 'altitude',  unit: 'm',    color: '#2ecc71' },
+  { key: 'grade',    label: '坡度', field: 'avg_grade_pct',  rField: 'grade',     unit: '%',    color: '#1abc9c' },
 ];
+
+const ROUTE_COLOR_SCALE = {
+  speed:   { min: 0,   max: 50  },
+  cadence: { min: 0,   max: 130 },
+  power:   { coggan: true },
+  grade:   { min: -8,  max: 8, diverging: true },
+  hr:      { zone: true },
+};
+
+// Index 0=below Z1(gray), 1=Z1(blue)…5=Z5(red)
+const HR_ZONE_COLORS    = ['#888', '#3a86ff', '#27ae60', '#f1c40f', '#e67e22', '#e74c3c'];
+// Coggan 7-zone: Z1-Z7 = gray/blue/green/yellow/orange/red/purple
+const POWER_ZONE_COLORS = ['#888', '#3a86ff', '#27ae60', '#f1c40f', '#e67e22', '#e74c3c', '#9b59b6'];
 
 const TABLE_COLS = [
   { key: 'duration_s',       label: '用时',     fmt: v => _fmtDur(v) },
@@ -130,15 +143,19 @@ function decryptCoords(raw) { return raw.map(([a, b]) => gcj02ToWgs84(a, b)); }
 let map, tileLayer;
 const tracks = new Map();
 let trackCounter = 0;
-const exportState = { tile: 'dark', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K' };
-let panelExpanded = true;
+const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K' };
+let panelExpanded = false;
 let panelExpandedHeight = 320;
 let detailTrackId = null;
-let detailMode = 'time';
+let detailRouteActive = false;
 let detailMetric = 'speed';
-let detailChart = null;
+let detailCharts = [];
 let detailRouteMap = null;
+let detailRouteTileLayer = null;
 let detailRouteLayers = [];
+let _detailZoomDrag = null;
+let _detailZoomActive = false;
+let _detailZoomHandlersInited = false;
 let aiTrackId = null;
 let _aiModel  = '';
 let _analyticsOpen = false;
@@ -146,6 +163,7 @@ let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 0; // 0 = 全部数据
+let _pmcConfig = { ftp: 200, maxHr: 190 };
 
 let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
@@ -161,14 +179,11 @@ function switchSidebarView(name) {
   // Exit select mode when leaving activities view
   if (_actSelectMode) _exitSelectMode();
 
-  // Hide all main overlay views first (closeAnalyticsView reads _sidebarView,
-  // so update _sidebarView AFTER the close calls to avoid guard mis-firing)
+  _sidebarView = name;
+
   document.getElementById('activities-view').classList.remove('active');
   document.getElementById('files-view').classList.remove('active');
-  closeAnalyticsView();
-
-  // Now commit the new view
-  _sidebarView = name;
+  closeAnalyticsView(false);
 
   // Update sidebar button active state
   document.querySelectorAll('.sb-item').forEach(btn => {
@@ -262,7 +277,7 @@ function _enterSelectMode() {
   _actSelected.clear();
   document.getElementById('activities-view').classList.add('select-mode');
   document.getElementById('act-select-bar').style.display = '';
-  document.getElementById('act-mode-btn').textContent = '取消选择';
+  document.getElementById('act-mode-btn').textContent = '取消';
   _updateSelectBar();
 }
 
@@ -534,7 +549,7 @@ async function _activityCardClick(act, cardEl) {
 /* ── Map init ────────────────────────────────────────────────────────────── */
 function initMap() {
   map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
-  setTiles('dark');
+  setTiles('dark-nolabels');
   setTimeout(() => map.invalidateSize(), 200);
 }
 
@@ -961,6 +976,55 @@ function initPanelResize() {
   document.addEventListener('touchend', endDrag);
 }
 
+/* ── Detail table resize ─────────────────────────────────────────────────── */
+function initDetailTableResize() {
+  const section = document.getElementById('detail-table-section');
+  const handle  = document.getElementById('detail-table-handle');
+  const DEFAULT_H = 220, MIN_H = 16;
+  let dragging = false, startY = 0, startH = 0;
+
+  function startDrag(clientY) {
+    dragging = true;
+    startY   = clientY;
+    startH   = section.getBoundingClientRect().height;
+    document.body.style.cursor     = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function contentMaxH() {
+    const wrap   = document.getElementById('detail-table-wrap');
+    const handle = document.getElementById('detail-table-handle');
+    return (wrap ? wrap.scrollHeight : 0) + (handle ? handle.getBoundingClientRect().height : 0);
+  }
+
+  function doDrag(clientY) {
+    if (!dragging) return;
+    const maxH = Math.max(DEFAULT_H, contentMaxH());
+    const newH = Math.max(MIN_H, Math.min(maxH, startH + (startY - clientY)));
+    section.style.height = newH + 'px';
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+  }
+
+  handle.addEventListener('mousedown',  e => { startDrag(e.clientY); e.preventDefault(); });
+  document.addEventListener('mousemove', e => doDrag(e.clientY));
+  document.addEventListener('mouseup',   endDrag);
+
+  handle.addEventListener('touchstart', e => { startDrag(e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if (dragging) { doDrag(e.touches[0].clientY); e.preventDefault(); } }, { passive: false });
+  document.addEventListener('touchend',  endDrag);
+
+  handle.addEventListener('dblclick', () => {
+    const h = section.getBoundingClientRect().height;
+    section.style.height = (h > MIN_H + 10 ? MIN_H : DEFAULT_H) + 'px';
+  });
+}
+
 /* ── Zoom slider ─────────────────────────────────────────────────────────── */
 function initZoomSlider() {
   const thumb  = document.getElementById('zoom-thumb');
@@ -1298,17 +1362,14 @@ async function doExport() {
 }
 
 /* ── Detail view (界面二) ────────────────────────────────────────────────── */
-function openDetailView(id) {
+async function openDetailView(id) {
   const t = tracks.get(id);
-  if (!t || (!t.distStats?.length && !t.timeStats?.length)) {
-    toast('该文件没有可用的分段数据');
-    return;
-  }
+  if (!t) return;
   stopFlash(id);
   detailTrackId = id;
-  detailMode = 'time';
+  detailRouteActive = false;
 
-  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; }
+  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
   document.getElementById('detail-chart-section').style.display = '';
   document.getElementById('detail-table-section').style.display = '';
@@ -1318,19 +1379,34 @@ function openDetailView(id) {
   document.getElementById('detail-view').classList.add('active');
 
   _renderDetailSummary(t.summary);
-  _buildDetailMetricTabs(t);
-  _setupDetailModeButtons();
-  _renderDetailChart();
+  _setupDetailRouteButton();
+
+  document.getElementById('detail-charts-wrap').innerHTML =
+    '<div class="detail-charts-loading">加载数据中…</div>';
+
+  let records = null;
+  if (t.source === 'library') {
+    try {
+      const resp = await fetch('/api/records/' + encodeURIComponent(t.name));
+      if (resp.ok) records = (await resp.json()).records;
+    } catch (_) {}
+  }
+
+  _renderDetailCharts(records, t.timeStats);
   _renderDetailTable();
 }
 
 function closeDetailView() {
   document.getElementById('detail-view').classList.remove('active');
-  if (detailChart) { detailChart.destroy(); detailChart = null; }
-  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; }
+  for (const c of detailCharts) c.destroy();
+  detailCharts = [];
+  _detailZoomDrag = null;
+  _detailZoomActive = false;
+  const resetBtn = document.getElementById('detail-zoom-reset-btn');
+  if (resetBtn) resetBtn.style.display = 'none';
+  if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
   detailTrackId = null;
-  // Return to activities view if that's where we came from
   if (_sidebarView === 'activities') {
     document.getElementById('activities-view').classList.add('active');
   }
@@ -1342,160 +1418,275 @@ function _renderDetailSummary(summary) {
     chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
 }
 
-function _buildDetailMetricTabs(track) {
-  const probe = track.distStats.length ? track.distStats : track.timeStats;
+function _setupDetailRouteButton() {
+  const dataBtn  = document.getElementById('detail-data-btn');
+  const routeBtn = document.getElementById('detail-route-btn');
+  if (!dataBtn || !routeBtn) return;
+
+  dataBtn.classList.add('active');
+  routeBtn.classList.remove('active');
+
+  dataBtn.onclick = () => {
+    if (detailRouteActive) {
+      detailRouteActive = false;
+      dataBtn.classList.add('active');
+      routeBtn.classList.remove('active');
+      document.getElementById('detail-chart-section').style.display = '';
+      document.getElementById('detail-table-section').style.display = '';
+      document.getElementById('detail-route-section').style.display = 'none';
+    }
+  };
+
+  routeBtn.onclick = () => {
+    if (!detailRouteActive) {
+      detailRouteActive = true;
+      routeBtn.classList.add('active');
+      dataBtn.classList.remove('active');
+      document.getElementById('detail-chart-section').style.display = 'none';
+      document.getElementById('detail-table-section').style.display = 'none';
+      document.getElementById('detail-route-section').style.display = 'flex';
+      _buildRouteMetricBar();
+      _renderDetailRoute();
+    }
+  };
+}
+
+function _buildRouteMetricBar() {
+  const t = tracks.get(detailTrackId);
+  if (!t) return;
+  const bar = document.getElementById('detail-route-metric-bar');
+  if (!bar) return;
+  const probe = t.distStats.length ? t.distStats : t.kmStats;
   const available = METRICS.filter(m => probe.some(s => s[m.field] != null));
-  if (available.length && !available.find(m => m.key === detailMetric)) {
-    detailMetric = available[0].key;
-  }
-  const container = document.getElementById('detail-metric-tabs');
-  container.innerHTML = '';
+  if (!available.find(m => m.key === detailMetric)) detailMetric = available[0]?.key || 'speed';
+  bar.innerHTML = '';
   for (const m of available) {
     const btn = document.createElement('button');
-    btn.className = 'det-metric-tab' + (m.key === detailMetric ? ' active' : '');
+    btn.className = 'det-route-metric-btn' + (m.key === detailMetric ? ' active' : '');
     btn.textContent = m.label;
     btn.dataset.key = m.key;
     btn.onclick = () => {
       detailMetric = m.key;
-      container.querySelectorAll('.det-metric-tab').forEach(b =>
+      bar.querySelectorAll('.det-route-metric-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.key === m.key));
-      if (detailMode === 'route') {
-        _renderDetailRoute();
-      } else {
-        _renderDetailChart();
-      }
+      _renderDetailRoute();
     };
-    container.appendChild(btn);
+    bar.appendChild(btn);
   }
 }
 
-function _setupDetailModeButtons() {
-  document.querySelectorAll('.det-mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === detailMode);
-    btn.onclick = () => {
-      detailMode = btn.dataset.mode;
-      document.querySelectorAll('.det-mode-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.mode === detailMode));
-      if (detailMode === 'route') {
-        document.getElementById('detail-chart-section').style.display = 'none';
-        document.getElementById('detail-table-section').style.display = 'none';
-        document.getElementById('detail-route-section').style.display = 'flex';
-        _renderDetailRoute();
-      } else {
-        document.getElementById('detail-chart-section').style.display = '';
-        document.getElementById('detail-table-section').style.display = '';
-        document.getElementById('detail-route-section').style.display = 'none';
-        _renderDetailChart();
-        _renderDetailTable();
-      }
-    };
-  });
-}
-
-function _getDetailStats() {
-  const t = tracks.get(detailTrackId);
-  return detailMode === 'dist' ? t.distStats : t.timeStats;
-}
-
-function _getDetailTableStats() {
-  const t = tracks.get(detailTrackId);
-  return detailMode === 'dist' ? t.kmStats : t.timeStats;
-}
-
-function _getDetailXLabels(stats) {
-  if (detailMode === 'dist') {
-    // chart: 100m intervals
-    return stats.map((_, i) => ((i + 1) * 0.1).toFixed(1) + ' km');
+function _resetDetailZoom() {
+  for (const c of detailCharts) {
+    delete c.options.scales.x.min;
+    delete c.options.scales.x.max;
+    c.update('none');
   }
-  // time mode: real clock time labels, one per minute
-  const t = tracks.get(detailTrackId);
-  const t0 = t?.timeStatsStart ? new Date(t.timeStatsStart) : null;
-  return stats.map((_, i) => {
-    if (!t0) return (i + 1) + ' min';
-    const d = new Date(t0.getTime() + i * 60000);
-    const hh = d.getHours().toString().padStart(2, '0');
-    const mm = d.getMinutes().toString().padStart(2, '0');
-    return hh + ':' + mm;
+  _detailZoomActive = false;
+  const btn = document.getElementById('detail-zoom-reset-btn');
+  if (btn) btn.style.display = 'none';
+}
+
+function _applyDetailZoom(minPx, maxPx, sourceChart) {
+  const labels = sourceChart.data.labels;
+  if (!labels || labels.length < 2) return;
+  const xScale = sourceChart.scales.x;
+  let minI = Math.round(xScale.getValueForPixel(minPx));
+  let maxI = Math.round(xScale.getValueForPixel(maxPx));
+  if (minI > maxI) [minI, maxI] = [maxI, minI];
+  minI = Math.max(0, minI);
+  maxI = Math.min(labels.length - 1, maxI);
+  if (maxI - minI < 2) return;
+  for (const c of detailCharts) {
+    c.options.scales.x.min = labels[minI];
+    c.options.scales.x.max = labels[maxI];
+    c.update('none');
+  }
+  _detailZoomActive = true;
+  const btn = document.getElementById('detail-zoom-reset-btn');
+  if (btn) btn.style.display = '';
+}
+
+function _initDetailZoomHandlers() {
+  if (_detailZoomHandlersInited) return;
+  _detailZoomHandlersInited = true;
+  document.addEventListener('mousemove', e => {
+    if (!_detailZoomDrag) return;
+    const { canvas, overlay, startPx } = _detailZoomDrag;
+    const rect = canvas.getBoundingClientRect();
+    const curPx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const left = Math.min(startPx, curPx);
+    const width = Math.abs(curPx - startPx);
+    overlay.style.left = left + 'px';
+    overlay.style.width = width + 'px';
+    overlay.style.display = '';
+  });
+  document.addEventListener('mouseup', e => {
+    if (!_detailZoomDrag) return;
+    const { chart, canvas, overlay, startPx } = _detailZoomDrag;
+    _detailZoomDrag = null;
+    overlay.style.display = 'none';
+    const rect = canvas.getBoundingClientRect();
+    const endPx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    if (Math.abs(endPx - startPx) > 8) {
+      _applyDetailZoom(Math.min(startPx, endPx), Math.max(startPx, endPx), chart);
+    }
   });
 }
 
-function _renderDetailChart() {
-  const t = tracks.get(detailTrackId);
-  if (!t) return;
-  const meta   = METRICS.find(m => m.key === detailMetric) || METRICS[0];
-  const stats  = _getDetailStats();
-  const labels = _getDetailXLabels(stats);
-  const data   = stats.map(s => s[meta.field] ?? null);
+function _setupChartZoomDrag(chart) {
+  const canvas = chart.canvas;
+  const wrap = canvas.parentElement;
+  const overlay = document.createElement('div');
+  overlay.className = 'detail-zoom-sel';
+  overlay.style.display = 'none';
+  wrap.appendChild(overlay);
+  canvas.style.cursor = 'crosshair';
+  canvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const startPx = e.clientX - rect.left;
+    _detailZoomDrag = { chart, canvas, overlay, startPx };
+    overlay.style.left = startPx + 'px';
+    overlay.style.width = '0px';
+    overlay.style.display = 'none';
+    e.preventDefault();
+  });
+  canvas.addEventListener('dblclick', () => {
+    if (_detailZoomActive) _resetDetailZoom();
+  });
+}
 
-  if (detailChart) { detailChart.destroy(); detailChart = null; }
+function _renderDetailCharts(records, fallbackStats) {
+  for (const c of detailCharts) c.destroy();
+  detailCharts = [];
+  _detailZoomActive = false;
+  _detailZoomDrag = null;
+  const resetBtn = document.getElementById('detail-zoom-reset-btn');
+  if (resetBtn) resetBtn.style.display = 'none';
+  _initDetailZoomHandlers();
+  const wrap = document.getElementById('detail-charts-wrap');
+  wrap.innerHTML = '';
 
-  detailChart = new Chart(document.getElementById('detail-canvas'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: `${meta.label} (${meta.unit})`,
-        data,
-        borderColor: meta.color,
-        backgroundColor: meta.color + '1a',
-        borderWidth: 2,
-        pointRadius: stats.length > 30 ? 0 : 3,
-        pointHoverRadius: 5,
-        tension: 0,
-        fill: true,
-        spanGaps: true,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: 'rgba(15,15,20,0.94)',
-          borderColor: 'rgba(255,255,255,0.1)',
-          borderWidth: 1,
-          titleColor: '#888',
-          bodyColor: '#ddd',
-          callbacks: {
-            label: ctx => ctx.parsed.y != null
-              ? `${meta.label}: ${ctx.parsed.y} ${meta.unit}`
-              : '无数据',
+  const useRecords = records && records.length > 0;
+  const track = tracks.get(detailTrackId);
+  const isDark = !document.body.classList.contains('light-theme');
+  const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
+  const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
+  const tickColor   = isDark ? '#555' : '#999';
+
+  for (const meta of METRICS) {
+    const hasData = useRecords
+      ? records.some(r => r[meta.rField] != null)
+      : (fallbackStats || []).some(s => s[meta.field] != null);
+    if (!hasData) continue;
+
+    const block = document.createElement('div');
+    block.className = 'detail-chart-block';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'detail-chart-label';
+    lbl.textContent = `${meta.label}  ${meta.unit}`;
+    block.appendChild(lbl);
+
+    const cw = document.createElement('div');
+    cw.className = 'detail-chart-canvas-wrap';
+    const canvas = document.createElement('canvas');
+    cw.appendChild(canvas);
+    block.appendChild(cw);
+    wrap.appendChild(block);
+
+    let labels, data;
+    if (useRecords) {
+      labels = records.map(r => r.t);
+      data   = records.map(r => r[meta.rField] ?? null);
+    } else {
+      const t0 = track?.timeStatsStart ? new Date(track.timeStatsStart) : null;
+      labels = (fallbackStats || []).map((_, i) => {
+        if (!t0) return (i + 1) + ' min';
+        const d = new Date(t0.getTime() + i * 60000);
+        return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+      });
+      data = (fallbackStats || []).map(s => s[meta.field] ?? null);
+    }
+
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data,
+          borderColor: meta.color,
+          backgroundColor: meta.color + '18',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0,
+          fill: true,
+          spanGaps: true,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(15,15,20,0.94)',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            titleColor: '#888',
+            bodyColor: '#ddd',
+            callbacks: {
+              label: ctx => ctx.parsed.y != null
+                ? `${meta.label}: ${ctx.parsed.y} ${meta.unit}`
+                : '无数据',
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: tickColor, maxTicksLimit: 8, autoSkip: true, font: { size: 10 } },
+            grid: { color: gridColor },
+            border: { color: borderColor },
+          },
+          y: {
+            ticks: { color: tickColor, font: { size: 10 }, maxTicksLimit: 5 },
+            grid: { color: gridColor },
+            border: { color: borderColor },
           },
         },
       },
-      scales: {
-        x: {
-          ticks: { color: '#555', maxTicksLimit: 14, font: { size: 11 } },
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          border: { color: 'rgba(255,255,255,0.08)' },
-        },
-        y: {
-          ticks: { color: '#555', font: { size: 11 } },
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          border: { color: 'rgba(255,255,255,0.08)' },
-        },
-      },
-    },
-  });
+    });
+    detailCharts.push(chart);
+    _setupChartZoomDrag(chart);
+  }
 }
 
 function _renderDetailTable() {
   const t = tracks.get(detailTrackId);
   if (!t) return;
-  const stats   = _getDetailTableStats();
-  const xLabels = detailMode === 'dist'
+  const useKm = t.kmStats.length > 0;
+  const stats = useKm ? t.kmStats : t.timeStats;
+  if (!stats.length) return;
+
+  const xLabels = useKm
     ? stats.map((_, i) => (i + 1) + ' km')
-    : _getDetailXLabels(stats);
+    : (() => {
+        const t0 = t.timeStatsStart ? new Date(t.timeStatsStart) : null;
+        return stats.map((_, i) => {
+          if (!t0) return (i + 1) + ' min';
+          const d = new Date(t0.getTime() + i * 60000);
+          return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+        });
+      })();
 
   const visCols = TABLE_COLS.filter(c => stats.some(s => s[c.key] != null));
-
   let html = '<table class="detail-table"><thead><tr>';
-  html += `<th>${detailMode === 'dist' ? '距离' : '时间'}</th>`;
+  html += `<th>${useKm ? '距离' : '时间'}</th>`;
   for (const c of visCols) html += `<th>${c.label}</th>`;
   html += '</tr></thead><tbody>';
-
   stats.forEach((s, i) => {
     html += `<tr><td>${xLabels[i]}</td>`;
     for (const c of visCols) {
@@ -1504,7 +1695,6 @@ function _renderDetailTable() {
     }
     html += '</tr>';
   });
-
   html += '</tbody></table>';
   document.getElementById('detail-table-wrap').innerHTML = html;
 }
@@ -1524,9 +1714,45 @@ function _haversineM(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.asin(Math.sqrt(Math.min(1, a)));
 }
 
-function _metricHeatColor(t) {
-  // t: 0 = blue (hue 240), 1 = red (hue 0)
+function _metricHeatColor(t, metricKey) {
+  if (metricKey === 'speed') {
+    const r = 255;
+    const g = Math.round(255 * (1 - t));
+    const b = Math.round(255 * (1 - t));
+    return `rgb(${r},${g},${b})`;
+  }
   return `hsl(${Math.round(240 * (1 - t))},88%,56%)`;
+}
+
+function _gradeHeatColor(t) {
+  // t=0 → blue, t=0.5 → white, t=1 → red
+  if (t <= 0.5) {
+    const s = t * 2;
+    return `rgb(${Math.round(255*s)},${Math.round(255*s)},255)`;
+  }
+  const s = (t - 0.5) * 2;
+  return `rgb(255,${Math.round(255*(1-s))},${Math.round(255*(1-s))})`;
+}
+
+function _hrZoneColor(hr, maxHr) {
+  const p = hr / maxHr;
+  if (p < 0.50) return HR_ZONE_COLORS[0];
+  if (p < 0.60) return HR_ZONE_COLORS[1];
+  if (p < 0.70) return HR_ZONE_COLORS[2];
+  if (p < 0.80) return HR_ZONE_COLORS[3];
+  if (p < 0.90) return HR_ZONE_COLORS[4];
+  return HR_ZONE_COLORS[5];
+}
+
+function _powerZoneColor(watts, ftp) {
+  const p = watts / ftp;
+  if (p < 0.55) return POWER_ZONE_COLORS[0];
+  if (p < 0.75) return POWER_ZONE_COLORS[1];
+  if (p < 0.90) return POWER_ZONE_COLORS[2];
+  if (p < 1.05) return POWER_ZONE_COLORS[3];
+  if (p < 1.20) return POWER_ZONE_COLORS[4];
+  if (p < 1.50) return POWER_ZONE_COLORS[5];
+  return POWER_ZONE_COLORS[6];
 }
 
 function _renderDetailRoute() {
@@ -1542,8 +1768,13 @@ function _renderDetailRoute() {
 
   const values = stats.map(s => s[field]).filter(v => v != null);
   if (!values.length) { toast(`指标「${meta.label}」无可用数据`); return; }
-  const minVal = Math.min(...values);
-  const maxVal = Math.max(...values);
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const scale = ROUTE_COLOR_SCALE[detailMetric];
+  const maxHr = scale?.zone   ? _pmcConfig.maxHr : null;
+  const ftp   = scale?.coggan ? _pmcConfig.ftp   : null;
+  const minVal = (scale?.zone || scale?.coggan) ? 0 : (scale ? scale.min : dataMin);
+  const maxVal = scale?.zone ? maxHr : scale?.coggan ? ftp * 2 : (scale ? scale.max : dataMax);
 
   const coords = getCoords(t);
   if (coords.length < 2) return;
@@ -1559,9 +1790,9 @@ function _renderDetailRoute() {
   // Init Leaflet map once per detail session
   if (!detailRouteMap) {
     detailRouteMap = L.map('detail-route-map', { zoomControl: true });
-    const tileKey = document.getElementById('tile-select').value || 'dark';
+    const tileKey = document.getElementById('tile-select').value || 'dark-nolabels';
     const tile = TILES[tileKey];
-    L.tileLayer(tile.url, tile.opts).addTo(detailRouteMap);
+    detailRouteTileLayer = L.tileLayer(tile.url, tile.opts).addTo(detailRouteMap);
   }
 
   for (const layer of detailRouteLayers) detailRouteMap.removeLayer(layer);
@@ -1572,6 +1803,12 @@ function _renderDetailRoute() {
     Math.min(Math.floor(cumDist[i] / stepM), stats.length - 1)
   );
 
+  const fmtVal = v => {
+    if (meta.unit === 'km/h') return v.toFixed(1) + ' km/h';
+    if (['bpm', 'rpm', 'W', 'm'].includes(meta.unit)) return Math.round(v) + ' ' + meta.unit;
+    return v.toFixed(1) + ' ' + meta.unit;
+  };
+
   let i = 0;
   while (i < coords.length) {
     const b = buckets[i];
@@ -1581,10 +1818,29 @@ function _renderDetailRoute() {
     // Include one overlap point for seamless joins between segments
     const seg = coords.slice(i, j < coords.length ? j + 1 : j);
     const val = stats[b]?.[field];
-    const tNorm = (val != null && maxVal > minVal) ? (val - minVal) / (maxVal - minVal) : 0.5;
-    detailRouteLayers.push(
-      L.polyline(seg, { color: _metricHeatColor(tNorm), weight: 5, opacity: 0.9 }).addTo(detailRouteMap)
-    );
+    let color;
+    if (scale?.zone) {
+      color = _hrZoneColor(val ?? 0, maxHr);
+    } else if (scale?.coggan) {
+      color = _powerZoneColor(val ?? 0, ftp);
+    } else {
+      const tNorm = val != null ? Math.max(0, Math.min(1, (maxVal > minVal) ? (val - minVal) / (maxVal - minVal) : 0)) : 0.5;
+      color = scale?.diverging ? _gradeHeatColor(tNorm) : _metricHeatColor(tNorm, detailMetric);
+    }
+    const tooltipText = val != null ? fmtVal(val) : null;
+    const pl = L.polyline(seg, { color, weight: 5, opacity: 0.9 }).addTo(detailRouteMap);
+    if (tooltipText) {
+      const tip = document.getElementById('detail-route-tooltip');
+      pl.on('mousemove', e => {
+        if (!tip) return;
+        tip.textContent = tooltipText;
+        tip.style.display = '';
+        tip.style.left = (e.originalEvent.clientX + 14) + 'px';
+        tip.style.top  = (e.originalEvent.clientY - 28) + 'px';
+      });
+      pl.on('mouseout', () => { if (tip) tip.style.display = 'none'; });
+    }
+    detailRouteLayers.push(pl);
     i = j;
   }
 
@@ -1600,13 +1856,59 @@ function _renderDetailRoute() {
   }, 80);
 
   // Update legend labels
-  const fmtVal = v => {
-    if (meta.unit === 'km/h') return v.toFixed(1) + ' km/h';
-    if (['bpm', 'rpm', 'W', 'm'].includes(meta.unit)) return Math.round(v) + ' ' + meta.unit;
-    return v.toFixed(1) + ' ' + meta.unit;
-  };
   document.getElementById('detail-route-legend-low').textContent  = fmtVal(minVal);
   document.getElementById('detail-route-legend-high').textContent = fmtVal(maxVal);
+  const legendBar = document.getElementById('detail-route-legend-bar');
+  if (scale?.zone) {
+    const [g, b1, g2, y, o, r] = HR_ZONE_COLORS;
+    legendBar.style.background = `linear-gradient(to right,
+      ${g} 0%, ${g} 50%,
+      ${b1} 50%, ${b1} 60%,
+      ${g2} 60%, ${g2} 70%,
+      ${y} 70%, ${y} 80%,
+      ${o} 80%, ${o} 90%,
+      ${r} 90%, ${r} 100%)`;
+  } else if (scale?.coggan) {
+    const [g, b1, g2, y, o, r, w] = POWER_ZONE_COLORS;
+    // Bar represents 0–200% FTP; zone boundaries at 55/75/90/105/120/150%
+    legendBar.style.background = `linear-gradient(to right,
+      ${g}  0%,    ${g}  27.5%,
+      ${b1} 27.5%, ${b1} 37.5%,
+      ${g2} 37.5%, ${g2} 45%,
+      ${y}  45%,   ${y}  52.5%,
+      ${o}  52.5%, ${o}  60%,
+      ${r}  60%,   ${r}  75%,
+      ${w}  75%,   ${w}  100%)`;
+  } else if (scale?.diverging) {
+    legendBar.style.background = 'linear-gradient(to right, rgb(0,0,255), white, rgb(255,0,0))';
+  } else if (detailMetric === 'speed') {
+    legendBar.style.background = 'linear-gradient(to right, white, rgb(255,0,0))';
+  } else {
+    legendBar.style.background = '';
+  }
+  const marker = document.getElementById('detail-route-legend-marker');
+  if (marker && scale) {
+    const pos = scale.zone
+      ? Math.max(0, Math.min(1, dataMax / maxHr))
+      : scale.coggan
+        ? Math.max(0, Math.min(1, dataMax / (ftp * 2)))
+        : Math.max(0, Math.min(1, (dataMax - scale.min) / (scale.max - scale.min)));
+    marker.style.display = '';
+    marker.style.left = (pos * 100) + '%';
+    marker.dataset.label = fmtVal(dataMax);
+  } else if (marker) {
+    marker.style.display = 'none';
+  }
+  const ftpMarker = document.getElementById('detail-route-legend-ftp-marker');
+  if (ftpMarker) {
+    if (scale?.coggan) {
+      ftpMarker.style.display = '';
+      ftpMarker.style.left = '50%';
+      ftpMarker.dataset.label = `FTP ${ftp} W`;
+    } else {
+      ftpMarker.style.display = 'none';
+    }
+  }
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
@@ -1615,6 +1917,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDragDrop();
   initZoomSlider();
   initPanelResize();
+  initDetailTableResize();
 
   // Activities view is default home
   switchSidebarView('activities');
@@ -1655,9 +1958,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById(id)?.addEventListener('change', _savePmcSettings);
   });
 
-  // 初始加载文件库计数 & AI 配置
+  // 初始加载文件库计数 & AI 配置 & 主题
   refreshLibraryCount();
   _initAiConfig();
+  _loadPmcConfig();
+  _initTheme();
 
   document.getElementById('act-upload-input')?.addEventListener('change', async e => {
     for (const file of e.target.files) await uploadFile(file);
@@ -1801,11 +2106,16 @@ function filterLibrary() {
   _applyLibFilter();
 }
 
+function _toggleLibSelectMode() {
+  if (_libSelectMode) _exitLibSelectMode();
+  else _enterLibSelectMode();
+}
+
 function _enterLibSelectMode() {
   _libSelectMode = true;
   _libSelectedSet.clear();
   document.getElementById('lib-select-bar').style.display = 'flex';
-  document.getElementById('lib-select-btn').style.display = 'none';
+  document.getElementById('lib-select-btn').textContent = '取消';
   _applyLibFilter();
   _updateLibSelectCount();
 }
@@ -1814,7 +2124,7 @@ function _exitLibSelectMode() {
   _libSelectMode = false;
   _libSelectedSet.clear();
   document.getElementById('lib-select-bar').style.display = 'none';
-  document.getElementById('lib-select-btn').style.display = '';
+  document.getElementById('lib-select-btn').textContent = '选择';
   _applyLibFilter();
 }
 
@@ -2235,6 +2545,17 @@ async function _initAiConfig() {
   } catch {}
 }
 
+async function _loadPmcConfig() {
+  try {
+    const cfg = await fetch('/api/config/raw').then(r => r.json());
+    if (cfg.pmc_ftp    != null) _pmcConfig.ftp   = cfg.pmc_ftp;
+    if (cfg.pmc_max_hr != null) _pmcConfig.maxHr = cfg.pmc_max_hr;
+  } catch {
+    _pmcConfig.ftp   = parseInt(localStorage.getItem('pmc_ftp')    || '200', 10);
+    _pmcConfig.maxHr = parseInt(localStorage.getItem('pmc_max_hr') || '190', 10);
+  }
+}
+
 function openAiView() {
   const id = detailTrackId;
   const t  = tracks.get(id);
@@ -2363,9 +2684,25 @@ function _savePmcSettings() {
   if (s.restHR) localStorage.setItem('pmc_rest_hr', s.restHR);
   if (s.maxHR)  localStorage.setItem('pmc_max_hr',  s.maxHR);
   if (s.weight) localStorage.setItem('pmc_weight',  s.weight);
+  const patch = {};
+  if (s.ftp)    patch.pmc_ftp     = s.ftp;
+  if (s.restHR) patch.pmc_rest_hr = s.restHR;
+  if (s.maxHR)  patch.pmc_max_hr  = s.maxHR;
+  if (s.weight) patch.pmc_weight  = s.weight;
+  if (Object.keys(patch).length)
+    fetch('/api/config/raw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(patch) }).catch(() => {});
 }
 
-function _loadPmcSettings() {
+async function _loadPmcSettings() {
+  try {
+    const r = await fetch('/api/config/raw');
+    const cfg = await r.json();
+    if (cfg.pmc_ftp     != null) document.getElementById('pmc-ftp').value     = cfg.pmc_ftp;
+    if (cfg.pmc_rest_hr != null) document.getElementById('pmc-rest-hr').value = cfg.pmc_rest_hr;
+    if (cfg.pmc_max_hr  != null) document.getElementById('pmc-max-hr').value  = cfg.pmc_max_hr;
+    if (cfg.pmc_weight  != null) document.getElementById('pmc-weight').value  = cfg.pmc_weight;
+    return;
+  } catch {}
   const ftp    = localStorage.getItem('pmc_ftp')     || '';
   const restHR = localStorage.getItem('pmc_rest_hr') || '50';
   const maxHR  = localStorage.getItem('pmc_max_hr')  || '190';
@@ -2374,6 +2711,90 @@ function _loadPmcSettings() {
   document.getElementById('pmc-rest-hr').value = restHR;
   document.getElementById('pmc-max-hr').value  = maxHR;
   document.getElementById('pmc-weight').value  = weight;
+}
+
+/* ── Settings modal ─────────────────────────────────────────────────────── */
+async function openSettingsModal() {
+  document.getElementById('settings-modal').style.display = 'flex';
+  try {
+    const cfg = await fetch('/api/config/raw').then(r => r.json());
+    document.getElementById('cfg-pmc-ftp').value       = cfg.pmc_ftp              ?? '';
+    document.getElementById('cfg-pmc-rest-hr').value   = cfg.pmc_rest_hr          ?? '';
+    document.getElementById('cfg-pmc-max-hr').value    = cfg.pmc_max_hr           ?? '';
+    document.getElementById('cfg-pmc-weight').value    = cfg.pmc_weight           ?? '';
+    document.getElementById('cfg-api-base').value      = cfg.api_base             ?? '';
+    document.getElementById('cfg-api-key').value       = cfg.api_key              ?? '';
+    document.getElementById('cfg-model').value         = cfg.model                ?? '';
+    document.getElementById('cfg-max-tokens').value    = cfg.max_tokens           ?? '';
+    document.getElementById('cfg-onelap-user').value   = cfg.onelap_username      ?? '';
+    document.getElementById('cfg-onelap-pass').value   = cfg.onelap_password      ?? '';
+    document.getElementById('cfg-strava-id').value     = cfg.strava_client_id     ?? '';
+    document.getElementById('cfg-strava-secret').value = cfg.strava_client_secret ?? '';
+    document.getElementById('cfg-strava-port').value   = cfg.strava_redirect_port ?? '';
+  } catch { toast('加载配置失败'); }
+}
+
+function closeSettingsModal() {
+  document.getElementById('settings-modal').style.display = 'none';
+}
+
+async function saveSettingsModal() {
+  const val = id => document.getElementById(id).value.trim();
+  const num = id => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? null : v; };
+  const cfg = {
+    pmc_ftp:              num('cfg-pmc-ftp'),
+    pmc_rest_hr:          num('cfg-pmc-rest-hr'),
+    pmc_max_hr:           num('cfg-pmc-max-hr'),
+    pmc_weight:           num('cfg-pmc-weight'),
+    api_base:             val('cfg-api-base')      || null,
+    api_key:              val('cfg-api-key')       || null,
+    model:                val('cfg-model')         || null,
+    max_tokens:           num('cfg-max-tokens'),
+    onelap_username:      val('cfg-onelap-user')   || null,
+    onelap_password:      val('cfg-onelap-pass')   || null,
+    strava_client_id:     val('cfg-strava-id')     || null,
+    strava_client_secret: val('cfg-strava-secret') || null,
+    strava_redirect_port: num('cfg-strava-port'),
+  };
+  Object.keys(cfg).forEach(k => { if (cfg[k] === null) delete cfg[k]; });
+  try {
+    const r = await fetch('/api/config/raw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+    if (!r.ok) throw new Error();
+    if (cfg.pmc_ftp     != null) document.getElementById('pmc-ftp').value     = cfg.pmc_ftp;
+    if (cfg.pmc_rest_hr != null) document.getElementById('pmc-rest-hr').value = cfg.pmc_rest_hr;
+    if (cfg.pmc_max_hr  != null) document.getElementById('pmc-max-hr').value  = cfg.pmc_max_hr;
+    if (cfg.pmc_weight  != null) document.getElementById('pmc-weight').value  = cfg.pmc_weight;
+    closeSettingsModal();
+    toast('设置已保存');
+    _initAiConfig();
+    _loadPmcConfig();
+  } catch { toast('保存失败'); }
+}
+
+/* ── Theme toggle ───────────────────────────────────────────────────────── */
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-theme');
+  localStorage.setItem('theme', isLight ? 'light' : 'dark');
+  document.getElementById('theme-toggle-icon').textContent = '◑';
+  document.getElementById('theme-toggle-label').textContent = isLight ? '浅色' : '深色';
+  const tile = isLight ? 'light-nolabels' : 'dark-nolabels';
+  document.getElementById('tile-select').value = tile;
+  if (map) setTiles(tile);
+  if (detailRouteMap && detailRouteTileLayer) {
+    detailRouteMap.removeLayer(detailRouteTileLayer);
+    const t = TILES[tile];
+    detailRouteTileLayer = L.tileLayer(t.url, t.opts).addTo(detailRouteMap);
+  }
+}
+
+function _initTheme() {
+  if (localStorage.getItem('theme') === 'light') {
+    document.body.classList.add('light-theme');
+    document.getElementById('theme-toggle-icon').textContent = '◑';
+    document.getElementById('theme-toggle-label').textContent = '浅色';
+    document.getElementById('tile-select').value = 'light-nolabels';
+    setTiles('light-nolabels');
+  }
 }
 
 /* ── 训练分析视图控制器 ────────────────────────────────────────────────────── */
@@ -2391,11 +2812,10 @@ function openAnalyticsView(tab = 'pmc') {
   _doSwitchTab(tab);
 }
 
-function closeAnalyticsView() {
+function closeAnalyticsView(restoreActivities = true) {
   _analyticsOpen = false;
   document.getElementById('analytics-view').classList.remove('active');
-  // Sync sidebar: closing analytics returns to activities view
-  if (_sidebarView === 'pmc' || _sidebarView === 'calendar') {
+  if (restoreActivities && (_sidebarView === 'pmc' || _sidebarView === 'calendar')) {
     _sidebarView = 'activities';
     document.querySelectorAll('.sb-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === 'activities');
