@@ -1718,11 +1718,9 @@ function _haversineM(lat1, lon1, lat2, lon2) {
 }
 
 function _metricHeatColor(t, metricKey) {
-  if (metricKey === 'speed') {
-    const r = 255;
-    const g = Math.round(255 * (1 - t));
-    const b = Math.round(255 * (1 - t));
-    return `rgb(${r},${g},${b})`;
+  if (metricKey === 'speed' || metricKey === 'cadence') {
+    // green(120°) → yellow(60°) → orange(30°) → red(0°)
+    return `hsl(${Math.round(120 * (1 - t))},90%,42%)`;
   }
   return `hsl(${Math.round(240 * (1 - t))},88%,56%)`;
 }
@@ -1884,8 +1882,8 @@ function _renderDetailRoute() {
       ${w}  75%,   ${w}  100%)`;
   } else if (scale?.diverging) {
     legendBar.style.background = 'linear-gradient(to right, rgb(0,0,255), white, rgb(255,0,0))';
-  } else if (detailMetric === 'speed') {
-    legendBar.style.background = 'linear-gradient(to right, white, rgb(255,0,0))';
+  } else if (detailMetric === 'speed' || detailMetric === 'cadence') {
+    legendBar.style.background = 'linear-gradient(to right, hsl(120,90%,42%), hsl(60,90%,42%), hsl(30,90%,42%), hsl(0,90%,42%))';
   } else {
     legendBar.style.background = '';
   }
