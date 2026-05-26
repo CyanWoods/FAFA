@@ -151,7 +151,7 @@ let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
 let _calActivities = null; // cached from /api/activities
 
-let _sidebarView = 'activities'; // 'activities' | 'map' | 'analytics' | 'files'
+let _sidebarView = 'activities'; // 'activities' | 'map' | 'pmc' | 'calendar' | 'files'
 
 function switchSidebarView(name) {
   // Dismiss full-screen overlays first (z-index 950+) so they don't block new view
@@ -452,7 +452,7 @@ function _buildActivityCard(act) {
     </div>
     <div class="act-card-actions">
       <button class="act-card-ai-btn">AI 分析</button>
-      <button class="act-card-ai-btn act-card-map-btn">地图</button>
+      <button class="act-card-ai-btn act-card-map-btn">轨迹</button>
     </div>
   `;
   card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
@@ -828,7 +828,11 @@ function _sortTrackList() {
 }
 
 function syncBadge() {
-  document.getElementById('track-badge').textContent = tracks.size;
+  const n = tracks.size;
+  const sb = document.getElementById('track-badge');
+  if (sb) sb.textContent = n;
+  const pb = document.getElementById('panel-track-count');
+  if (pb) pb.textContent = n;
 }
 
 function syncEmptyHint() {

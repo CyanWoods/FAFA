@@ -27,6 +27,10 @@
         <span class="sb-icon">◈</span>
         <span class="sb-label">骑行记录</span>
       </button>
+      <button class="sb-item" data-view="map" onclick="switchSidebarView('map')">
+        <span class="sb-icon">◉</span>
+        <span class="sb-label">骑行轨迹 <span id="track-badge" class="sb-badge"></span></span>
+      </button>
       <button class="sb-item" data-view="pmc" onclick="switchSidebarView('pmc')">
         <span class="sb-icon">⬡</span>
         <span class="sb-label">体能管理</span>
@@ -70,7 +74,7 @@
     <div id="panel-header" onclick="togglePanel()">
       <span class="panel-title">已加载路径</span>
       <div class="panel-header-right">
-        <span id="track-badge">0</span>
+        <span id="panel-track-count">0</span>
         <button id="panel-toggle" title="展开/收起">▼</button>
       </div>
     </div>
@@ -106,8 +110,7 @@
       <span class="act-list-title">骑行记录</span>
       <div id="act-list-actions">
         <button onclick="_stravaUploadAllVisible()">全部上传 Strava</button>
-        <button onclick="_actLoadAllVisible()">全部加载至地图</button>
-        <button onclick="switchSidebarView('map')">打开地图</button>
+        <button onclick="_actLoadAllVisible()">加载全部轨迹</button>
         <button id="act-mode-btn" onclick="_toggleSelectMode()">选择</button>
       </div>
     </div>

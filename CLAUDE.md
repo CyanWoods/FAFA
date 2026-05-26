@@ -14,13 +14,13 @@ FIT (Flexible and Interoperable Data Transfer) is a binary format used by Garmin
 
 Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
-**Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for five top-level views. The rest of the viewport is view-specific content.
+**Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for six top-level views. The rest of the viewport is view-specific content.
 
-**Five views:**
+**Six views:**
 
-- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-map, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "地图" button — clicking "地图" clears all current tracks, loads only that file into the map, and switches to map view. The header also has a "打开地图" button that switches to map view without loading any file. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
-- **Map view** (`#map`): Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active.
+- **Map view** (`#map`, `data-view="map"`): Dedicated sidebar nav entry (骑行轨迹). Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export; track list sorted reverse-chronologically. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active. Sidebar badge (`#track-badge`) shows loaded track count; panel count shown in `#panel-track-count`.
 
 - **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger OneLap sync. Upload via file input (导入 FIT button).
 
