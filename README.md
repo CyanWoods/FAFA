@@ -26,7 +26,7 @@ FAFA/
 │       ├── download_fit.py # 从顽鹿批量下载 FIT 文件（CLI）
 │       └── ant_analysis.py # ANT+ 设备连接时长分析
 ├── templates/
-│   └── index.html      # Web 前端页面（双界面）
+│   └── index.html      # Web 前端页面（多视图）
 └── static/
     ├── app.js          # 前端逻辑（Leaflet / Chart.js / 拖拽 / 导出）
     └── style.css       # 前端样式
@@ -52,7 +52,7 @@ venv\Scripts\pip install -r requirements.txt
 
 ## Web 可视化工具
 
-主要功能入口，基于 Flask + Leaflet.js + Chart.js 的多视图交互查看器。左侧固定侧边栏通过图标切换六个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
+主要功能入口，基于 Flask + Leaflet.js + Chart.js 的多视图交互查看器。左侧固定侧边栏通过图标切换五个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
 
 **macOS / Linux：**
 ```bash
@@ -162,7 +162,7 @@ venv\Scripts\python app.py
 从 Web 界面一键同步顽鹿（OneLap）平台的骑行记录到 `input/` 目录。
 
 - 支持增量下载（只拉取本地尚未存在的新活动）或全量下载
-- `ai_config.json` 中配置 `onelap_username` / `onelap_password` 后同步时自动登录，无需弹出浏览器
+- 侧边栏「设置」面板或 `ai_config.json` 中配置 `onelap_username` / `onelap_password` 后同步时自动登录，无需弹出浏览器
 - 未配置账密则弹出 Chromium 浏览器窗口完成登录（90 秒超时）
 - 新版 Magene 固件的 FIT 文件下载后自动进行火星解密：C506 版本 ≥ 19，C706 版本 ≥ 20
 
@@ -172,7 +172,7 @@ venv\Scripts\python app.py
 
 **配置步骤：**
 1. 在 [Strava 开发者控制台](https://www.strava.com/settings/api) 创建 App，将回调域名设为 `localhost`
-2. 将 `Client ID` 和 `Client Secret` 填入 `ai_config.json` 的 `strava_client_id` / `strava_client_secret`
+2. 在侧边栏「设置」面板或 `ai_config.json` 中填写 `strava_client_id` / `strava_client_secret`
 3. 在活动视图点击「全部上传 Strava」→ 首次需在弹窗中点击「授权 Strava」完成 OAuth（token 自动保存到 `ai_config.json`）
 4. 授权后点击「全部上传 Strava」会先查询 Strava 已有活动列表，弹窗显示「本地 M 个，Strava 已有 K 个，待上传 N 个」，确认后仅上传差集
 
@@ -308,7 +308,7 @@ cp config.template.json ai_config.json
 
 ### 2. 编辑配置
 
-用文本编辑器打开 `ai_config.json`，填入你的 API 信息：
+**推荐：** 启动 Web 服务后在侧边栏「设置」面板直接填写。或手动编辑 `ai_config.json`：
 
 ```json
 {
