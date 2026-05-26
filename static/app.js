@@ -469,7 +469,7 @@ function _buildActivityCard(act) {
     </div>
     <div class="act-card-actions">
       <button class="act-card-ai-btn">AI 分析</button>
-      <button class="act-card-ai-btn act-card-map-btn">轨迹</button>
+      <button class="act-card-ai-btn act-card-map-btn">路线热图</button>
     </div>
   `;
   card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
@@ -481,8 +481,6 @@ function _buildActivityCard(act) {
     const mapBtn = e.currentTarget;
     if (mapBtn.disabled) return;
     mapBtn.disabled = true;
-    clearAllTracks();
-    switchSidebarView('map');
     try {
       const res = await fetch('/api/load', {
         method: 'POST',
@@ -491,7 +489,8 @@ function _buildActivityCard(act) {
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const data = await res.json();
-      addTrack(data);
+      const id = addTrack(data);
+      await openDetailView(id, 'route');
     } catch (err) {
       toast('加载失败：' + err.message);
     } finally {
@@ -1362,7 +1361,7 @@ async function doExport() {
 }
 
 /* ── Detail view (界面二) ────────────────────────────────────────────────── */
-async function openDetailView(id) {
+async function openDetailView(id, startTab = 'data') {
   const t = tracks.get(id);
   if (!t) return;
   stopFlash(id);
@@ -1394,6 +1393,10 @@ async function openDetailView(id) {
 
   _renderDetailCharts(records, t.timeStats);
   _renderDetailTable();
+
+  if (startTab === 'route') {
+    document.getElementById('detail-route-btn')?.click();
+  }
 }
 
 function closeDetailView() {
