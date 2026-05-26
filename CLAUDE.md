@@ -44,12 +44,12 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files when: C506 with software version ≥ 19, or C706 with software version ≥ 20 (new Magene firmware that stores GCJ-02).
 
-**AI features** (`ai_config.json`): Template at `config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
+**AI features** (`config.json`): Template at `config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
 - `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC training-state commentary.
 - `/api/ai/calendar` (POST `{period, current_date, activities}`) — streams weekly or monthly training suggestions.
 
-**Config API** (`/api/config/raw`): GET returns current `ai_config.json` (or template defaults if file absent); POST merges editable fields into `ai_config.json` (read-only Strava OAuth tokens are filtered out). Used by the settings modal and PMC parameter persistence (`pmc_ftp`, `pmc_max_hr`, etc.).
+**Config API** (`/api/config/raw`): GET returns current `config.json` (or template defaults if file absent); POST merges editable fields into `config.json` (read-only Strava OAuth tokens are filtered out). Used by the settings modal and PMC parameter persistence (`pmc_ftp`, `pmc_max_hr`, etc.).
 
 **Records API** (`/api/records/<filename>`): Returns per-second FIT record data (`t`, `speed_kmh`, `hr`, `power`, `cadence`, `altitude`, `grade`) with timestamps converted to local clock time via `fit.utc_offset_s`. Used by the detail view for real-time x-axis charts (falls back to `timeStats` for uploaded-only tracks).
 
@@ -65,7 +65,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
-- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `ai_config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
+- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
 
 ### CLI tools (`fafa/tools/` — run as Python modules)
 

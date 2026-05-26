@@ -1,6 +1,6 @@
 """Strava upload integration.
 
-Credentials stored in ai_config.json under strava_* keys.
+Credentials stored in config.json under strava_* keys.
 Upload dedup state at input/.strava_state.json.
 """
 
@@ -19,7 +19,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_AI_CONFIG_FILE = _PROJECT_ROOT / "ai_config.json"
+_AI_CONFIG_FILE = _PROJECT_ROOT / "config.json"
 _INPUT_DIR = _PROJECT_ROOT / "input"
 _STATE_FILE = _INPUT_DIR / ".strava_state.json"
 
@@ -126,7 +126,7 @@ def build_auth_url(port: int = 5173) -> str:
 
 
 def exchange_code(code: str) -> dict:
-    """Exchange OAuth code for tokens. Saves to ai_config.json."""
+    """Exchange OAuth code for tokens. Saves to config.json."""
     cfg = load_config()
     if not cfg:
         raise Exception("Strava 未配置")

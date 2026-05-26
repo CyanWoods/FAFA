@@ -661,7 +661,7 @@ def onelap_status():
 
 
 # ── AI 骑行评估 ───────────────────────────────────────────────────────────────
-AI_CONFIG_FILE = PROJECT_ROOT / "ai_config.json"
+AI_CONFIG_FILE = PROJECT_ROOT / "config.json"
 
 
 def _load_ai_config() -> dict | None:
@@ -880,7 +880,7 @@ def _llm_stream(cfg: dict, prompt: str):
 def ai_evaluate():
     cfg = _load_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑项目根目录下的 ai_config.json"), 503
+        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
     body = request.get_json(silent=True) or {}
     prompt = _build_eval_prompt(
         body.get("summary") or {}, body.get("km_stats") or [],
@@ -1025,7 +1025,7 @@ def _build_pmc_prompt(data: dict) -> str:
 def ai_pmc():
     cfg = _load_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑 ai_config.json"), 503
+        return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
     prompt = _build_pmc_prompt(data)
     return _llm_stream(cfg, prompt)
@@ -1103,7 +1103,7 @@ def _build_calendar_prompt(data: dict) -> str:
 def ai_calendar():
     cfg = _load_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑 ai_config.json"), 503
+        return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
     prompt = _build_calendar_prompt(data)
     return _llm_stream(cfg, prompt)

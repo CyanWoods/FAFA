@@ -226,7 +226,7 @@
       <div class="modal-title">上传到 Strava</div>
 
       <div id="strava-auth-view">
-        <p class="sync-desc">需要先完成 Strava 授权。请在 <code>ai_config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。</p>
+        <p class="sync-desc">需要先完成 Strava 授权。请在 <code>config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。</p>
         <div class="modal-actions">
           <button class="modal-cancel" onclick="closeStravaModal()">取消</button>
           <button class="modal-export" onclick="stravaStartAuth()">授权 Strava</button>
@@ -504,6 +504,38 @@
           <div class="settings-input-wrap">
             <input id="cfg-pmc-weight" type="number" min="30" max="150" placeholder="—">
             <span class="settings-unit">kg</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">路线热图范围</div>
+        <div class="settings-row">
+          <label class="settings-label">坡度下限</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-route-grade-min" type="number" min="-30" max="0" step="0.5" placeholder="-8">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">坡度上限</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-route-grade-max" type="number" min="0" max="30" step="0.5" placeholder="8">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">速度上限</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-route-speed-max" type="number" min="10" max="120" step="1" placeholder="50">
+            <span class="settings-unit">km/h</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">踏频上限</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-route-cadence-max" type="number" min="60" max="200" step="1" placeholder="130">
+            <span class="settings-unit">rpm</span>
           </div>
         </div>
       </div>

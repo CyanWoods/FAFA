@@ -164,6 +164,7 @@ let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 0; // 0 = 全部数据
 let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, weight: 0 };
+let _routeScaleCfg = { gradeMin: null, gradeMax: null, speedMax: null, cadenceMax: null };
 
 let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
@@ -1771,7 +1772,18 @@ function _renderDetailRoute() {
   if (!values.length) { toast(`指标「${meta.label}」无可用数据`); return; }
   const dataMin = Math.min(...values);
   const dataMax = Math.max(...values);
-  const scale = ROUTE_COLOR_SCALE[detailMetric];
+  const scaleDef = ROUTE_COLOR_SCALE[detailMetric];
+  const scale = scaleDef ? { ...scaleDef } : null;
+  if (scale && !scale.zone && !scale.coggan) {
+    if (detailMetric === 'grade') {
+      if (_routeScaleCfg.gradeMin != null) scale.min = _routeScaleCfg.gradeMin;
+      if (_routeScaleCfg.gradeMax != null) scale.max = _routeScaleCfg.gradeMax;
+    } else if (detailMetric === 'speed') {
+      if (_routeScaleCfg.speedMax != null) scale.max = _routeScaleCfg.speedMax;
+    } else if (detailMetric === 'cadence') {
+      if (_routeScaleCfg.cadenceMax != null) scale.max = _routeScaleCfg.cadenceMax;
+    }
+  }
   const maxHr = scale?.zone   ? _pmcConfig.maxHr : null;
   const ftp   = scale?.coggan ? _pmcConfig.ftp   : null;
   const minVal = (scale?.zone || scale?.coggan) ? 0 : (scale ? scale.min : dataMin);
@@ -2411,7 +2423,7 @@ async function _stravaStartUpload(filenames) {
 async function _stravaUploadSingle(filename) {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -2465,7 +2477,7 @@ async function _stravaConfirmDiff() {
 async function _stravaUploadAllVisible() {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -2477,7 +2489,7 @@ async function _stravaUploadSelected() {
   const filenames = [..._actSelected];
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 ai_config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -2548,6 +2560,10 @@ async function _loadPmcConfig() {
     if (cfg.pmc_max_hr  != null) _pmcConfig.maxHr  = cfg.pmc_max_hr;
     if (cfg.pmc_rest_hr != null) _pmcConfig.restHr = cfg.pmc_rest_hr;
     if (cfg.pmc_weight  != null) _pmcConfig.weight = cfg.pmc_weight;
+    if (cfg.route_grade_min   != null) _routeScaleCfg.gradeMin   = cfg.route_grade_min;
+    if (cfg.route_grade_max   != null) _routeScaleCfg.gradeMax   = cfg.route_grade_max;
+    if (cfg.route_speed_max   != null) _routeScaleCfg.speedMax   = cfg.route_speed_max;
+    if (cfg.route_cadence_max != null) _routeScaleCfg.cadenceMax = cfg.route_cadence_max;
   } catch {
     _pmcConfig.ftp    = parseInt(localStorage.getItem('pmc_ftp')     || '200', 10);
     _pmcConfig.maxHr  = parseInt(localStorage.getItem('pmc_max_hr')  || '190', 10);
@@ -2594,7 +2610,7 @@ async function startAiEval() {
     loading.style.display = 'none';
     result.innerHTML = `<div class="ai-unconfigured">
       <strong>AI 评估未配置</strong><br>
-      请编辑项目根目录下的 <code>ai_config.json</code>，填入 API Key 后重启服务器。<br><br>
+      请编辑项目根目录下的 <code>config.json</code>，填入 API Key 后重启服务器。<br><br>
       配置示例：<br>
       <code>{ "api_base": "https://api.openai.com/v1", "api_key": "sk-...", "model": "gpt-4o-mini" }</code>
     </div>`;
@@ -2618,7 +2634,7 @@ async function startAiEval() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       loading.style.display = 'none';
-      result.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 ai_config.json 配置'}</div>`;
+      result.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 config.json 配置'}</div>`;
       return;
     }
 
@@ -2683,10 +2699,14 @@ async function openSettingsModal() {
   document.getElementById('settings-modal').style.display = 'flex';
   try {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
-    document.getElementById('cfg-pmc-ftp').value       = cfg.pmc_ftp              ?? '';
-    document.getElementById('cfg-pmc-rest-hr').value   = cfg.pmc_rest_hr          ?? '';
-    document.getElementById('cfg-pmc-max-hr').value    = cfg.pmc_max_hr           ?? '';
-    document.getElementById('cfg-pmc-weight').value    = cfg.pmc_weight           ?? '';
+    document.getElementById('cfg-pmc-ftp').value           = cfg.pmc_ftp              ?? '';
+    document.getElementById('cfg-pmc-rest-hr').value       = cfg.pmc_rest_hr          ?? '';
+    document.getElementById('cfg-pmc-max-hr').value        = cfg.pmc_max_hr           ?? '';
+    document.getElementById('cfg-pmc-weight').value        = cfg.pmc_weight           ?? '';
+    document.getElementById('cfg-route-grade-min').value   = cfg.route_grade_min      ?? '';
+    document.getElementById('cfg-route-grade-max').value   = cfg.route_grade_max      ?? '';
+    document.getElementById('cfg-route-speed-max').value   = cfg.route_speed_max      ?? '';
+    document.getElementById('cfg-route-cadence-max').value = cfg.route_cadence_max    ?? '';
     document.getElementById('cfg-api-base').value      = cfg.api_base             ?? '';
     document.getElementById('cfg-api-key').value       = cfg.api_key              ?? '';
     document.getElementById('cfg-model').value         = cfg.model                ?? '';
@@ -2711,6 +2731,10 @@ async function saveSettingsModal() {
     pmc_rest_hr:          num('cfg-pmc-rest-hr'),
     pmc_max_hr:           num('cfg-pmc-max-hr'),
     pmc_weight:           num('cfg-pmc-weight'),
+    route_grade_min:      num('cfg-route-grade-min'),
+    route_grade_max:      num('cfg-route-grade-max'),
+    route_speed_max:      num('cfg-route-speed-max'),
+    route_cadence_max:    num('cfg-route-cadence-max'),
     api_base:             val('cfg-api-base')      || null,
     api_key:              val('cfg-api-key')       || null,
     model:                val('cfg-model')         || null,
@@ -2733,6 +2757,7 @@ async function saveSettingsModal() {
       _pmcAllData = null;
       _loadAndRenderPmc();
     }
+    if (detailRouteActive) _renderDetailRoute();
   } catch { toast('保存失败'); }
 }
 
@@ -3333,7 +3358,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
     loading.style.display = 'none';
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      resultEl.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 ai_config.json 配置'}</div>`;
+      resultEl.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 config.json 配置'}</div>`;
       return;
     }
     const reader = res.body.getReader();
@@ -3368,7 +3393,7 @@ function closeActAiModal() {
 
 /* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
 async function openActAiModal(act) {
-  if (!_aiModel) { toast('AI 未配置，请先编辑 ai_config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
   const chips = _statChips(act.summary || {});
   let kmStats = [];
   try {
@@ -3384,7 +3409,7 @@ async function openActAiModal(act) {
 
 /* ── 训练日历 AI 建议 ──────────────────────────────────────────────────────── */
 async function startCalendarAi(period) {
-  if (!_aiModel) { toast('AI 未配置，请先编辑 ai_config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
   const acts    = _calActivities || [];
   const now     = new Date();
   const cutoff  = new Date(now);
@@ -3416,7 +3441,7 @@ async function startPmcAi() {
     return;
   }
   if (!_aiModel) {
-    toast('AI 未配置，请先编辑 ai_config.json');
+    toast('AI 未配置，请先编辑 config.json');
     return;
   }
 
