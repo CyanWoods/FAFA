@@ -1983,47 +1983,6 @@ body {
   flex-shrink: 0;
 }
 
-.pmc-settings-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.pmc-settings-group label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #777;
-  white-space: nowrap;
-}
-
-.pmc-input {
-  width: 58px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-  color: #ccc;
-  font-size: 12px;
-  padding: 3px 6px;
-  text-align: center;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.pmc-input:focus { border-color: rgba(46, 134, 222, 0.45); }
-
-.pmc-recalc-btn {
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 12px;
-  cursor: pointer;
-  background: transparent;
-  color: #aaa;
-  transition: background 0.15s, color 0.15s;
-}
-.pmc-recalc-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
 .pmc-ai-btn {
   border: 1px solid rgba(46, 213, 115, 0.35);
@@ -2967,12 +2926,6 @@ body {
 .light-theme #analytics-close-btn { color: #444; border-color: rgba(0,0,0,0.20); }
 .light-theme #analytics-close-btn:hover { background: rgba(0,0,0,0.07); color: #111; }
 .light-theme .pmc-period-btn { border-color: rgba(0,0,0,0.20); color: #444; background: transparent; }
-.light-theme .pmc-settings-group label { color: #444; }
-.light-theme .pmc-input {
-  background: rgba(0,0,0,0.06);
-  border-color: rgba(0,0,0,0.18);
-  color: #222;
-}
 .light-theme .pmc-card { background: #fff; border-color: rgba(0,0,0,0.14); }
 .light-theme .pmc-card-label { color: #666; }
 .light-theme .pmc-card-value { color: #111; }

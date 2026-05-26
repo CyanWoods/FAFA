@@ -163,7 +163,7 @@ let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 0; // 0 = 全部数据
-let _pmcConfig = { ftp: 200, maxHr: 190 };
+let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, weight: 0 };
 
 let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
@@ -1956,11 +1956,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // PMC settings auto-save on change (no auto-recalc to avoid hammering)
-  ['pmc-ftp', 'pmc-rest-hr', 'pmc-max-hr', 'pmc-weight'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', _savePmcSettings);
-  });
-
   // 初始加载文件库计数 & AI 配置 & 主题
   refreshLibraryCount();
   _initAiConfig();
@@ -2551,11 +2546,15 @@ async function _initAiConfig() {
 async function _loadPmcConfig() {
   try {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
-    if (cfg.pmc_ftp    != null) _pmcConfig.ftp   = cfg.pmc_ftp;
-    if (cfg.pmc_max_hr != null) _pmcConfig.maxHr = cfg.pmc_max_hr;
+    if (cfg.pmc_ftp     != null) _pmcConfig.ftp    = cfg.pmc_ftp;
+    if (cfg.pmc_max_hr  != null) _pmcConfig.maxHr  = cfg.pmc_max_hr;
+    if (cfg.pmc_rest_hr != null) _pmcConfig.restHr = cfg.pmc_rest_hr;
+    if (cfg.pmc_weight  != null) _pmcConfig.weight = cfg.pmc_weight;
   } catch {
-    _pmcConfig.ftp   = parseInt(localStorage.getItem('pmc_ftp')    || '200', 10);
-    _pmcConfig.maxHr = parseInt(localStorage.getItem('pmc_max_hr') || '190', 10);
+    _pmcConfig.ftp    = parseInt(localStorage.getItem('pmc_ftp')     || '200', 10);
+    _pmcConfig.maxHr  = parseInt(localStorage.getItem('pmc_max_hr')  || '190', 10);
+    _pmcConfig.restHr = parseInt(localStorage.getItem('pmc_rest_hr') || '50',  10);
+    _pmcConfig.weight = parseFloat(localStorage.getItem('pmc_weight') || '0');
   }
 }
 
@@ -2674,46 +2673,11 @@ function _renderMarkdown(text) {
 
 function _pmcSettings() {
   return {
-    ftp:    parseInt(document.getElementById('pmc-ftp').value)     || 0,
-    restHR: parseInt(document.getElementById('pmc-rest-hr').value) || 50,
-    maxHR:  parseInt(document.getElementById('pmc-max-hr').value)  || 190,
-    weight: parseFloat(document.getElementById('pmc-weight').value) || 0,
+    ftp:    _pmcConfig.ftp    || 0,
+    restHR: _pmcConfig.restHr || 50,
+    maxHR:  _pmcConfig.maxHr  || 190,
+    weight: _pmcConfig.weight || 0,
   };
-}
-
-function _savePmcSettings() {
-  const s = _pmcSettings();
-  if (s.ftp)    localStorage.setItem('pmc_ftp',     s.ftp);
-  if (s.restHR) localStorage.setItem('pmc_rest_hr', s.restHR);
-  if (s.maxHR)  localStorage.setItem('pmc_max_hr',  s.maxHR);
-  if (s.weight) localStorage.setItem('pmc_weight',  s.weight);
-  const patch = {};
-  if (s.ftp)    patch.pmc_ftp     = s.ftp;
-  if (s.restHR) patch.pmc_rest_hr = s.restHR;
-  if (s.maxHR)  patch.pmc_max_hr  = s.maxHR;
-  if (s.weight) patch.pmc_weight  = s.weight;
-  if (Object.keys(patch).length)
-    fetch('/api/config/raw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(patch) }).catch(() => {});
-}
-
-async function _loadPmcSettings() {
-  try {
-    const r = await fetch('/api/config/raw');
-    const cfg = await r.json();
-    if (cfg.pmc_ftp     != null) document.getElementById('pmc-ftp').value     = cfg.pmc_ftp;
-    if (cfg.pmc_rest_hr != null) document.getElementById('pmc-rest-hr').value = cfg.pmc_rest_hr;
-    if (cfg.pmc_max_hr  != null) document.getElementById('pmc-max-hr').value  = cfg.pmc_max_hr;
-    if (cfg.pmc_weight  != null) document.getElementById('pmc-weight').value  = cfg.pmc_weight;
-    return;
-  } catch {}
-  const ftp    = localStorage.getItem('pmc_ftp')     || '';
-  const restHR = localStorage.getItem('pmc_rest_hr') || '50';
-  const maxHR  = localStorage.getItem('pmc_max_hr')  || '190';
-  const weight = localStorage.getItem('pmc_weight')  || '';
-  document.getElementById('pmc-ftp').value     = ftp;
-  document.getElementById('pmc-rest-hr').value = restHR;
-  document.getElementById('pmc-max-hr').value  = maxHR;
-  document.getElementById('pmc-weight').value  = weight;
 }
 
 /* ── Settings modal ─────────────────────────────────────────────────────── */
@@ -2763,14 +2727,14 @@ async function saveSettingsModal() {
   try {
     const r = await fetch('/api/config/raw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
     if (!r.ok) throw new Error();
-    if (cfg.pmc_ftp     != null) document.getElementById('pmc-ftp').value     = cfg.pmc_ftp;
-    if (cfg.pmc_rest_hr != null) document.getElementById('pmc-rest-hr').value = cfg.pmc_rest_hr;
-    if (cfg.pmc_max_hr  != null) document.getElementById('pmc-max-hr').value  = cfg.pmc_max_hr;
-    if (cfg.pmc_weight  != null) document.getElementById('pmc-weight').value  = cfg.pmc_weight;
     closeSettingsModal();
     toast('设置已保存');
     _initAiConfig();
-    _loadPmcConfig();
+    await _loadPmcConfig();
+    if (_analyticsOpen && _analyticsTab === 'pmc') {
+      _pmcAllData = null;
+      _loadAndRenderPmc();
+    }
   } catch { toast('保存失败'); }
 }
 
@@ -2810,7 +2774,6 @@ function openAnalyticsView(tab = 'pmc') {
   _calActivities = null;
   document.getElementById('analytics-view').classList.add('active');
   document.getElementById('analytics-title').textContent = tab === 'calendar' ? '训练日历' : '体能管理';
-  _loadPmcSettings();
   // 重置 PMC AI 区
   _doSwitchTab(tab);
 }
@@ -2862,12 +2825,6 @@ function openPmcView()      { openAnalyticsView('pmc'); }
 function closePmcView()     { closeAnalyticsView(); }
 function openCalendarView() { openAnalyticsView('calendar'); }
 function closeCalendarView() { closeAnalyticsView(); }
-
-function pmcRecalc() {
-  _savePmcSettings();
-  _pmcAllData = null; // 强制重算
-  _loadAndRenderPmc();
-}
 
 async function _loadAndRenderPmc() {
   if (_pmcAllData !== null) {
