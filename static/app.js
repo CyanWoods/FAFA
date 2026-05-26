@@ -175,11 +175,14 @@ function switchSidebarView(name) {
     btn.classList.toggle('active', btn.dataset.view === name);
   });
 
-  // Show/hide map context controls (topbar, track-panel, zoom-slider only visible in map mode)
-  const mapCtrlsVisible = (name === 'map');
-  document.getElementById('topbar').style.display        = mapCtrlsVisible ? '' : 'none';
-  document.getElementById('track-panel').style.display   = mapCtrlsVisible ? '' : 'none';
-  document.getElementById('zoom-slider-wrap').style.display = mapCtrlsVisible ? '' : 'none';
+  // Show/hide map view
+  const mapView = document.getElementById('map-view');
+  if (name === 'map') {
+    mapView.classList.add('active');
+    map.invalidateSize();
+  } else {
+    mapView.classList.remove('active');
+  }
 
   if (name === 'activities') {
     document.getElementById('activities-view').classList.add('active');
@@ -192,7 +195,6 @@ function switchSidebarView(name) {
     document.getElementById('files-view').classList.add('active');
     refreshLibrary();
   }
-  // 'map': map is the background — show topbar/track-panel/zoom-slider (already set above)
 }
 
 let _actActivities  = null; // cached from /api/activities
@@ -2399,9 +2401,6 @@ function closeAnalyticsView() {
       btn.classList.toggle('active', btn.dataset.view === 'activities');
     });
     document.getElementById('activities-view').classList.add('active');
-    document.getElementById('topbar').style.display        = 'none';
-    document.getElementById('track-panel').style.display   = 'none';
-    document.getElementById('zoom-slider-wrap').style.display = 'none';
   }
 }
 
@@ -2645,6 +2644,37 @@ function _renderPmcChart(pmc, periodDays) {
   if (_pmcChart) { _pmcChart.destroy(); _pmcChart = null; }
 
   const ctx = document.getElementById('pmc-canvas').getContext('2d');
+
+  let _ltrProgress = 0;
+  const ltrClip = {
+    id: 'ltrClip',
+    beforeDatasetsDraw(chart) {
+      if (_ltrProgress >= 1) return;
+      const { ctx: c, chartArea: { left, top, width, height } } = chart;
+      c.save();
+      c.beginPath();
+      c.rect(left, top - 5, width * _ltrProgress, height + 10);
+      c.clip();
+    },
+    afterDatasetsDraw(chart) {
+      if (_ltrProgress >= 1) return;
+      chart.ctx.restore();
+    },
+  };
+
+  function _startLtrAnim() {
+    const duration = 800;
+    const start = performance.now();
+    function tick() {
+      if (!_pmcChart) return;
+      const t = Math.min(1, (performance.now() - start) / duration);
+      _ltrProgress = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2;
+      _pmcChart.draw();
+      if (t < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
   const tsbZoneBands = {
     id: 'tsbZones',
     beforeDraw(chart) {
@@ -2669,7 +2699,7 @@ function _renderPmcChart(pmc, periodDays) {
   };
 
   _pmcChart = new Chart(ctx, {
-    plugins: [tsbZoneBands],
+    plugins: [tsbZoneBands, ltrClip],
     data: {
       labels,
       datasets: [
@@ -2727,6 +2757,7 @@ function _renderPmcChart(pmc, periodDays) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {
@@ -2764,6 +2795,7 @@ function _renderPmcChart(pmc, periodDays) {
       },
     },
   });
+  _startLtrAnim();
 }
 
 /* ── 训练区间分布 ─────────────────────────────────────────────────────────── */

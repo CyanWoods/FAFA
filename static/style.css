@@ -72,45 +72,48 @@ body {
 }
 
 /* ── Map ───────────────────────────────────────────────────────────────────── */
-#map {
+/* ── Map view ──────────────────────────────────────────────────────────────── */
+#map-view {
   position: fixed;
   top: 0; right: 0; bottom: 0;
   left: 180px;
-  z-index: 1;
+  z-index: 500;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* ── Top bar ───────────────────────────────────────────────────────────────── */
-#topbar {
-  position: fixed;
-  top: 14px;
-  left: calc(180px + 50%);
-  transform: translateX(-50%);
-  z-index: 900;
+#map-view.active { display: flex; }
+
+#map-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 16px;
-  background: rgba(15, 15, 20, 0.88);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  justify-content: space-between;
+  padding: 13px 24px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: #0f0f14;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+#map-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#map-actions button {
+  padding: 6px 14px;
+  border: 1px solid rgba(255,255,255,0.12);
   border-radius: 20px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
-  white-space: nowrap;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
 
-.logo {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: #e8e8e8;
-}
-
-.sep {
-  width: 1px;
-  height: 18px;
-  background: rgba(255, 255, 255, 0.12);
-}
+#map-actions button:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
 #tile-select {
   appearance: none;
@@ -118,8 +121,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   color: #ccc;
-  font-size: 13px;
-  padding: 4px 26px 4px 12px;
+  font-size: 12px;
+  padding: 6px 26px 6px 14px;
   cursor: pointer;
   outline: none;
 }
@@ -127,23 +130,28 @@ body {
 #tile-select option { background: #1a1a28; }
 
 #clear-btn {
-  border: 1px solid rgba(231, 76, 60, 0.45);
-  border-radius: 20px;
-  padding: 4px 13px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  color: #e07070;
-  background: rgba(231, 76, 60, 0.08);
-  transition: background 0.15s, color 0.15s;
-  white-space: nowrap;
+  border-color: rgba(231, 76, 60, 0.45) !important;
+  color: #e07070 !important;
+  background: rgba(231, 76, 60, 0.08) !important;
 }
 
 #clear-btn:hover {
-  background: rgba(231, 76, 60, 0.22);
-  color: #ff9090;
+  background: rgba(231, 76, 60, 0.22) !important;
+  color: #ff9090 !important;
 }
 
+/* Map body — fills remaining space between header and track panel */
+.map-body {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
 
 /* ── Track panel ───────────────────────────────────────────────────────────── */
 #track-panel {
@@ -284,7 +292,7 @@ body {
 
 /* ── Zoom slider ───────────────────────────────────────────────────────────── */
 #zoom-slider-wrap {
-  position: fixed;
+  position: absolute;
   right: 16px;
   top: 50%;
   transform: translateY(-50%);
@@ -948,7 +956,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px 14px;
+  padding: 13px 24px 14px;
   border-bottom: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
 }
@@ -1222,7 +1230,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px 16px;
+  padding: 13px 24px 14px;
   border-bottom: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
 }
@@ -1735,13 +1743,13 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
-#analytics-view.active { display: flex; animation: detailIn 0.18s ease; }
+#analytics-view.active { display: flex; }
 
 #analytics-topbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 24px 14px;
+  padding: 13px 24px 14px;
   border-bottom: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
   flex-wrap: wrap;

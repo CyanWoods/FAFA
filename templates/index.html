@@ -46,55 +46,48 @@
     </div>
   </nav>
 
-  <!-- 顶部控制栏 -->
-  <div id="topbar">
-    <span class="logo">FAFA</span>
-
-    <div class="sep"></div>
-
-    <select id="tile-select">
-      <option value="dark" selected>深色地图</option>
-      <option value="dark-nolabels">深色路网</option>
-      <option value="light">浅色地图</option>
-      <option value="light-nolabels">浅色路网</option>
-      <option value="amap">高德地图</option>
-    </select>
-
-    <div class="sep"></div>
-
-    <button id="export-all-btn" onclick="exportAllJson()">全量导出</button>
-    <button id="export-btn"     onclick="openExportModal()">导出图片</button>
-    <div class="sep"></div>
-    <button id="clear-btn" onclick="clearAllTracks()">清除全部</button>
-  </div>
-
-  <!-- 路径列表 -->
-  <div id="track-panel">
-    <div id="panel-resize-handle"></div>
-    <div id="panel-header" onclick="togglePanel()">
-      <span class="panel-title">已加载路径</span>
-      <div class="panel-header-right">
-        <span id="panel-track-count">0</span>
-        <button id="panel-toggle" title="展开/收起">▼</button>
+  <!-- ── 界面：骑行轨迹 ─────────────────────────────────────────────────────── -->
+  <div id="map-view">
+    <div id="map-header">
+      <span class="act-list-title">骑行轨迹</span>
+      <div id="map-actions">
+        <select id="tile-select">
+          <option value="dark" selected>深色地图</option>
+          <option value="dark-nolabels">深色路网</option>
+          <option value="light">浅色地图</option>
+          <option value="light-nolabels">浅色路网</option>
+          <option value="amap">高德地图</option>
+        </select>
+        <button id="export-all-btn" onclick="exportAllJson()">全量导出</button>
+        <button id="export-btn"     onclick="openExportModal()">导出图片</button>
+        <button id="clear-btn"      onclick="clearAllTracks()">清除全部</button>
       </div>
     </div>
-    <div id="panel-body">
-      <div id="track-list"></div>
-      <div id="empty-hint">将 .fit 文件拖拽到地图，或从文件库加载</div>
+    <div class="map-body">
+      <div id="map"></div>
+      <div id="zoom-slider-wrap">
+        <button id="zoom-in-btn"  class="zoom-btn" title="放大">+</button>
+        <div id="zoom-track">
+          <div id="zoom-thumb"></div>
+        </div>
+        <button id="zoom-out-btn" class="zoom-btn" title="缩小">−</button>
+      </div>
+    </div>
+    <div id="track-panel">
+      <div id="panel-resize-handle"></div>
+      <div id="panel-header" onclick="togglePanel()">
+        <span class="panel-title">已加载路径</span>
+        <div class="panel-header-right">
+          <span id="panel-track-count">0</span>
+          <button id="panel-toggle" title="展开/收起">▼</button>
+        </div>
+      </div>
+      <div id="panel-body">
+        <div id="track-list"></div>
+        <div id="empty-hint">将 .fit 文件拖拽到地图，或从文件库加载</div>
+      </div>
     </div>
   </div>
-
-  <!-- 缩放拉柄 -->
-  <div id="zoom-slider-wrap">
-    <button id="zoom-in-btn"  class="zoom-btn" title="放大">+</button>
-    <div id="zoom-track">
-      <div id="zoom-thumb"></div>
-    </div>
-    <button id="zoom-out-btn" class="zoom-btn" title="缩小">−</button>
-  </div>
-
-  <!-- 地图 -->
-  <div id="map"></div>
 
   <!-- 拖拽遮罩 -->
   <div id="drop-overlay">

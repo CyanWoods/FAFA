@@ -20,7 +20,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 - **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
-- **Map view** (`#map`, `data-view="map"`): Dedicated sidebar nav entry (骑行轨迹). Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export; track list sorted reverse-chronologically. Hovering a panel row flashes the polyline. Top-center topbar with tile selector and PNG export modal. Top-right zoom slider. Map controls (`#topbar`, `#track-panel`, `#zoom-slider-wrap`) are hidden when any other sidebar view is active. Sidebar badge (`#track-badge`) shows loaded track count; panel count shown in `#panel-track-count`.
+- **Map view** (`#map`, `data-view="map"`): Dedicated sidebar nav entry (骑行轨迹). Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export; track list sorted reverse-chronologically. Hovering a panel row flashes the polyline. Header bar (`#map-header`) with tile selector and PNG export controls, consistent with other views. Right-side floating zoom slider (`#zoom-slider-wrap`). Bottom-left floating track panel (`#track-panel`). Map view is shown/hidden via `#map-view` active class toggle when switching sidebar views. Sidebar badge (`#track-badge`) shows loaded track count; panel count shown in `#panel-track-count`.
 
 - **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger OneLap sync. Upload via file input (导入 FIT button).
 
@@ -123,7 +123,7 @@ Key sections in order:
 | 1 | `#map` |
 | 500 | `#activities-view`, `#files-view` (sidebar content, below map controls) |
 | 800 | `#sidebar` |
-| 900 | `#topbar`, `#track-panel`, `#zoom-slider-wrap` |
+| 900 | `#track-panel`, `#zoom-slider-wrap` |
 | 950 | `#detail-view` (covers main UI) |
 | 960 | `#analytics-view`, `#ai-view` |
 | 1000 | detail route legend |

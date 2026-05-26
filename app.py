@@ -31,6 +31,7 @@ import fafa.strava as _strava
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 PROJECT_ROOT   = Path(__file__).parent
 INPUT_DIR      = PROJECT_ROOT / "input"
