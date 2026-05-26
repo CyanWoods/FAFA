@@ -2803,7 +2803,6 @@ function _doSwitchTab(tab) {
   });
   // 顶栏上下文控件切换
   const isPmc = tab === 'pmc';
-  document.getElementById('analytics-pmc-controls').style.display = isPmc ? '' : 'none';
   document.getElementById('analytics-cal-controls').style.display = isPmc ? 'none' : '';
   document.getElementById('analytics-pmc-right').style.display    = isPmc ? '' : 'none';
   document.getElementById('analytics-cal-right').style.display    = isPmc ? 'none' : '';
