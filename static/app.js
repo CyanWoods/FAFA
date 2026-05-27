@@ -140,7 +140,7 @@ function encryptCoords(raw) { return raw.map(([a, b]) => wgs84ToGcj02(a, b)); }
 function decryptCoords(raw) { return raw.map(([a, b]) => gcj02ToWgs84(a, b)); }
 
 /* ── State ───────────────────────────────────────────────────────────────── */
-let map, tileLayer;
+let map, tileLayer, currentTile = 'dark-nolabels';
 const tracks = new Map();
 let trackCounter = 0;
 const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K' };
@@ -446,8 +446,9 @@ function _buildActivityCard(act) {
   const durStr = summary.total_duration_s      != null ? _fmtDur(summary.total_duration_s)        : '—';
   const speed  = summary.avg_speed_kmh         != null ? summary.avg_speed_kmh.toFixed(1) + ' km/h' : '—';
   const elev   = summary.total_elevation_gain_m != null ? Math.round(summary.total_elevation_gain_m) + ' m' : '—';
-  const power  = summary.avg_power             != null ? Math.round(summary.avg_power) + ' W'   : '—';
-  const hr     = summary.avg_hr                != null ? Math.round(summary.avg_hr)   + ' bpm'  : '—';
+  const power   = summary.avg_power    != null ? Math.round(summary.avg_power)  + ' W'   : '—';
+  const hr      = summary.avg_hr       != null ? Math.round(summary.avg_hr)    + ' bpm'  : '—';
+  const cadence = summary.avg_cadence  != null ? Math.round(summary.avg_cadence) + ' rpm' : '—';
 
   const card = document.createElement('div');
   card.className = 'act-card';
@@ -464,9 +465,10 @@ function _buildActivityCard(act) {
       <div class="act-stat act-stat-primary"><span class="act-stat-val">${distKm}</span><span class="act-stat-lbl">距离</span></div>
       <div class="act-stat act-stat-primary"><span class="act-stat-val">${durStr}</span><span class="act-stat-lbl">时长</span></div>
       <div class="act-stat"><span class="act-stat-val">${speed}</span><span class="act-stat-lbl">均速</span></div>
-      <div class="act-stat"><span class="act-stat-val">${elev}</span><span class="act-stat-lbl">爬升</span></div>
-      <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">均功率</span></div>
+      <div class="act-stat"><span class="act-stat-val">${cadence}</span><span class="act-stat-lbl">均踏频</span></div>
       <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">均心率</span></div>
+      <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">均功率</span></div>
+      <div class="act-stat"><span class="act-stat-val">${elev}</span><span class="act-stat-lbl">爬升</span></div>
     </div>
     <div class="act-card-actions">
       <button class="act-card-ai-btn">AI 分析</button>
@@ -554,9 +556,10 @@ function initMap() {
 }
 
 function setTiles(name) {
+  currentTile = name;
   if (tileLayer) map.removeLayer(tileLayer);
-  const t = TILES[name];
-  tileLayer = L.tileLayer(t.url, t.opts).addTo(map);
+  const tileCfg = TILES[name];
+  tileLayer = L.tileLayer(tileCfg.url, tileCfg.opts).addTo(map);
   tileLayer.on('tileerror', function (err) {
     const tile = err.tile;
     const retries = +(tile.dataset.retries || 0);
@@ -578,10 +581,13 @@ function setTiles(name) {
       }, delay);
     }
   });
+  for (const track of tracks.values()) renderTrack(track);
 }
 
 /* ── Track coords ────────────────────────────────────────────────────────── */
 function getCoords(track) {
+  // Amap tiles expect GCJ-02; all local files are WGS-84, encrypt for display only
+  if (currentTile === 'amap') return track.encrypted;
   if (track.mode === 'decrypt') return track.decrypted;
   if (track.mode === 'encrypt') return track.encrypted;
   return track.raw;
