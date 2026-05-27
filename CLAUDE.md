@@ -73,7 +73,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `fafa.tools.rename_fit` — Rename Magene raw filenames to `Magene_{model}_{id}_YYYYMMDD-HHMMSS.fit`
 - `fafa.tools.export_all` — Batch-parse `input/` and write a JSON file for AI use. Supports `--no-km-stats`, `--min-km`, `--keep-nulls`.
 - `fafa.tools.download_fit` — CLI wrapper for the OneLap download pipeline (same logic as the web sync, but terminal output).
-- `fafa.tools.ant_analysis` — Analyze ANT+ device connection duration per FIT file. Reports per-device connected time, percentage of ride, and disconnection windows derived from `record_mesgs`. Devices without a record-level metric field (Di2/eTap, lights, radar) are listed as registered. Supports `--gap SECONDS` to merge short dropout windows and `--json` for machine-readable output.
+- `fafa.tools.ant_analysis` — Analyze ANT+ device connection duration per FIT file. Reports per-device connected time, percentage of ride, and disconnection windows derived from `record_mesgs`. Devices without a record-level metric field (Di2/eTap, lights, radar) are listed as registered. Di2/eTap additionally shows gear change events with direction arrows; events where both gears are 255 are tagged `[重连?]` (probable reconnect signal, validated across multiple files). All timestamps are shown in local time (derived from `activity_mesgs` UTC offset). BLE devices are excluded from output. Supports `--gap SECONDS` to merge short dropout windows and `--json` for machine-readable output.
 
 ## Key conventions
 

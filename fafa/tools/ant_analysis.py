@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+_FIT_EPOCH = datetime.datetime(1989, 12, 31, 0, 0, 0)
+
 
 # ANT+ device type → metric fields in record_mesgs (empty = no record-level data)
 _ANTPLUS_METRIC_MAP: dict[str, list[str]] = {
@@ -79,6 +81,7 @@ class GearEvent:
     timestamp: datetime.datetime
     front_gear: Optional[int]
     rear_gear: Optional[int]
+    is_reconnect: bool = False  # both gears were 255 — possible Di2 reconnect signal
 
 
 @dataclass
@@ -102,11 +105,16 @@ class DeviceResult:
         return max(0, len(self.windows) - 1)
 
     @property
+    def real_shifts(self) -> list:
+        return [ge for ge in self.gear_events if not ge.is_reconnect]
+
+    @property
     def shifting_span_s(self) -> Optional[float]:
-        """Time from first to last gear change event."""
-        if len(self.gear_events) < 1:
+        """Time from first to last real gear change event."""
+        real = self.real_shifts
+        if not real:
             return None
-        return (self.gear_events[-1].timestamp - self.gear_events[0].timestamp).total_seconds()
+        return (real[-1].timestamp - real[0].timestamp).total_seconds()
 
 
 @dataclass
@@ -187,6 +195,22 @@ def analyze_fit(filepath: str, gap_merge_s: float = 5.0) -> RideResult:
         for e in errors:
             print(f"[Warning] {e}", file=sys.stderr)
 
+    # --- UTC offset (local_timestamp vs timestamp in activity_mesgs) --------
+    utc_offset_s = 0
+    act_mesgs = messages.get("activity_mesgs", [])
+    if act_mesgs:
+        act = act_mesgs[0]
+        lt_raw = act.get("local_timestamp")
+        ts_utc = act.get("timestamp")
+        if lt_raw is not None and ts_utc is not None and isinstance(lt_raw, (int, float)):
+            local_dt = _FIT_EPOCH + datetime.timedelta(seconds=int(lt_raw))
+            utc_naive = ts_utc.replace(tzinfo=None) if hasattr(ts_utc, "tzinfo") else ts_utc
+            utc_offset_s = int(round((local_dt - utc_naive).total_seconds()))
+    tz_local = datetime.timezone(datetime.timedelta(seconds=utc_offset_s))
+
+    def _to_local(dt: datetime.datetime) -> datetime.datetime:
+        return dt.replace(tzinfo=datetime.timezone.utc).astimezone(tz_local).replace(tzinfo=None)
+
     # --- Records ----------------------------------------------------------
     raw_recs = messages.get("record_mesgs", [])
     raw_recs.sort(key=lambda r: r["timestamp"])
@@ -194,7 +218,7 @@ def analyze_fit(filepath: str, gap_merge_s: float = 5.0) -> RideResult:
     if not raw_recs:
         raise ValueError(f"No record messages in {filepath}")
 
-    timestamps = [r["timestamp"] for r in raw_recs]
+    timestamps = [_to_local(r["timestamp"]) for r in raw_recs]
     ride_start = timestamps[0]
     ride_end = timestamps[-1]
 
@@ -219,15 +243,6 @@ def analyze_fit(filepath: str, gap_merge_s: float = 5.0) -> RideResult:
             seen.add(key)
             label = _TYPE_LABEL.get(apt, apt)
             metrics = _ANTPLUS_METRIC_MAP[apt]
-        elif src == "bluetooth_low_energy" and dt_num in _BLE_DEVICE_TYPE_LABEL:
-            # BLE device without antplus_device_type
-            key = ("ble", dt_num, num)
-            if key in seen:
-                continue
-            seen.add(key)
-            apt = f"ble_{dt_num}"
-            label = _BLE_DEVICE_TYPE_LABEL[dt_num]
-            metrics = []
         else:
             continue
 
@@ -282,10 +297,16 @@ def analyze_fit(filepath: str, gap_merge_s: float = 5.0) -> RideResult:
     for e in sorted(raw_events, key=lambda x: x["timestamp"]):
         ev = e.get("event", "")
         if ev in ("rear_gear_change", "front_gear_change"):
+            fg = e.get("front_gear_num")
+            rg = e.get("rear_gear_num")
+            fg_clean = fg if fg != 255 else None
+            rg_clean = rg if rg != 255 else None
+            is_reconnect = (fg_clean is None and rg_clean is None)
             gear_events.append(GearEvent(
-                timestamp=e["timestamp"],
-                front_gear=e.get("front_gear_num"),
-                rear_gear=e.get("rear_gear_num"),
+                timestamp=_to_local(e["timestamp"]),
+                front_gear=fg_clean,
+                rear_gear=rg_clean,
+                is_reconnect=is_reconnect,
             ))
 
     if gear_events:
@@ -368,25 +389,30 @@ def print_result(result: RideResult) -> None:
 
         if not dev.metrics:
             if dev.gear_events:
+                real = dev.real_shifts
                 span = dev.shifting_span_s or 0
                 span_pct = span / total_s * 100 if total_s > 0 else 0.0
-                first_ts = dev.gear_events[0].timestamp
-                last_ts = dev.gear_events[-1].timestamp
-                first_offset = (first_ts - result.ride_start).total_seconds()
+                first_ts = real[0].timestamp if real else dev.gear_events[0].timestamp
+                last_ts = real[-1].timestamp if real else dev.gear_events[-1].timestamp
+                reconnect_count = len(dev.gear_events) - len(real)
+                reconnect_note = f"  含 {reconnect_count} 次[重连?]事件" if reconnect_count else ""
                 print(f"    换挡活跃窗口: {_fmt_time(first_ts)} → {_fmt_time(last_ts)}"
                       f"  ({_fmt_duration(span)}, {span_pct:.1f}% of 骑行)")
-                print(f"    首次换挡: {_fmt_time(first_ts)}  共 {len(dev.gear_events)} 次换挡"
+                print(f"    首次换挡: {_fmt_time(first_ts)}  共 {len(real)} 次换挡{reconnect_note}"
                       f"  (注: 无换挡≠断连，仅供参考)")
                 print(f"    换挡记录:")
-                prev_f, prev_r = None, None
+                prev_r = None
                 for ge in dev.gear_events:
-                    f_str = f"F{ge.front_gear}" if ge.front_gear is not None else "F?"
-                    r_str = f"R{ge.rear_gear}" if ge.rear_gear is not None else "R?"
+                    if ge.is_reconnect:
+                        print(f"      {_fmt_time(ge.timestamp)}  [重连?]")
+                        continue
+                    f_str = f"F{ge.front_gear}" if ge.front_gear is not None else ""
+                    r_str = f"R{ge.rear_gear}" if ge.rear_gear is not None else ""
                     direction = ""
                     if prev_r is not None and ge.rear_gear is not None:
                         direction = " ↑" if ge.rear_gear > prev_r else " ↓"
                     print(f"      {_fmt_time(ge.timestamp)}  {f_str} {r_str}{direction}")
-                    prev_f, prev_r = ge.front_gear, ge.rear_gear
+                    prev_r = ge.rear_gear
             else:
                 print(f"    连接时长: 已注册于 FIT（无帧级指标，无换挡事件）")
             continue
@@ -435,7 +461,8 @@ def result_to_dict(result: RideResult) -> dict:
                 ],
                 "gear_events": [
                     {"timestamp": ge.timestamp.isoformat(),
-                     "front_gear": ge.front_gear, "rear_gear": ge.rear_gear}
+                     "front_gear": ge.front_gear, "rear_gear": ge.rear_gear,
+                     "is_reconnect": ge.is_reconnect}
                     for ge in d.gear_events
                 ] if d.gear_events else None,
                 "shifting_span_s": d.shifting_span_s,

@@ -278,7 +278,7 @@ venv\Scripts\python -m fafa.tools.download_fit --limit 10
 
 ### `fafa.tools.ant_analysis` — ANT+ 设备连接时长分析
 
-分析 FIT 文件中各 ANT+ 设备（心率带、功率计、踏频/速度传感器、Di2 变速、BLE 车灯等）的连接时长及占骑行时间的百分比。连接窗口从 `record_mesgs` 逐帧推算；Di2、雷达等无帧级指标的设备仅显示「已注册」。
+分析 FIT 文件中各 ANT+ 设备（心率带、功率计、踏频/速度传感器、Di2 变速等）的连接时长及占骑行时间的百分比。连接窗口从 `record_mesgs` 逐帧推算；Di2/eTap 显示换挡事件记录（含方向箭头），255/255 事件标记为 `[重连?]`；BLE 设备不显示；所有时间戳转换为本地时间。
 
 ```bash
 # macOS / Linux
