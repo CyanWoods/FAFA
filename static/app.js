@@ -1,3 +1,10 @@
+/* ── ECharts: inject locally if not already loaded from template ─────────── */
+if (typeof echarts === 'undefined') {
+  const _es = document.createElement('script');
+  _es.src = '/static/echarts.min.js';
+  document.head.appendChild(_es);
+}
+
 /* ── Tile configs ────────────────────────────────────────────────────────── */
 const _CARTO_OPTS = {
   subdomains: 'bcd', maxZoom: 19, attribution: '&copy; CARTO',
@@ -214,9 +221,10 @@ function switchSidebarView(name) {
 }
 
 let _actActivities  = null; // cached from /api/activities
-let _actFilter      = { year: '', month: '', minKm: null, maxKm: null };
+let _actFilter      = { year: '', month: '', minKm: null, maxKm: null, tags: new Set() };
 let _actSelectMode  = false;
 let _actSelected    = new Set(); // filenames
+let _allTags        = []; // all tags from /api/tags
 
 function _actFilteredList() {
   if (!_actActivities) return [];
@@ -229,6 +237,12 @@ function _actFilteredList() {
     const km = (a.summary || {}).total_dist_km || 0;
     if (_actFilter.minKm != null && km < _actFilter.minKm) return false;
     if (_actFilter.maxKm != null && km >= _actFilter.maxKm) return false;
+    if (_actFilter.tags.size > 0) {
+      const actTagIds = new Set((a.tags || []).map(t => t.id));
+      for (const tid of _actFilter.tags) {
+        if (!actTagIds.has(tid)) return false;
+      }
+    }
     return true;
   });
 }
@@ -238,6 +252,45 @@ function _actFilterChanged() {
   _actFilter.month = document.getElementById('act-filter-month').value;
   if (_actSelectMode) _exitSelectMode();
   _renderActivityList(_actFilteredList());
+}
+
+async function _loadAllTags() {
+  try {
+    const res = await fetch('/api/tags');
+    if (res.ok) {
+      _allTags = (await res.json()).tags || [];
+      _renderTagFilterChips();
+    }
+  } catch (_) {}
+}
+
+function _renderTagFilterChips() {
+  const row = document.getElementById('act-filter-tag-row');
+  const container = document.getElementById('act-filter-tags');
+  if (!container) return;
+  if (_allTags.length === 0) { row.style.display = 'none'; return; }
+  row.style.display = '';
+  container.innerHTML = '';
+  for (const tag of _allTags) {
+    const btn = document.createElement('button');
+    btn.className = 'tag-filter-chip' + (_actFilter.tags.has(tag.id) ? ' active' : '');
+    btn.textContent = tag.name;
+    if (_actFilter.tags.has(tag.id)) btn.style.background = tag.color;
+    btn.onclick = () => {
+      if (_actFilter.tags.has(tag.id)) {
+        _actFilter.tags.delete(tag.id);
+        btn.classList.remove('active');
+        btn.style.background = '';
+      } else {
+        _actFilter.tags.add(tag.id);
+        btn.classList.add('active');
+        btn.style.background = tag.color;
+      }
+      if (_actSelectMode) _exitSelectMode();
+      _renderActivityList(_actFilteredList());
+    };
+    container.appendChild(btn);
+  }
 }
 
 function _actDistPreset(btn) {
@@ -469,12 +522,24 @@ function _buildActivityCard(act) {
       <div class="act-stat"><span class="act-stat-val">${hr}</span><span class="act-stat-lbl">均心率</span></div>
       <div class="act-stat"><span class="act-stat-val">${power}</span><span class="act-stat-lbl">均功率</span></div>
       <div class="act-stat"><span class="act-stat-val">${elev}</span><span class="act-stat-lbl">爬升</span></div>
-    </div>
-    <div class="act-card-actions">
-      <button class="act-card-ai-btn">AI 分析</button>
-      <button class="act-card-ai-btn act-card-map-btn">路线热图</button>
+      <div class="act-card-tags"></div>
+      <div class="act-card-actions">
+        <button class="act-card-ai-btn">AI 分析</button>
+        <button class="act-card-ai-btn act-card-map-btn">路线热图</button>
+      </div>
     </div>
   `;
+  const tags = act.tags || [];
+  if (tags.length > 0) {
+    const tagsCol = card.querySelector('.act-card-tags');
+    tags.forEach(tag => {
+      const badge = document.createElement('span');
+      badge.className = 'act-tag-badge';
+      badge.style.background = tag.color;
+      badge.textContent = tag.name;
+      tagsCol.appendChild(badge);
+    });
+  }
   card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
     e.stopPropagation();
     openActAiModal(act);
@@ -1386,6 +1451,7 @@ async function openDetailView(id, startTab = 'data') {
 
   _renderDetailSummary(t.summary);
   _setupDetailRouteButton();
+  _loadAndRenderDetailMeta(t.name);
 
   document.getElementById('detail-charts-wrap').innerHTML =
     '<div class="detail-charts-loading">加载数据中…</div>';
@@ -1408,7 +1474,7 @@ async function openDetailView(id, startTab = 'data') {
 
 function closeDetailView() {
   document.getElementById('detail-view').classList.remove('active');
-  for (const c of detailCharts) c.destroy();
+  for (const c of detailCharts) c.dispose();
   detailCharts = [];
   _detailZoomDrag = null;
   _detailZoomActive = false;
@@ -1420,6 +1486,229 @@ function closeDetailView() {
   if (_sidebarView === 'activities') {
     document.getElementById('activities-view').classList.add('active');
   }
+}
+
+// ── detail meta: notes + tags ─────────────────────────────────────────────────
+
+let _detailMetaFilename = null;
+let _detailCurrentTags  = []; // [{id,name,color}]
+let _detailCurrentNote  = '';
+
+async function _loadAndRenderDetailMeta(filename) {
+  _detailMetaFilename = filename;
+  _closeTagPicker();
+  _renderDetailNote('', false);
+  _renderDetailTagsRow([]);
+  try {
+    const res = await fetch('/api/meta/' + encodeURIComponent(filename));
+    if (!res.ok) return;
+    const data = await res.json();
+    _detailCurrentNote = data.note || '';
+    _detailCurrentTags = data.tags || [];
+    _renderDetailNote(_detailCurrentNote, false);
+    _renderDetailTagsRow(_detailCurrentTags);
+  } catch (_) {}
+}
+
+function _renderDetailTagsRow(tags) {
+  const list = document.getElementById('detail-tags-list');
+  if (!list) return;
+  list.innerHTML = '';
+  tags.forEach(tag => {
+    const chip = document.createElement('span');
+    chip.className = 'detail-tag-chip';
+    chip.style.background = tag.color;
+    chip.textContent = tag.name;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'detail-tag-chip-remove';
+    removeBtn.title = '移除';
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => _removeTagFromActivity(tag.id));
+    chip.appendChild(removeBtn);
+    list.appendChild(chip);
+  });
+  const addBtn = document.getElementById('detail-tag-add-btn');
+  if (addBtn) addBtn.onclick = (e) => { e.stopPropagation(); _openTagPicker(addBtn); };
+}
+
+async function _removeTagFromActivity(tagId) {
+  _detailCurrentTags = _detailCurrentTags.filter(t => t.id !== tagId);
+  _renderDetailTagsRow(_detailCurrentTags);
+  await _saveDetailTags();
+  _syncActivityTagsInCache(_detailMetaFilename, _detailCurrentTags);
+}
+
+async function _saveDetailTags() {
+  if (!_detailMetaFilename) return;
+  try {
+    await fetch('/api/meta/' + encodeURIComponent(_detailMetaFilename) + '/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag_ids: _detailCurrentTags.map(t => t.id) }),
+    });
+  } catch (_) {}
+}
+
+function _syncActivityTagsInCache(filename, tags) {
+  if (!_actActivities) return;
+  const act = _actActivities.find(a => a.filename === filename);
+  if (act) {
+    act.tags = tags;
+    // Refresh the card in-place if visible
+    const card = document.querySelector(`.act-card[data-filename="${CSS.escape(filename)}"]`);
+    if (card) {
+      const tagsCol = card.querySelector('.act-card-tags');
+      if (tagsCol) {
+        tagsCol.innerHTML = '';
+        tags.forEach(tag => {
+          const badge = document.createElement('span');
+          badge.className = 'act-tag-badge';
+          badge.style.background = tag.color;
+          badge.textContent = tag.name;
+          tagsCol.appendChild(badge);
+        });
+      }
+    }
+  }
+}
+
+// ── tag picker popup ──────────────────────────────────────────────────────────
+
+function _openTagPicker(anchorEl) {
+  const picker = document.getElementById('tag-picker');
+  if (!picker) return;
+  _renderTagPickerList();
+  picker.style.display = 'block';
+  const rect = anchorEl.getBoundingClientRect();
+  const detailRect = document.getElementById('detail-view').getBoundingClientRect();
+  picker.style.left = (rect.left - detailRect.left) + 'px';
+  picker.style.top  = (rect.bottom - detailRect.top + 4) + 'px';
+  picker.style.position = 'absolute';
+  setTimeout(() => document.addEventListener('click', _pickerOutsideClick), 0);
+}
+
+function _closeTagPicker() {
+  const picker = document.getElementById('tag-picker');
+  if (picker) picker.style.display = 'none';
+  document.removeEventListener('click', _pickerOutsideClick);
+}
+
+function _pickerOutsideClick(e) {
+  const picker = document.getElementById('tag-picker');
+  if (picker && !picker.contains(e.target)) _closeTagPicker();
+}
+
+function _renderTagPickerList() {
+  const list = document.getElementById('tag-picker-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const selectedIds = new Set(_detailCurrentTags.map(t => t.id));
+  _allTags.forEach(tag => {
+    const chip = document.createElement('button');
+    chip.className = 'tag-picker-chip' + (selectedIds.has(tag.id) ? ' selected' : '');
+    chip.style.background = tag.color;
+    chip.textContent = tag.name;
+    chip.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (selectedIds.has(tag.id)) {
+        _detailCurrentTags = _detailCurrentTags.filter(t => t.id !== tag.id);
+        selectedIds.delete(tag.id);
+        chip.classList.remove('selected');
+      } else {
+        _detailCurrentTags.push(tag);
+        selectedIds.add(tag.id);
+        chip.classList.add('selected');
+      }
+      _renderDetailTagsRow(_detailCurrentTags);
+      await _saveDetailTags();
+      _syncActivityTagsInCache(_detailMetaFilename, _detailCurrentTags);
+    });
+    list.appendChild(chip);
+  });
+
+  // wire up create new tag button
+  const newBtn = document.getElementById('tag-new-btn');
+  if (newBtn) {
+    newBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const nameEl  = document.getElementById('tag-new-name');
+      const colorEl = document.getElementById('tag-new-color');
+      const name = (nameEl.value || '').trim();
+      if (!name) return;
+      try {
+        const res = await fetch('/api/tags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, color: colorEl.value }),
+        });
+        if (!res.ok) { toast('创建失败：' + ((await res.json()).error || res.statusText)); return; }
+        const { tag } = await res.json();
+        _allTags.push(tag);
+        _renderTagFilterChips();
+        nameEl.value = '';
+        _detailCurrentTags.push(tag);
+        _renderDetailTagsRow(_detailCurrentTags);
+        await _saveDetailTags();
+        _syncActivityTagsInCache(_detailMetaFilename, _detailCurrentTags);
+        _renderTagPickerList();
+      } catch (err) { toast('创建失败：' + err.message); }
+    };
+  }
+}
+
+// ── note editor ───────────────────────────────────────────────────────────────
+
+function _renderDetailNote(note, editing) {
+  const rendered = document.getElementById('detail-note-rendered');
+  const editor   = document.getElementById('detail-note-editor');
+  const editBtn  = document.getElementById('detail-note-edit-btn');
+  const saveBtn  = document.getElementById('detail-note-save-btn');
+  if (!rendered) return;
+  if (editing) {
+    rendered.style.display = 'none';
+    editor.style.display = '';
+    editor.value = note;
+    editor.focus();
+    editBtn.style.display = 'none';
+    saveBtn.style.display = '';
+  } else {
+    editor.style.display = 'none';
+    editBtn.style.display = '';
+    saveBtn.style.display = 'none';
+    rendered.style.display = '';
+    if (note) {
+      rendered.classList.add('has-content');
+      rendered.innerHTML = DOMPurify.sanitize(marked.parse(note));
+    } else {
+      rendered.classList.remove('has-content');
+      rendered.innerHTML = '<span style="color:#555;font-size:12px">点击「编辑」添加备注…</span>';
+    }
+  }
+}
+
+function _initDetailNoteButtons() {
+  const editBtn = document.getElementById('detail-note-edit-btn');
+  const saveBtn = document.getElementById('detail-note-save-btn');
+  const editor  = document.getElementById('detail-note-editor');
+  if (!editBtn || !saveBtn || !editor) return;
+  editBtn.onclick = () => _renderDetailNote(_detailCurrentNote, true);
+  saveBtn.onclick = async () => {
+    const newNote = editor.value;
+    _detailCurrentNote = newNote;
+    _renderDetailNote(newNote, false);
+    if (!_detailMetaFilename) return;
+    try {
+      await fetch('/api/meta/' + encodeURIComponent(_detailMetaFilename) + '/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: newNote }),
+      });
+    } catch (_) {}
+  };
+  // Cmd+Enter / Ctrl+Enter saves
+  editor.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveBtn.click();
+  });
 }
 
 function _renderDetailSummary(summary) {
@@ -1487,9 +1776,7 @@ function _buildRouteMetricBar() {
 
 function _resetDetailZoom() {
   for (const c of detailCharts) {
-    delete c.options.scales.x.min;
-    delete c.options.scales.x.max;
-    c.update('none');
+    c.setOption({ xAxis: [{ min: null, max: null }] });
   }
   _detailZoomActive = false;
   const btn = document.getElementById('detail-zoom-reset-btn');
@@ -1497,19 +1784,17 @@ function _resetDetailZoom() {
 }
 
 function _applyDetailZoom(minPx, maxPx, sourceChart) {
-  const labels = sourceChart.data.labels;
+  const opt = sourceChart.getOption();
+  const labels = opt.xAxis[0].data;
   if (!labels || labels.length < 2) return;
-  const xScale = sourceChart.scales.x;
-  let minI = Math.round(xScale.getValueForPixel(minPx));
-  let maxI = Math.round(xScale.getValueForPixel(maxPx));
+  let minI = Math.round(sourceChart.convertFromPixel({ xAxisIndex: 0 }, minPx));
+  let maxI = Math.round(sourceChart.convertFromPixel({ xAxisIndex: 0 }, maxPx));
   if (minI > maxI) [minI, maxI] = [maxI, minI];
   minI = Math.max(0, minI);
   maxI = Math.min(labels.length - 1, maxI);
   if (maxI - minI < 2) return;
   for (const c of detailCharts) {
-    c.options.scales.x.min = labels[minI];
-    c.options.scales.x.max = labels[maxI];
-    c.update('none');
+    c.setOption({ xAxis: [{ min: minI, max: maxI }] });
   }
   _detailZoomActive = true;
   const btn = document.getElementById('detail-zoom-reset-btn');
@@ -1519,6 +1804,23 @@ function _applyDetailZoom(minPx, maxPx, sourceChart) {
 function _initDetailZoomHandlers() {
   if (_detailZoomHandlersInited) return;
   _detailZoomHandlersInited = true;
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    for (const c of detailCharts) {
+      const container = c.getDom();
+      if (!container.contains(e.target)) continue;
+      const overlay = container.querySelector('.detail-zoom-sel');
+      if (!overlay) continue;
+      const rect = container.getBoundingClientRect();
+      const startPx = e.clientX - rect.left;
+      _detailZoomDrag = { chart: c, canvas: container, overlay, startPx };
+      overlay.style.left = startPx + 'px';
+      overlay.style.width = '0px';
+      overlay.style.display = 'none';
+      e.preventDefault();
+      break;
+    }
+  });
   document.addEventListener('mousemove', e => {
     if (!_detailZoomDrag) return;
     const { canvas, overlay, startPx } = _detailZoomDrag;
@@ -1544,30 +1846,19 @@ function _initDetailZoomHandlers() {
 }
 
 function _setupChartZoomDrag(chart) {
-  const canvas = chart.canvas;
-  const wrap = canvas.parentElement;
+  const container = chart.getDom();
   const overlay = document.createElement('div');
   overlay.className = 'detail-zoom-sel';
   overlay.style.display = 'none';
-  wrap.appendChild(overlay);
-  canvas.style.cursor = 'crosshair';
-  canvas.addEventListener('mousedown', e => {
-    if (e.button !== 0) return;
-    const rect = canvas.getBoundingClientRect();
-    const startPx = e.clientX - rect.left;
-    _detailZoomDrag = { chart, canvas, overlay, startPx };
-    overlay.style.left = startPx + 'px';
-    overlay.style.width = '0px';
-    overlay.style.display = 'none';
-    e.preventDefault();
-  });
-  canvas.addEventListener('dblclick', () => {
+  container.appendChild(overlay);
+  container.style.cursor = 'crosshair';
+  container.addEventListener('dblclick', () => {
     if (_detailZoomActive) _resetDetailZoom();
   });
 }
 
 function _renderDetailCharts(records, fallbackStats) {
-  for (const c of detailCharts) c.destroy();
+  for (const c of detailCharts) c.dispose();
   detailCharts = [];
   _detailZoomActive = false;
   _detailZoomDrag = null;
@@ -1583,6 +1874,10 @@ function _renderDetailCharts(records, fallbackStats) {
   const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
   const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
   const tickColor   = isDark ? '#555' : '#999';
+  const tooltipBg   = isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)';
+  const tooltipBorder = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
+  const tooltipTitle = isDark ? '#888' : '#999';
+  const tooltipBody  = isDark ? '#ddd' : '#333';
 
   for (const meta of METRICS) {
     const hasData = useRecords
@@ -1600,8 +1895,6 @@ function _renderDetailCharts(records, fallbackStats) {
 
     const cw = document.createElement('div');
     cw.className = 'detail-chart-canvas-wrap';
-    const canvas = document.createElement('canvas');
-    cw.appendChild(canvas);
     block.appendChild(cw);
     wrap.appendChild(block);
 
@@ -1619,59 +1912,58 @@ function _renderDetailCharts(records, fallbackStats) {
       data = (fallbackStats || []).map(s => s[meta.field] ?? null);
     }
 
-    const chart = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data,
-          borderColor: meta.color,
-          backgroundColor: meta.color + '18',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          tension: 0,
-          fill: true,
-          spanGaps: true,
-        }],
+    const chart = echarts.init(cw, null, { renderer: 'svg' });
+    chart.group = 'detail';
+    chart.setOption({
+      animation: false,
+      backgroundColor: 'transparent',
+      grid: { top: 6, bottom: 22, left: 44, right: 8, containLabel: false },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: borderColor } },
+        axisTick: { show: false },
+        axisLabel: { color: tickColor, fontSize: 10, interval: 'auto' },
+        splitLine: { show: false },
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: 'rgba(15,15,20,0.94)',
-            borderColor: 'rgba(255,255,255,0.1)',
-            borderWidth: 1,
-            titleColor: '#888',
-            bodyColor: '#ddd',
-            callbacks: {
-              label: ctx => ctx.parsed.y != null
-                ? `${meta.label}: ${ctx.parsed.y} ${meta.unit}`
-                : '无数据',
-            },
-          },
-        },
-        scales: {
-          x: {
-            ticks: { color: tickColor, maxTicksLimit: 8, autoSkip: true, font: { size: 10 } },
-            grid: { color: gridColor },
-            border: { color: borderColor },
-          },
-          y: {
-            ticks: { color: tickColor, font: { size: 10 }, maxTicksLimit: 5 },
-            grid: { color: gridColor },
-            border: { color: borderColor },
-          },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: tickColor, fontSize: 10 },
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      series: [{
+        type: 'line',
+        data,
+        symbol: 'none',
+        lineStyle: { color: meta.color, width: 1.5 },
+        areaStyle: { color: meta.color, opacity: 0.06 },
+        connectNulls: false,
+        emphasis: { disabled: true },
+      }],
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
+        backgroundColor: tooltipBg,
+        borderColor: tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: tooltipBody, fontSize: 11 },
+        formatter: params => {
+          const p = params[0];
+          const val = p.value != null ? `${p.value} ${meta.unit}` : '无数据';
+          return `<span style="color:${tooltipTitle}">${p.name}</span><br/>${meta.label}: ${val}`;
         },
       },
     });
+
+    new ResizeObserver(() => chart.resize()).observe(cw);
     detailCharts.push(chart);
     _setupChartZoomDrag(chart);
   }
+
+  echarts.connect('detail');
 }
 
 function _renderDetailTable() {
@@ -1918,6 +2210,17 @@ function _renderDetailRoute() {
   } else if (marker) {
     marker.style.display = 'none';
   }
+  const minMarker = document.getElementById('detail-route-legend-min-marker');
+  if (minMarker) {
+    if (scale && !scale.zone && !scale.coggan) {
+      const posMin = Math.max(0, Math.min(1, (scale.max > scale.min) ? (dataMin - scale.min) / (scale.max - scale.min) : 0));
+      minMarker.style.display = '';
+      minMarker.style.left = (posMin * 100) + '%';
+      minMarker.dataset.label = fmtVal(dataMin);
+    } else {
+      minMarker.style.display = 'none';
+    }
+  }
   const ftpMarker = document.getElementById('detail-route-legend-ftp-marker');
   if (ftpMarker) {
     if (scale?.coggan) {
@@ -1931,6 +2234,7 @@ function _renderDetailRoute() {
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
+
 document.addEventListener('DOMContentLoaded', () => {
   initMap();
   setupDragDrop();
@@ -1977,6 +2281,8 @@ document.addEventListener('DOMContentLoaded', () => {
   _initAiConfig();
   _loadPmcConfig();
   _initTheme();
+  _loadAllTags();
+  _initDetailNoteButtons();
 
   document.getElementById('act-upload-input')?.addEventListener('change', async e => {
     for (const file of e.target.files) await uploadFile(file);
@@ -2683,7 +2989,7 @@ async function startAiEval() {
 
 function _renderMarkdown(text) {
   if (typeof marked !== 'undefined') {
-    return marked.parse(text, { breaks: true, gfm: true });
+    return DOMPurify.sanitize(marked.parse(text, { breaks: true, gfm: true }));
   }
   // fallback: plain text with line breaks
   return '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>';
@@ -2833,8 +3139,9 @@ function _doSwitchTab(tab) {
   // 顶栏上下文控件切换
   const isPmc = tab === 'pmc';
   document.getElementById('analytics-cal-controls').style.display = isPmc ? 'none' : '';
+  document.getElementById('analytics-cal-ai').style.display       = isPmc ? 'none' : 'flex';
   document.getElementById('analytics-pmc-right').style.display    = isPmc ? '' : 'none';
-  document.getElementById('analytics-cal-right').style.display    = isPmc ? 'none' : '';
+  document.getElementById('cal-stats-bar').style.display          = isPmc ? 'none' : '';
   // 内容面板切换
   document.getElementById('pmc-body').style.display = isPmc ? '' : 'none';
   document.getElementById('cal-body').style.display = isPmc ? 'none' : '';
@@ -3049,161 +3356,156 @@ function _renderPmcChart(pmc, periodDays) {
   const step = Math.max(1, Math.ceil(days.length / targetTicks));
   const labels = days.map((d, i) => i % step === 0 ? d.slice(5) : '');
 
-  if (_pmcChart) { _pmcChart.destroy(); _pmcChart = null; }
+  if (_pmcChart) { _pmcChart.dispose(); _pmcChart = null; }
 
-  const ctx = document.getElementById('pmc-canvas').getContext('2d');
+  const isDark = !document.body.classList.contains('light-theme');
+  const tooltipBg     = isDark ? 'rgba(15,15,20,0.94)'      : 'rgba(255,255,255,0.97)';
+  const tooltipBorder = isDark ? 'rgba(255,255,255,0.1)'     : 'rgba(0,0,0,0.12)';
+  const tooltipTitle  = isDark ? '#888'                      : '#999';
+  const tooltipBody   = isDark ? '#ddd'                      : '#333';
+  const gridColor     = isDark ? 'rgba(255,255,255,0.04)'    : 'rgba(0,0,0,0.06)';
+  const tickColor     = isDark ? '#555'                      : '#999';
+  const borderColor   = isDark ? 'rgba(255,255,255,0.08)'    : 'rgba(0,0,0,0.1)';
 
-  let _ltrProgress = 0;
-  const ltrClip = {
-    id: 'ltrClip',
-    beforeDatasetsDraw(chart) {
-      if (_ltrProgress >= 1) return;
-      const { ctx: c, chartArea: { left, top, width, height } } = chart;
-      c.save();
-      c.beginPath();
-      c.rect(left, top - 5, width * _ltrProgress, height + 10);
-      c.clip();
+  const container = document.getElementById('pmc-canvas');
+  _pmcChart = echarts.init(container, null, { renderer: 'svg' });
+
+  const tsbColor = v => v > 5 ? '#2ed573' : v > -20 ? '#f39c12' : '#e74c3c';
+
+  _pmcChart.setOption({
+    animation: true,
+    animationDuration: 800,
+    animationEasing: 'cubicOut',
+    backgroundColor: 'transparent',
+    grid: { top: 32, bottom: 24, left: 42, right: 54, containLabel: false },
+    legend: {
+      top: 4,
+      textStyle: { color: '#888', fontSize: 11 },
+      itemWidth: 14, itemHeight: 8,
     },
-    afterDatasetsDraw(chart) {
-      if (_ltrProgress >= 1) return;
-      chart.ctx.restore();
+    xAxis: {
+      type: 'category',
+      data: days,
+      boundaryGap: true,
+      axisLine: { lineStyle: { color: borderColor } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: tickColor, fontSize: 10,
+        interval: Math.max(0, Math.ceil(days.length / 18) - 1),
+        formatter: v => v.slice(5),
+      },
+      splitLine: { show: false },
     },
-  };
-
-  function _startLtrAnim() {
-    const duration = 800;
-    const start = performance.now();
-    function tick() {
-      if (!_pmcChart) return;
-      const t = Math.min(1, (performance.now() - start) / duration);
-      _ltrProgress = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2;
-      _pmcChart.draw();
-      if (t < 1) requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  }
-
-  const tsbZoneBands = {
-    id: 'tsbZones',
-    beforeDraw(chart) {
-      const yScale = chart.scales['yPMC'];
-      if (!yScale) return;
-      const { ctx: c, chartArea: { left, right } } = chart;
-      const bands = [
-        { min: 10,  max: 60,  color: 'rgba(46,213,115,0.04)' },
-        { min: -10, max: 10,  color: 'rgba(163,224,100,0.03)' },
-        { min: -30, max: -10, color: 'rgba(243,156,18,0.05)'  },
-        { min: -80, max: -30, color: 'rgba(231,76,60,0.06)'   },
-      ];
-      c.save();
-      for (const { min, max, color } of bands) {
-        const yTop = yScale.getPixelForValue(max);
-        const yBot = yScale.getPixelForValue(min);
-        c.fillStyle = color;
-        c.fillRect(left, yTop, right - left, yBot - yTop);
-      }
-      c.restore();
-    },
-  };
-
-  _pmcChart = new Chart(ctx, {
-    plugins: [tsbZoneBands, ltrClip],
-    data: {
-      labels,
-      datasets: [
-        {
-          type: 'bar',
-          label: 'TSS',
-          data: tss,
-          backgroundColor: 'rgba(46, 134, 222, 0.25)',
-          borderColor:     'rgba(46, 134, 222, 0.5)',
-          borderWidth: 1,
-          yAxisID: 'yTSS',
-          order: 2,
-        },
-        {
-          type: 'line',
-          label: 'CTL 体能',
-          data: ctl,
-          borderColor: '#2ed573',
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0,
-          yAxisID: 'yPMC',
-          order: 1,
-        },
-        {
-          type: 'line',
-          label: 'ATL 疲劳',
-          data: atl,
-          borderColor: '#e74c3c',
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0,
-          yAxisID: 'yPMC',
-          order: 1,
-        },
-        {
-          type: 'line',
-          label: 'TSB 状态',
-          data: tsb,
-          borderColor: '#f39c12',
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0,
-          yAxisID: 'yPMC',
-          order: 1,
-          segment: {
-            borderColor: ctx => {
-              const v = ctx.p1.parsed.y;
-              return v > 5 ? '#2ed573' : v > -20 ? '#f39c12' : '#e74c3c';
-            },
-          },
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          labels: { color: '#888', font: { size: 11 }, boxWidth: 14 },
-        },
-        tooltip: {
-          backgroundColor: 'rgba(20,20,28,0.95)',
-          titleColor: '#ccc',
-          bodyColor: '#aaa',
-          callbacks: {
-            title: items => days[items[0].dataIndex] || '',
-            label: item => {
-              const v = item.parsed.y;
-              return ` ${item.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
-            },
-          },
+    yAxis: [
+      {
+        type: 'value',
+        position: 'left',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: tickColor, fontSize: 10 },
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      {
+        type: 'value',
+        position: 'right',
+        min: 0,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: 'rgba(46,134,222,0.6)', fontSize: 10 },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      {
+        name: 'TSS',
+        type: 'bar',
+        data: tss,
+        yAxisIndex: 1,
+        barMaxWidth: 4,
+        itemStyle: { color: 'rgba(46,134,222,0.3)' },
+        z: 1,
+      },
+      {
+        name: 'CTL 体能',
+        type: 'line',
+        data: ctl,
+        yAxisIndex: 0,
+        symbol: 'none',
+        lineStyle: { color: '#2ed573', width: 2 },
+        z: 3,
+        markArea: {
+          silent: true,
+          data: [
+            [{ yAxis: 10,  itemStyle: { color: 'rgba(46,213,115,0.04)'  } }, { yAxis: 60  }],
+            [{ yAxis: -10, itemStyle: { color: 'rgba(163,224,100,0.03)' } }, { yAxis: 10  }],
+            [{ yAxis: -30, itemStyle: { color: 'rgba(243,156,18,0.05)'  } }, { yAxis: -10 }],
+            [{ yAxis: -80, itemStyle: { color: 'rgba(231,76,60,0.06)'   } }, { yAxis: -30 }],
+          ],
         },
       },
-      scales: {
-        x: {
-          ticks: { color: '#555', font: { size: 10 }, maxRotation: 0 },
-          grid:  { color: 'rgba(255,255,255,0.04)' },
-        },
-        yPMC: {
-          position: 'left',
-          ticks: { color: '#666', font: { size: 10 } },
-          grid:  { color: 'rgba(255,255,255,0.05)' },
-        },
-        yTSS: {
-          position: 'right',
-          min: 0,
-          ticks: { color: 'rgba(46,134,222,0.6)', font: { size: 10 } },
-          grid:  { display: false },
-        },
+      {
+        name: 'ATL 疲劳',
+        type: 'line',
+        data: atl,
+        yAxisIndex: 0,
+        symbol: 'none',
+        lineStyle: { color: '#e74c3c', width: 2 },
+        z: 3,
+      },
+      {
+        name: 'TSB 状态',
+        type: 'line',
+        data: tsb.map(v => ({ value: v, itemStyle: { color: tsbColor(v) } })),
+        yAxisIndex: 0,
+        symbol: 'none',
+        lineStyle: { width: 2 },
+        z: 3,
+        visualMap: false,
+      },
+    ],
+    visualMap: {
+      show: false,
+      type: 'piecewise',
+      dimension: 1,
+      seriesIndex: 3,
+      pieces: [
+        { gt: 5,   color: '#2ed573' },
+        { gte: -20, lte: 5, color: '#f39c12' },
+        { lt: -20, color: '#e74c3c' },
+      ],
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
+      backgroundColor: tooltipBg,
+      borderColor: tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: tooltipBody, fontSize: 11 },
+      formatter: params => {
+        const date = `<span style="color:${tooltipTitle}">${params[0]?.axisValue || ''}</span>`;
+        const lines = params
+          .filter(p => p.seriesName !== 'TSS' || p.value != null)
+          .map(p => {
+            const v = Number(p.value);
+            if (isNaN(v)) return '';
+            const sign = v >= 0 ? '+' : '';
+            const dot  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};margin-right:4px;vertical-align:middle"></span>`;
+            return `${dot}${p.seriesName}: ${sign}${v.toFixed(1)}`;
+          }).filter(Boolean).join('<br/>');
+        return `${date}<br/>${lines}`;
       },
     },
   });
-  _startLtrAnim();
+
+  // ECharts locks the container's inner div to the init-time dimensions.
+  // Pass explicit parent dimensions to resize() so ECharts uses the correct size.
+  const pmcWrap = document.getElementById('pmc-chart-wrap');
+  const _pmcResize = () => {
+    if (!_pmcChart) return;
+    _pmcChart.resize({ width: pmcWrap.offsetWidth, height: pmcWrap.offsetHeight });
+  };
+  new ResizeObserver(_pmcResize).observe(pmcWrap);
+  requestAnimationFrame(_pmcResize);
 }
 
 /* ── 训练区间分布 ─────────────────────────────────────────────────────────── */
@@ -3531,6 +3833,22 @@ async function startPmcAi() {
 
 /* ── 训练日历 ────────────────────────────────────────────────────────────── */
 
+function toggleCalAiMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('cal-ai-menu');
+  const open = menu.style.display === 'none';
+  menu.style.display = open ? '' : 'none';
+  if (open) {
+    const close = () => { menu.style.display = 'none'; document.removeEventListener('click', close); };
+    document.addEventListener('click', close);
+  }
+}
+
+function selectCalAi(period) {
+  document.getElementById('cal-ai-menu').style.display = 'none';
+  startCalendarAi(period);
+}
+
 function calNavMonth(delta) {
   _calMonth += delta;
   if (_calMonth > 11) { _calMonth = 0; _calYear++; }
@@ -3601,17 +3919,15 @@ function _renderCalendarMonth(year, month, activities) {
     }
   }
 
-  const chips = [];
-  if (mRides > 0) chips.push(`${mRides} 次`);
-  if (mKm > 0)    chips.push(`${mKm.toFixed(0)} km`);
-  if (mSecs > 0) {
-    const h = Math.floor(mSecs / 3600);
-    const m = Math.floor((mSecs % 3600) / 60);
-    chips.push(h ? `${h}h ${m}m` : `${m}m`);
-  }
-  if (mTSS > 0) chips.push(`TSS ${mTSS}`);
+  const durH = Math.floor(mSecs / 3600), durM = Math.floor((mSecs % 3600) / 60);
+  const stats = [
+    { val: mRides > 0 ? `${mRides}` : '—',                                     lbl: '次数' },
+    { val: mKm    > 0 ? `${mKm.toFixed(0)} km` : '—',                          lbl: '里程' },
+    { val: mSecs  > 0 ? (durH ? `${durH}h ${durM}m` : `${durM}m`) : '—',       lbl: '时间' },
+    { val: mTSS   > 0 ? `${Math.round(mTSS)}` : '—',                           lbl: 'TSS'  },
+  ];
   document.getElementById('cal-month-stats').innerHTML =
-    chips.map(c => `<span class="cal-stat-chip">${c}</span>`).join('');
+    stats.map(s => `<div class="cal-sstat"><span class="cal-sstat-val">${s.val}</span><span class="cal-sstat-lbl">${s.lbl}</span></div>`).join('');
 
   const firstDOW    = new Date(year, month, 1).getDay();
   const startOffset = (firstDOW + 6) % 7;

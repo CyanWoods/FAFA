@@ -28,6 +28,7 @@ from fafa.parser import parse_fit
 from fafa.gcj02 import needs_wgs84_conversion
 from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats, compute_summary
 import fafa.strava as _strava
+import fafa.db as _db
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -37,6 +38,9 @@ PROJECT_ROOT   = Path(__file__).parent
 INPUT_DIR      = PROJECT_ROOT / "input"
 STATE_FILE     = PROJECT_ROOT / "download_state.json"
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
+
+INPUT_DIR.mkdir(exist_ok=True)
+_db.init_db(INPUT_DIR)
 
 # ── 解析结果缓存（按文件路径+mtime） ───────────────────────────────────────────
 _parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
@@ -929,11 +933,14 @@ def get_activities():
     with ThreadPoolExecutor(max_workers=workers) as pool:
         items = pool.map(_load_one, paths)
 
+    all_tags = _db.get_all_activity_tags()
     result = sorted(
         (x for x in items if x is not None),
         key=lambda a: a["start_time"],
         reverse=True,
     )
+    for a in result:
+        a["tags"] = all_tags.get(a["filename"], [])
     return jsonify(activities=result)
 
 
@@ -1258,6 +1265,66 @@ def strava_upload():
 def strava_upload_status():
     with _strava_lock:
         return jsonify(**_strava_upload)
+
+
+# ── 活动元数据（备注 + 标签） ─────────────────────────────────────────────────
+
+@app.route("/api/meta/<path:filename>")
+def get_meta(filename):
+    if not filename.lower().endswith(".fit"):
+        return jsonify(error="invalid filename"), 400
+    return jsonify(**_db.get_activity_meta(filename))
+
+
+@app.route("/api/meta/<path:filename>/note", methods=["POST"])
+def save_note(filename):
+    if not filename.lower().endswith(".fit"):
+        return jsonify(error="invalid filename"), 400
+    body = request.get_json(silent=True) or {}
+    note = body.get("note", "")
+    _db.save_note(filename, note)
+    return jsonify(ok=True)
+
+
+@app.route("/api/meta/<path:filename>/tags", methods=["POST"])
+def save_tags(filename):
+    if not filename.lower().endswith(".fit"):
+        return jsonify(error="invalid filename"), 400
+    body = request.get_json(silent=True) or {}
+    tag_ids = body.get("tag_ids", [])
+    if not isinstance(tag_ids, list):
+        return jsonify(error="tag_ids must be a list"), 400
+    if not all(isinstance(t, int) for t in tag_ids):
+        return jsonify(error="tag_ids must be integers"), 400
+    _db.save_tags(filename, tag_ids)
+    return jsonify(ok=True)
+
+
+@app.route("/api/tags")
+def list_tags():
+    return jsonify(tags=_db.get_all_tags())
+
+
+@app.route("/api/tags", methods=["POST"])
+def create_tag():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    color = (body.get("color") or "#888888").strip()
+    if not name:
+        return jsonify(error="name required"), 400
+    try:
+        tag = _db.create_tag(name, color)
+        return jsonify(tag=tag), 201
+    except ValueError as e:
+        return jsonify(error=str(e)), 409
+
+
+@app.route("/api/tags/<int:tag_id>", methods=["DELETE"])
+def delete_tag(tag_id):
+    ok = _db.delete_tag(tag_id)
+    if not ok:
+        return jsonify(error="preset tags cannot be deleted"), 403
+    return jsonify(ok=True)
 
 
 if __name__ == "__main__":

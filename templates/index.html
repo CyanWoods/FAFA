@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="/static/echarts.min.js"></script>
   <!-- DNS prefetch for tile servers -->
   <link rel="dns-prefetch" href="//a.basemaps.cartocdn.com">
   <link rel="dns-prefetch" href="//b.basemaps.cartocdn.com">
@@ -153,6 +155,10 @@
           <button class="dist-preset" data-min="50" data-max="100" onclick="_actDistPreset(this)">50–100</button>
           <button class="dist-preset" data-min="100" data-max="" onclick="_actDistPreset(this)">100km+</button>
         </div>
+      </div>
+      <div class="act-filter-row" id="act-filter-tag-row" style="display:none">
+        <span class="act-filter-label">标签</span>
+        <div id="act-filter-tags"></div>
       </div>
     </div>
 
@@ -316,6 +322,27 @@
       <button class="det-export-btn" onclick="exportDetailData('csv')">导出 CSV</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
+    <div id="detail-meta">
+      <div id="detail-tags-row">
+        <div id="detail-tags-list"></div>
+        <button id="detail-tag-add-btn" title="添加标签">＋标签</button>
+      </div>
+      <div id="detail-note-wrap">
+        <div id="detail-note-rendered" class="detail-note-rendered"></div>
+        <textarea id="detail-note-editor" class="detail-note-editor" placeholder="添加备注（支持 Markdown）…" style="display:none"></textarea>
+        <button id="detail-note-edit-btn" class="detail-note-edit-btn">编辑</button>
+        <button id="detail-note-save-btn" class="detail-note-edit-btn" style="display:none">保存</button>
+      </div>
+    </div>
+    <!-- tag picker popup -->
+    <div id="tag-picker" style="display:none">
+      <div id="tag-picker-list"></div>
+      <div id="tag-picker-new">
+        <input id="tag-new-name" placeholder="新标签名…" maxlength="10">
+        <input id="tag-new-color" type="color" value="#4a9eff">
+        <button id="tag-new-btn">创建</button>
+      </div>
+    </div>
     <div id="detail-summary-row"></div>
     <div id="detail-chart-section">
       <div id="detail-charts-wrap"></div>
@@ -333,6 +360,7 @@
         <div id="detail-route-legend-bar-wrap">
           <div id="detail-route-legend-bar"></div>
           <div id="detail-route-legend-marker" style="display:none"></div>
+          <div id="detail-route-legend-min-marker" style="display:none"></div>
           <div id="detail-route-legend-ftp-marker" style="display:none"></div>
         </div>
         <span id="detail-route-legend-high"></span>
@@ -345,7 +373,7 @@
     <div id="analytics-topbar">
       <span class="act-list-title" id="analytics-title"></span>
 
-      <!-- 日历专属控件 -->
+      <!-- 日历导航（标题右侧，左区） -->
       <div id="analytics-cal-controls" class="analytics-ctx-controls" style="display:none">
         <div class="cal-nav-group">
           <button class="cal-nav-btn" onclick="calNavMonth(-1)">‹</button>
@@ -353,21 +381,28 @@
           <button class="cal-nav-btn" onclick="calNavMonth(1)">›</button>
           <button class="cal-today-btn" onclick="calGoToday()">今天</button>
         </div>
-        <button class="cal-ai-period-btn" onclick="startCalendarAi('7d')">AI 一周建议</button>
-        <button class="cal-ai-period-btn" onclick="startCalendarAi('30d')">AI 月度建议</button>
       </div>
 
       <div style="flex:1"></div>
 
-      <!-- PMC 右侧 -->
+      <!-- PMC AI 按钮（右侧） -->
       <div id="analytics-pmc-right" class="analytics-ctx-right">
         <button class="pmc-ai-btn" onclick="startPmcAi()">AI 分析</button>
       </div>
 
-      <!-- 日历右侧 -->
-      <div id="analytics-cal-right" class="analytics-ctx-right" style="display:none">
-        <div id="cal-month-stats"></div>
+      <!-- 日历 AI 按钮（右侧） -->
+      <div id="analytics-cal-ai" style="display:none" class="cal-ai-dropdown-wrap">
+        <button class="cal-ai-period-btn" onclick="toggleCalAiMenu(event)">AI 建议 ▾</button>
+        <div id="cal-ai-menu" class="cal-ai-menu" style="display:none">
+          <button onclick="selectCalAi('7d')">一周建议</button>
+          <button onclick="selectCalAi('30d')">月度建议</button>
+        </div>
       </div>
+    </div>
+
+    <!-- 日历月度统计行 -->
+    <div id="cal-stats-bar" style="display:none">
+      <div id="cal-month-stats"></div>
     </div>
 
     <!-- PMC 内容面板 -->
@@ -383,7 +418,7 @@
             <button class="pmc-period-btn active" data-days="0">全部</button>
           </div>
         </div>
-        <div id="pmc-chart-wrap"><canvas id="pmc-canvas"></canvas></div>
+        <div id="pmc-chart-wrap"><div id="pmc-canvas" style="width:100%;height:100%"></div></div>
         <div id="pmc-no-data" style="display:none">暂无骑行数据，请先将 .fit 文件放入 input/ 目录</div>
       </div>
       <div class="pmc-section" id="pmc-zone-section">

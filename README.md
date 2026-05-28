@@ -19,6 +19,7 @@ FAFA/
 │   ├── reporter.py     # 表格 / JSON / CSV 输出
 │   ├── onelap.py       # 顽鹿 API 客户端（登录 / 列表 / 下载）
 │   ├── strava.py       # Strava 上传集成（OAuth / token 刷新 / 去重状态）
+│   ├── db.py           # SQLite 活动元数据（标签 / 备注，存于 input/fafa.db）
 │   └── tools/
 │       ├── fix_coords.py   # FIT 文件坐标系批量纠偏
 │       ├── rename_fit.py   # Magene FIT 文件批量重命名
@@ -28,7 +29,7 @@ FAFA/
 ├── templates/
 │   └── index.html      # Web 前端页面（多视图）
 └── static/
-    ├── app.js          # 前端逻辑（Leaflet / Chart.js / 拖拽 / 导出）
+    ├── app.js          # 前端逻辑（Leaflet / ECharts / 拖拽 / 导出）
     └── style.css       # 前端样式
 ```
 
@@ -52,7 +53,7 @@ venv\Scripts\pip install -r requirements.txt
 
 ## Web 可视化工具
 
-主要功能入口，基于 Flask + Leaflet.js + Chart.js 的多视图交互查看器。左侧固定侧边栏通过图标切换五个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
+主要功能入口，基于 Flask + Leaflet.js + ECharts 的多视图交互查看器。左侧固定侧边栏通过图标切换五个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
 
 **macOS / Linux：**
 ```bash

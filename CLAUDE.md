@@ -12,7 +12,7 @@ FIT (Flexible and Interoperable Data Transfer) is a binary format used by Garmin
 
 ### Web viewer (`app.py` + `templates/` + `static/`)
 
-Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
+Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 **Layout**: Fixed 180 px sidebar on the left (`#sidebar`, z-index 800) with nav icons for six top-level views. The rest of the viewport is view-specific content.
 
@@ -24,9 +24,9 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 - **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger OneLap sync. Upload via file input (导入 FIT button).
 
-- **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. Chart.js line chart (metric selectable, x-axis: km / per-100 m / cumulative time) + per-km data table. Opened from either activities or map view; closing returns to the originating view.
+- **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. ECharts SVG line charts (metric selectable, x-axis: km / per-100 m / cumulative time) + per-km data table. Below the header bar is `#detail-meta` — a tag & note bar where users can assign colour-coded tags and write Markdown notes per activity (persisted to `input/fafa.db`). Opened from either activities or map view; closing returns to the originating view.
 
-- **PMC view** (`#analytics-view`, `data-view="pmc"`, z-index 960): Full-screen overlay showing Performance Management Chart — CTL/ATL/TSB curves, power curve, zone distribution, and AI training-state commentary (`startPmcAi`). Opened via the sidebar 体能管理 icon.
+- **PMC view** (`#analytics-view`, `data-view="pmc"`, z-index 960): Full-screen overlay showing Performance Management Chart — CTL/ATL/TSB curves (ECharts SVG renderer, no DPR blurriness on Cmd+scroll), power curve, zone distribution, and AI training-state commentary (`startPmcAi`). Opened via the sidebar 体能管理 icon.
 
 - **Training Calendar view** (`#analytics-view`, `data-view="calendar"`, z-index 960): Full-screen overlay showing a monthly calendar grid of daily rides. Per-day detail modal on click. AI period buttons trigger `startCalendarAi(period)` for weekly or monthly training suggestions. Opened via the sidebar 训练日历 icon.
 
@@ -38,7 +38,11 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 
 **Client-side coordinate handling**: On upload, all three coordinate variants are pre-computed in JS (`raw`, `decrypted`, `encrypted`) and stored on the track object. Switching modes re-renders the polyline without any server round-trip.
 
-**Activities API** (`/api/activities`): Returns lightweight summary of every `.fit` in `input/` — filename, date, start_time, summary fields, peak_power, zone_time_s. Uses the same parse cache as `/api/load`. Used by both the activities view and the PMC computation.
+**Activities API** (`/api/activities`): Returns lightweight summary of every `.fit` in `input/` — filename, date, start_time, summary fields, peak_power, zone_time_s, and a `tags` array (from `input/fafa.db`). Uses the same parse cache as `/api/load`. Used by both the activities view and the PMC computation.
+
+**Activity metadata API** (`/api/meta/<filename>`): GET returns `{note, tags}` for an activity. POST `/api/meta/<filename>/note` saves a Markdown note. POST `/api/meta/<filename>/tags` saves tag assignments (`{tag_ids: [int]}`). Tags and notes are stored in `input/fafa.db` via `fafa/db.py`.
+
+**Tags API** (`/api/tags`): GET lists all tags `[{id, name, color, is_preset}]`. POST creates a new tag `{name, color}` → 201 `{tag}`. DELETE `/api/tags/<id>` removes a user-created tag (preset tags return 403).
 
 **Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses `ThreadPoolExecutor` (up to 8 workers) + the cache to parse the full library quickly on first load.
 
@@ -66,6 +70,7 @@ Flask API backend + Leaflet.js + Chart.js frontend. The main user-facing tool.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
 - `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
+- `db.py` — SQLite persistence for activity metadata (`input/fafa.db`). Tables: `activity_meta` (note per filename), `tags` (id/name/color/is_preset), `activity_tags` (filename↔tag_id). `init_db(input_dir)` creates tables and seeds five preset tags on first run. Thread-safe via `_db_lock`.
 
 ### CLI tools (`fafa/tools/` — run as Python modules)
 
@@ -111,6 +116,7 @@ Key sections in order:
 | Zoom slider | `initZoomSlider` |
 | PNG export | `openExportModal`, `doExport`, canvas tile/track drawing helpers |
 | Detail view | `openDetailView`, `closeDetailView`, chart/table rendering, `exportDetailData` |
+| Detail meta | `_loadAndRenderDetailMeta`, `_renderDetailTagsRow`, `_renderDetailNote`, `_initDetailNoteButtons`, `_openTagPicker`, `_closeTagPicker`, `_renderTagPickerList`, `_saveDetailTags`, `_syncActivityTagsInCache` |
 | File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, select mode helpers (`_enterLibSelectMode`, `_exitLibSelectMode`, `_libBulkDelete`) |
 | Global export | export-all modal, calls `/api/export/all` |
 | Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcCurve`, `pmcRecalc` |
