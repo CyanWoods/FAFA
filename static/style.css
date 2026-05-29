@@ -2462,7 +2462,7 @@ body {
   margin-bottom: 4px;
 }
 .pmc-dist-bucket-label { font-size: 12px; color: #aaa; }
-.pmc-dist-bar-track { background: #2a2a3a; border-radius: 3px; height: 8px; }
+.pmc-dist-bar-track { background: #2a2a3a; border-radius: 3px; height: 8px; overflow: hidden; }
 .pmc-dist-bar-fill  { border-radius: 3px; height: 8px; }
 .pmc-dist-pct  { font-size: 12px; color: #aaa; text-align: right; }
 .pmc-dist-count { font-size: 11px; color: #666; }
@@ -3348,6 +3348,11 @@ body {
 .light-theme .pmc-zone-pct-label { color: #555; }
 .light-theme .pmc-zone-pct { color: #444; }
 .light-theme .pmc-zone-name { color: #555; }
+.light-theme .pmc-dist-label { color: #666; }
+.light-theme .pmc-dist-bucket-label { color: #555; }
+.light-theme .pmc-dist-bar-track { background: #e8e8ee; }
+.light-theme .pmc-dist-pct { color: #444; }
+.light-theme .pmc-dist-count { color: #888; }
 .light-theme #pmc-chart-section { border-color: rgba(0,0,0,0.14); background: rgba(255,255,255,0.6); }
 
 /* training calendar grid lines */
