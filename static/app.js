@@ -3657,12 +3657,16 @@ function _renderPmcDaily(activities, settings) {
   // 近30天日期数组
   const days = [];
   const today = new Date();
+  const _localDate = d => {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
   for (let i = 29; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
-    days.push(d.toISOString().slice(0, 10));
+    days.push(_localDate(d));
   }
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = _localDate(today);
   const xLabels  = days.map(d => d.slice(5).replace('-', '/'));
 
   // 按天聚合
@@ -3673,7 +3677,7 @@ function _renderPmcDaily(activities, settings) {
     if (!byDay[d]) continue;
     const s = act.summary || {};
     byDay[d].distance  += s.total_dist_km || 0;
-    byDay[d].time      += ((s.moving_time_s || s.total_duration_s || 0)) / 60;
+    byDay[d].time      += (s.moving_time_s || s.total_duration_s || 0) / 60;
     byDay[d].elevation += s.total_elevation_gain_m || 0;
     byDay[d].tss       += _computeTSS(s, settings);
     byDay[d].count++;
@@ -3694,6 +3698,7 @@ function _renderPmcDaily(activities, settings) {
     const data = days.map(d => byDay[d][cfg.key]);
 
     const chart = echarts.init(el, 'dark', { renderer: 'svg' });
+    new ResizeObserver(() => chart.resize()).observe(el);
     _pmcDailyCharts.push(chart);
 
     chart.setOption({
