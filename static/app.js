@@ -3115,7 +3115,11 @@ function openAnalyticsView(tab = 'pmc') {
   _analyticsTab  = tab;
   // 每次打开重置缓存，保证数据新鲜
   _pmcAllData    = null;
+  _pmcZonePeriod = 0;
   _calActivities = null;
+  document.querySelectorAll('#pmc-zone-period-btns .pmc-period-btn').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.zonePeriod) === 0);
+  });
   document.getElementById('analytics-view').classList.add('active');
   document.getElementById('analytics-title').textContent = tab === 'calendar' ? '训练日历' : '体能管理';
   // 重置 PMC AI 区
@@ -3173,9 +3177,12 @@ function closeCalendarView() { closeAnalyticsView(); }
 async function _loadAndRenderPmc() {
   if (_pmcAllData !== null) {
     const settings = _pmcSettings();
+    const filtered = _pmcFilterActivities(_pmcAllData.activities, _pmcZonePeriod);
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
-    _renderPmcZones(_pmcAllData.activities, settings);
+    _renderPmcZones(filtered, settings);
+    _renderPmcDist(filtered, settings);
+    _renderPmcDaily(_pmcAllData.activities, settings);
     _renderPmcCurve(_pmcAllData.activities, settings);
     return;
   }
@@ -3186,9 +3193,12 @@ async function _loadAndRenderPmc() {
     const settings = _pmcSettings();
     _pmcAllData = _computePMC(acts, settings);
     _pmcAllData.activities = acts;
+    const filtered = _pmcFilterActivities(acts, _pmcZonePeriod);
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
-    _renderPmcZones(acts, settings);
+    _renderPmcZones(filtered, settings);
+    _renderPmcDist(filtered, settings);
+    _renderPmcDaily(acts, settings);
     _renderPmcCurve(acts, settings);
   } catch (e) {
     console.error('PMC load error:', e);
@@ -3866,7 +3876,7 @@ function _renderPmcCurve(activities, settings) {
   wrap.innerHTML = '<div id="pmc-curve-chart" style="height:220px"></div>'
     + '<div id="pmc-curve-summary" style="margin-top:8px;font-size:12px;color:#888;display:flex;flex-wrap:wrap;gap:8px 16px"></div>';
 
-  if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} }
+  if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} _pmcCurveChart = null; }
   _pmcCurveChart = echarts.init(document.getElementById('pmc-curve-chart'), 'dark', { renderer: 'svg' });
   new ResizeObserver(() => _pmcCurveChart?.resize()).observe(document.getElementById('pmc-curve-chart'));
 
