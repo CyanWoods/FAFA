@@ -170,6 +170,9 @@ let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 0; // 0 = 全部数据
+let _pmcZonePeriod  = 0;   // 0=全部, 90/30/7=天数
+let _pmcDailyCharts = [];  // ECharts 实例，渲染前 dispose
+let _pmcCurveChart  = null;
 let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, weight: 0 };
 let _routeScaleCfg = { gradeMin: null, gradeMax: null, speedMax: null, cadenceMax: null };
 
@@ -2266,14 +2269,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Period selector buttons
-  document.querySelectorAll('.pmc-period-btn').forEach(btn => {
+  // Period selector buttons (scoped to #pmc-chart-header to avoid cross-contamination with zone period buttons)
+  document.querySelectorAll('#pmc-chart-header .pmc-period-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.pmc-period-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#pmc-chart-header .pmc-period-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _pmcPeriod = parseInt(btn.dataset.days) || 0;
       if (_pmcAllData) _renderPmcChart(_pmcAllData, _pmcPeriod);
     });
+  });
+
+  // PMC 区间筛选按钮
+  document.getElementById('pmc-zone-period-btns')?.addEventListener('click', e => {
+    const btn = e.target.closest('.pmc-period-btn[data-zone-period]');
+    if (btn) _applyZonePeriod(Number(btn.dataset.zonePeriod));
   });
 
   // 初始加载文件库计数 & AI 配置 & 主题
@@ -3522,6 +3531,26 @@ function _zoneWattLabel(i, ftp) {
   if (lo === 0) return `<${hiW}W`;
   if (hiW == null) return `>${loW}W`;
   return `${loW}-${hiW}W`;
+}
+
+function _pmcFilterActivities(activities, periodDays) {
+  if (!periodDays) return activities;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - periodDays);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  return activities.filter(a => (a.date || '') >= cutoffStr);
+}
+
+function _applyZonePeriod(days) {
+  _pmcZonePeriod = days;
+  document.querySelectorAll('#pmc-zone-period-btns .pmc-period-btn').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.zonePeriod) === days);
+  });
+  if (!_pmcAllData) return;
+  const settings  = _pmcSettings();
+  const filtered  = _pmcFilterActivities(_pmcAllData.activities, days);
+  _renderPmcZones(filtered, settings);
+  _renderPmcDist(filtered, settings);
 }
 
 function _renderPmcZones(activities, settings) {
