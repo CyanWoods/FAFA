@@ -157,6 +157,7 @@ let detailTrackId = null;
 let detailRouteActive = false;
 let detailMetric = 'speed';
 let detailCharts = [];
+let detailChartResizeObservers = [];
 let detailRouteMap = null;
 let detailRouteTileLayer = null;
 let detailRouteLayers = [];
@@ -171,8 +172,13 @@ let _pmcChart = null;
 let _pmcAllData = null;   // { days, tss, ctl, atl, tsb, activities }
 let _pmcPeriod = 0; // 0 = 全部数据
 let _pmcZonePeriod  = 0;   // 0=全部, 90/30/7=天数
+const _pmcDistPeriods = { 'pmc-dist-distance': 0, 'pmc-dist-duration': 0, 'pmc-dist-elevation': 0, 'pmc-dist-tss': 0 };
 let _pmcDailyCharts = [];  // ECharts 实例，渲染前 dispose
+let _pmcChartResizeObserver = null;
+let _pmcDailyResizeObservers = [];
 let _pmcCurveChart  = null;
+let _pmcCurveResizeObserver = null;
+let _pmcLoadSeq = 0;
 let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, weight: 0 };
 let _routeScaleCfg = { gradeMin: null, gradeMax: null, speedMax: null, cadenceMax: null };
 
@@ -1477,8 +1483,7 @@ async function openDetailView(id, startTab = 'data') {
 
 function closeDetailView() {
   document.getElementById('detail-view').classList.remove('active');
-  for (const c of detailCharts) c.dispose();
-  detailCharts = [];
+  _disposeDetailCharts();
   _detailZoomDrag = null;
   _detailZoomActive = false;
   const resetBtn = document.getElementById('detail-zoom-reset-btn');
@@ -1489,6 +1494,17 @@ function closeDetailView() {
   if (_sidebarView === 'activities') {
     document.getElementById('activities-view').classList.add('active');
   }
+}
+
+function _disposeDetailCharts() {
+  for (const ro of detailChartResizeObservers) {
+    try { ro.disconnect(); } catch {}
+  }
+  detailChartResizeObservers = [];
+  for (const chart of detailCharts) {
+    try { chart.dispose(); } catch {}
+  }
+  detailCharts = [];
 }
 
 // ── detail meta: notes + tags ─────────────────────────────────────────────────
@@ -1861,8 +1877,7 @@ function _setupChartZoomDrag(chart) {
 }
 
 function _renderDetailCharts(records, fallbackStats) {
-  for (const c of detailCharts) c.dispose();
-  detailCharts = [];
+  _disposeDetailCharts();
   _detailZoomActive = false;
   _detailZoomDrag = null;
   const resetBtn = document.getElementById('detail-zoom-reset-btn');
@@ -1961,7 +1976,11 @@ function _renderDetailCharts(records, fallbackStats) {
       },
     });
 
-    new ResizeObserver(() => chart.resize()).observe(cw);
+    const ro = new ResizeObserver(() => {
+      try { chart.resize(); } catch {}
+    });
+    ro.observe(cw);
+    detailChartResizeObservers.push(ro);
     detailCharts.push(chart);
     _setupChartZoomDrag(chart);
   }
@@ -2283,6 +2302,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('pmc-zone-period-btns')?.addEventListener('click', e => {
     const btn = e.target.closest('.pmc-period-btn[data-zone-period]');
     if (btn) _applyZonePeriod(Number(btn.dataset.zonePeriod));
+  });
+
+  // PMC 分布筛选按钮（各自独立，事件委托到 analytics-view）
+  document.getElementById('analytics-view')?.addEventListener('click', e => {
+    const btn = e.target.closest('.pmc-dist-period-group .pmc-period-btn[data-dist-period]');
+    if (!btn) return;
+    const group = btn.closest('.pmc-dist-period-group[data-dist-id]');
+    if (group) _applyDistPeriod(group.dataset.distId, Number(btn.dataset.distPeriod));
   });
 
   // 初始加载文件库计数 & AI 配置 & 主题
@@ -2955,7 +2982,7 @@ async function startAiEval() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       loading.style.display = 'none';
-      result.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 config.json 配置'}</div>`;
+      _setErrorHtml(result, d.error || '请求失败，请检查 config.json 配置');
       return;
     }
 
@@ -2979,7 +3006,7 @@ async function startAiEval() {
         try {
           const chunk = JSON.parse(data);
           if (chunk.error) {
-            result.innerHTML = `<div class="ai-error">${chunk.error}</div>`;
+            _setErrorHtml(result, chunk.error);
             return;
           }
           if (chunk.text) {
@@ -2991,7 +3018,7 @@ async function startAiEval() {
     }
   } catch (e) {
     loading.style.display = 'none';
-    result.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+    _setErrorHtml(result, `网络错误：${e.message}`);
   }
 }
 
@@ -3004,6 +3031,14 @@ function _renderMarkdown(text) {
   return '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>';
 }
 
+function _setErrorHtml(el, message) {
+  el.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'ai-error';
+  div.textContent = message || '请求失败，请检查 config.json 配置';
+  el.appendChild(div);
+}
+
 /* ── 训练状态 PMC（界面三） ──────────────────────────────────────────────── */
 
 function _pmcSettings() {
@@ -3012,6 +3047,58 @@ function _pmcSettings() {
     restHR: _pmcConfig.restHr || 50,
     maxHR:  _pmcConfig.maxHr  || 190,
     weight: _pmcConfig.weight || 0,
+  };
+}
+
+function _disposePmcChart() {
+  if (_pmcChartResizeObserver) {
+    _pmcChartResizeObserver.disconnect();
+    _pmcChartResizeObserver = null;
+  }
+  if (_pmcChart) {
+    try { _pmcChart.dispose(); } catch {}
+    _pmcChart = null;
+  }
+}
+
+function _disposePmcDailyCharts() {
+  for (const ro of _pmcDailyResizeObservers) {
+    try { ro.disconnect(); } catch {}
+  }
+  _pmcDailyResizeObservers = [];
+  for (const chart of _pmcDailyCharts) {
+    try { chart.dispose(); } catch {}
+  }
+  _pmcDailyCharts = [];
+}
+
+function _disposePmcCurveChart() {
+  if (_pmcCurveResizeObserver) {
+    _pmcCurveResizeObserver.disconnect();
+    _pmcCurveResizeObserver = null;
+  }
+  if (_pmcCurveChart) {
+    try { _pmcCurveChart.dispose(); } catch {}
+    _pmcCurveChart = null;
+  }
+}
+
+function _pmcChartTheme(sourceEl = null) {
+  const src = sourceEl || document.querySelector('#pmc-body .pmc-section') || document.body;
+  const styles = getComputedStyle(src);
+  const cssVar = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+  const isDark = !document.body.classList.contains('light-theme');
+  return {
+    axisColor: cssVar('--pmc-chart-axis-line', isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.22)'),
+    tickColor: cssVar('--pmc-chart-axis-label', isDark ? '#888' : '#666'),
+    gridColor: cssVar('--pmc-chart-grid-line', isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)'),
+    mutedColor: cssVar('--pmc-chart-muted-text', isDark ? '#666' : '#777'),
+    tooltipBg: isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)',
+    tooltipBorder: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)',
+    tooltipText: isDark ? '#ddd' : '#333',
+    legendColor: isDark ? '#aaa' : '#555',
+    strongText: isDark ? '#eee' : '#222',
+    dividerColor: isDark ? '#333' : '#ccc',
   };
 }
 
@@ -3096,6 +3183,9 @@ function toggleTheme() {
     const t = TILES[tile];
     detailRouteTileLayer = L.tileLayer(t.url, t.opts).addTo(detailRouteMap);
   }
+  if (_analyticsOpen && _analyticsTab === 'pmc' && _pmcAllData) {
+    _loadAndRenderPmc();
+  }
 }
 
 function _initTheme() {
@@ -3116,9 +3206,13 @@ function openAnalyticsView(tab = 'pmc') {
   // 每次打开重置缓存，保证数据新鲜
   _pmcAllData    = null;
   _pmcZonePeriod = 0;
+  Object.keys(_pmcDistPeriods).forEach(k => { _pmcDistPeriods[k] = 0; });
   _calActivities = null;
   document.querySelectorAll('#pmc-zone-period-btns .pmc-period-btn').forEach(b => {
     b.classList.toggle('active', Number(b.dataset.zonePeriod) === 0);
+  });
+  document.querySelectorAll('.pmc-dist-period-group .pmc-period-btn').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.distPeriod) === 0);
   });
   document.getElementById('analytics-view').classList.add('active');
   document.getElementById('analytics-title').textContent = tab === 'calendar' ? '训练日历' : '体能管理';
@@ -3128,7 +3222,11 @@ function openAnalyticsView(tab = 'pmc') {
 
 function closeAnalyticsView(restoreActivities = true) {
   _analyticsOpen = false;
+  _pmcLoadSeq++;
   document.getElementById('analytics-view').classList.remove('active');
+  _disposePmcChart();
+  _disposePmcDailyCharts();
+  _disposePmcCurveChart();
   if (restoreActivities && (_sidebarView === 'pmc' || _sidebarView === 'calendar')) {
     _sidebarView = 'activities';
     document.querySelectorAll('.sb-item').forEach(btn => {
@@ -3162,6 +3260,10 @@ function _doSwitchTab(tab) {
   if (isPmc) {
     _loadAndRenderPmc();
   } else {
+    _pmcLoadSeq++;
+    _disposePmcChart();
+    _disposePmcDailyCharts();
+    _disposePmcCurveChart();
     _calYear  = new Date().getFullYear();
     _calMonth = new Date().getMonth();
     _loadAndRenderCalendar();
@@ -3175,13 +3277,16 @@ function openCalendarView() { openAnalyticsView('calendar'); }
 function closeCalendarView() { closeAnalyticsView(); }
 
 async function _loadAndRenderPmc() {
+  if (!_analyticsOpen || _analyticsTab !== 'pmc') return;
+  const seq = ++_pmcLoadSeq;
   if (_pmcAllData !== null) {
+    if (!_analyticsOpen || _analyticsTab !== 'pmc') return;
     const settings = _pmcSettings();
     const filtered = _pmcFilterActivities(_pmcAllData.activities, _pmcZonePeriod);
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
     _renderPmcZones(filtered, settings);
-    _renderPmcDist(filtered, settings);
+    _renderPmcDist(_pmcAllData.activities, settings);
     _renderPmcDaily(_pmcAllData.activities, settings);
     _renderPmcCurve(_pmcAllData.activities, settings);
     return;
@@ -3189,6 +3294,7 @@ async function _loadAndRenderPmc() {
   try {
     const res  = await fetch('/api/activities');
     const data = await res.json();
+    if (seq !== _pmcLoadSeq || !_analyticsOpen || _analyticsTab !== 'pmc') return;
     const acts = data.activities || [];
     const settings = _pmcSettings();
     _pmcAllData = _computePMC(acts, settings);
@@ -3197,7 +3303,7 @@ async function _loadAndRenderPmc() {
     _renderPmcCards(_pmcAllData);
     _renderPmcChart(_pmcAllData, _pmcPeriod);
     _renderPmcZones(filtered, settings);
-    _renderPmcDist(filtered, settings);
+    _renderPmcDist(acts, settings);
     _renderPmcDaily(acts, settings);
     _renderPmcCurve(acts, settings);
   } catch (e) {
@@ -3252,16 +3358,14 @@ function _computePMC(activities, settings) {
   const kCTL = 1 - Math.exp(-1 / 42);
   const kATL = 1 - Math.exp(-1 / 7);
 
-  const firstDate = new Date(activities.reduce((min, a) => a.date < min ? a.date : min, activities[0].date));
-  const today     = new Date();
-  today.setHours(0, 0, 0, 0);
+  const firstDateStr = activities.reduce((min, a) => a.date < min ? a.date : min, activities[0].date);
+  const todayStr2    = _pmcLocalDateString(new Date());
 
   const days = [], tssArr = [], ctlArr = [], atlArr = [], tsbArr = [];
   let ctl = 0, atl = 0;
 
-  const d = new Date(firstDate);
-  while (d <= today) {
-    const ds  = d.toISOString().slice(0, 10);
+  let ds = firstDateStr;
+  while (ds <= todayStr2) {
     const tss = tssMap.get(ds) || 0;
 
     // TSB 用昨日的 CTL/ATL 计算
@@ -3274,7 +3378,10 @@ function _computePMC(activities, settings) {
     ctlArr.push(+ctl.toFixed(1));
     atlArr.push(+atl.toFixed(1));
     tsbArr.push(+tsb.toFixed(1));
-    d.setDate(d.getDate() + 1);
+    // advance ds by one calendar day using local-date arithmetic
+    const next = new Date(ds + 'T00:00:00');
+    next.setDate(next.getDate() + 1);
+    ds = _pmcLocalDateString(next);
   }
 
   return { days, tss: tssArr, ctl: ctlArr, atl: atlArr, tsb: tsbArr, activities };
@@ -3375,7 +3482,7 @@ function _renderPmcChart(pmc, periodDays) {
   const step = Math.max(1, Math.ceil(days.length / targetTicks));
   const labels = days.map((d, i) => i % step === 0 ? d.slice(5) : '');
 
-  if (_pmcChart) { _pmcChart.dispose(); _pmcChart = null; }
+  _disposePmcChart();
 
   const isDark = !document.body.classList.contains('light-theme');
   const tooltipBg     = isDark ? 'rgba(15,15,20,0.94)'      : 'rgba(255,255,255,0.97)';
@@ -3523,11 +3630,12 @@ function _renderPmcChart(pmc, periodDays) {
     if (!_pmcChart) return;
     _pmcChart.resize({ width: pmcWrap.offsetWidth, height: pmcWrap.offsetHeight });
   };
-  new ResizeObserver(_pmcResize).observe(pmcWrap);
+  _pmcChartResizeObserver = new ResizeObserver(_pmcResize);
+  _pmcChartResizeObserver.observe(pmcWrap);
   requestAnimationFrame(_pmcResize);
 }
 
-/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐，1-indexed = Z1-Z7） ─────── */
+/* ── 功率分布（与路线热图 POWER_ZONE_COLORS 对齐，1-indexed = Z1-Z7） ─────── */
 // index 0 unused; 1-7 对应 zone_time_s key "1"-"7"（key "0" = 休息/无功率）
 const _ZONE_COLORS     = ['', ...POWER_ZONE_COLORS]; // [1]=#888 … [7]=#9b59b6
 const _ZONE_NAMES      = ['', 'Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧', 'Z7 神经'];
@@ -3544,11 +3652,16 @@ function _zoneWattLabel(i, ftp) {
   return `${loW}–${hiW} W`;
 }
 
+function _pmcLocalDateString(date) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function _pmcFilterActivities(activities, periodDays) {
   if (!periodDays) return activities;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - periodDays);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const cutoffStr = _pmcLocalDateString(cutoff);
   return activities.filter(a => (a.date || '') >= cutoffStr);
 }
 
@@ -3558,13 +3671,43 @@ function _applyZonePeriod(days) {
     btn.classList.toggle('active', Number(btn.dataset.zonePeriod) === days);
   });
   if (!_pmcAllData) return;
-  const settings  = _pmcSettings();
-  const filtered  = _pmcFilterActivities(_pmcAllData.activities, days);
+  const settings = _pmcSettings();
+  const filtered = _pmcFilterActivities(_pmcAllData.activities, days);
   _renderPmcZones(filtered, settings);
-  _renderPmcDist(filtered, settings);
+}
+
+function _applyDistPeriod(distId, days) {
+  const cfg = _DIST_CONFIGS.find(c => c.id === distId);
+  if (!cfg) return;
+  _pmcDistPeriods[cfg.id] = days;
+  const group = document.querySelector(`.pmc-dist-period-group[data-dist-id="${distId}"]`);
+  group?.querySelectorAll('.pmc-period-btn').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.distPeriod) === days);
+  });
+  if (!_pmcAllData) return;
+  const settings = _pmcSettings();
+  const filtered = _pmcFilterActivities(_pmcAllData.activities, days);
+  _renderPmcDistOne(cfg, filtered, settings);
 }
 
 const _DIST_CONFIGS = [
+  {
+    id: 'pmc-dist-distance',
+    getValue: act => {
+      const v = act.summary?.total_dist_km;
+      return (v != null && v > 0) ? v : null;
+    },
+    buckets: [
+      { label: '0-5 km',     test: v => v >= 0   && v < 5 },
+      { label: '5-10 km',    test: v => v >= 5   && v < 10 },
+      { label: '10-20 km',   test: v => v >= 10  && v < 20 },
+      { label: '20-50 km',   test: v => v >= 20  && v < 50 },
+      { label: '50-100 km',  test: v => v >= 50  && v < 100 },
+      { label: '100-200 km', test: v => v >= 100 && v < 200 },
+      { label: '200 km+',    test: v => v >= 200 },
+    ],
+    color: '#5b9bd5',
+  },
   {
     id: 'pmc-dist-duration',
     getValue: act => {
@@ -3574,26 +3717,15 @@ const _DIST_CONFIGS = [
       return raw > 0 ? raw : null;
     },
     buckets: [
-      { label: '< 1h',    test: v => v < 1 },
-      { label: '1 – 2h',  test: v => v >= 1  && v < 2 },
-      { label: '2 – 3h',  test: v => v >= 2  && v < 3 },
-      { label: '> 3h',    test: v => v >= 3 },
+      { label: '0-0.5 h', test: v => v >= 0   && v < 0.5 },
+      { label: '0.5-1 h', test: v => v >= 0.5 && v < 1 },
+      { label: '1-2 h',   test: v => v >= 1   && v < 2 },
+      { label: '2-3 h',   test: v => v >= 2   && v < 3 },
+      { label: '3-5 h',   test: v => v >= 3   && v < 5 },
+      { label: '5-10 h',  test: v => v >= 5   && v < 10 },
+      { label: '10 h+',   test: v => v >= 10 },
     ],
     color: '#70ad47',
-  },
-  {
-    id: 'pmc-dist-distance',
-    getValue: act => {
-      const v = act.summary?.total_dist_km;
-      return (v != null && v > 0) ? v : null;
-    },
-    buckets: [
-      { label: '< 50km',     test: v => v < 50 },
-      { label: '50 – 100km', test: v => v >= 50  && v < 100 },
-      { label: '100 – 150km',test: v => v >= 100 && v < 150 },
-      { label: '> 150km',    test: v => v >= 150 },
-    ],
-    color: '#5b9bd5',
   },
   {
     id: 'pmc-dist-elevation',
@@ -3602,10 +3734,13 @@ const _DIST_CONFIGS = [
       return (v != null && v >= 0) ? v : null;
     },
     buckets: [
-      { label: '< 500m',      test: v => v < 500 },
-      { label: '500 – 1000m', test: v => v >= 500  && v < 1000 },
-      { label: '1000 – 2000m',test: v => v >= 1000 && v < 2000 },
-      { label: '> 2000m',     test: v => v >= 2000 },
+      { label: '0-10 m',    test: v => v >= 0   && v < 10 },
+      { label: '10-20 m',   test: v => v >= 10  && v < 20 },
+      { label: '20-50 m',   test: v => v >= 20  && v < 50 },
+      { label: '50-100 m',  test: v => v >= 50  && v < 100 },
+      { label: '100-200 m', test: v => v >= 100 && v < 200 },
+      { label: '200-500 m', test: v => v >= 200 && v < 500 },
+      { label: '500 m+',    test: v => v >= 500 },
     ],
     color: '#f39c12',
   },
@@ -3616,71 +3751,95 @@ const _DIST_CONFIGS = [
       return t > 0 ? t : null;
     },
     buckets: [
-      { label: '< 50',     test: v => v < 50 },
-      { label: '50 – 100', test: v => v >= 50  && v < 100 },
-      { label: '100 – 150',test: v => v >= 100 && v < 150 },
-      { label: '> 150',    test: v => v >= 150 },
+      { label: '0-10',    test: v => v >= 0   && v < 10 },
+      { label: '10-20',   test: v => v >= 10  && v < 20 },
+      { label: '20-50',   test: v => v >= 20  && v < 50 },
+      { label: '50-100',  test: v => v >= 50  && v < 100 },
+      { label: '100-200', test: v => v >= 100 && v < 200 },
+      { label: '200-500', test: v => v >= 200 && v < 500 },
+      { label: '500+',    test: v => v >= 500 },
     ],
     color: '#9b59b6',
   },
 ];
 
-function _renderPmcDist(activities, settings) {
-  for (const cfg of _DIST_CONFIGS) {
-    const wrap = document.getElementById(cfg.id);
-    if (!wrap) continue;
+const _PMC_PERCENT_GRID = [25, 50, 75, 100];
 
-    const counts = new Array(cfg.buckets.length).fill(0);
-    let total = 0;
-    for (const act of activities) {
-      const v = cfg.getValue(act, settings);
-      if (v == null || isNaN(v)) continue;
-      for (let i = 0; i < cfg.buckets.length; i++) {
-        if (cfg.buckets[i].test(v)) { counts[i]++; break; }
-      }
-      total++;
+function _pmcPercentGridHtml() {
+  return `<div class="pmc-col-grid" aria-hidden="true">${
+    _PMC_PERCENT_GRID.map(p => `
+      <div class="pmc-col-grid-line" style="bottom:${p}%">
+        <span>${p}%</span>
+      </div>`).join('')
+  }</div>`;
+}
+
+function _renderPmcDistOne(cfg, activities, settings) {
+  const BAR_H = 150;
+  const wrap = document.getElementById(cfg.id);
+  if (!wrap) return;
+
+  const counts = new Array(cfg.buckets.length).fill(0);
+  let total = 0;
+  for (const act of activities) {
+    const v = cfg.getValue(act, settings);
+    if (v == null || isNaN(v)) continue;
+    for (let i = 0; i < cfg.buckets.length; i++) {
+      if (cfg.buckets[i].test(v)) { counts[i]++; break; }
     }
+    total++;
+  }
 
-    if (total === 0) {
-      wrap.innerHTML = '<div style="color:#555;font-size:12px;padding:4px 0">暂无数据</div>';
-      continue;
-    }
+  if (total === 0) {
+    wrap.innerHTML = '<div style="color:#555;font-size:12px;padding:4px 0">暂无数据</div>';
+    return;
+  }
 
-    wrap.innerHTML = cfg.buckets.map((b, i) => {
-      const pct = (counts[i] / total * 100).toFixed(1);
+  wrap.innerHTML = `<div class="pmc-col-chart pmc-percent-chart">
+    ${_pmcPercentGridHtml()}
+    ${
+    cfg.buckets.map((b, i) => {
+      const pctRaw = counts[i] / total * 100;
+      const pct = pctRaw.toFixed(1);
+      const barPx = pctRaw > 0 ? Math.max(2, Math.round(pctRaw / 100 * BAR_H)) : 0;
       return `
-        <div class="pmc-dist-bucket-row">
-          <span class="pmc-dist-bucket-label">${b.label}</span>
-          <div class="pmc-dist-bar-track">
-            <div class="pmc-dist-bar-fill" style="width:${pct}%;background:${cfg.color}"></div>
+        <div class="pmc-col-item">
+          <div class="pmc-col-bar-wrap">
+            <span class="pmc-col-val">${pct}%</span>
+            <div class="pmc-col-bar" style="height:${barPx}px;background:${cfg.color}"></div>
           </div>
-          <span class="pmc-dist-pct">${pct}%</span>
-          <span class="pmc-dist-count">${counts[i]} 次</span>
+          <span class="pmc-col-label">${b.label}</span>
+          <span class="pmc-col-count">${counts[i]}次</span>
         </div>`;
-    }).join('');
+    }).join('')
+  }</div>`;
+}
+
+function _renderPmcDist(allActivities, settings) {
+  for (const cfg of _DIST_CONFIGS) {
+    const period = _pmcDistPeriods[cfg.id] || 0;
+    const activities = _pmcFilterActivities(allActivities, period);
+    _renderPmcDistOne(cfg, activities, settings);
   }
 }
 
 function _renderPmcDaily(activities, settings) {
-  for (const c of _pmcDailyCharts) { try { c.dispose(); } catch {} }
-  _pmcDailyCharts = [];
+  _disposePmcDailyCharts();
 
-  // 近30天日期数组
   const days = [];
   const today = new Date();
-  const _localDate = d => {
-    const pad = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    days.push(_localDate(d));
+  const todayStr = _pmcLocalDateString(today);
+  // Show current month; if fewer than 14 days into the month, extend window back to cover 30 days
+  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const dayOfMonth = today.getDate();
+  const startDate = dayOfMonth < 14
+    ? new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29)
+    : firstOfMonth;
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  for (let d = new Date(startDate); d <= lastDay; d.setDate(d.getDate() + 1)) {
+    days.push(_pmcLocalDateString(d));
   }
-  const todayStr = _localDate(today);
-  const xLabels  = days.map(d => d.slice(5).replace('-', '/'));
 
-  // 按天聚合
   const byDay = {};
   for (const d of days) byDay[d] = { distance: 0, time: 0, elevation: 0, tss: 0, count: 0 };
   for (const act of activities) {
@@ -3695,84 +3854,100 @@ function _renderPmcDaily(activities, settings) {
   }
 
   const cfgs = [
-    { id: 'pmc-daily-distance',  key: 'distance',  label: '距离 (km)',  color: '#5b9bd5', fmt: v => v.toFixed(1) + ' km' },
-    { id: 'pmc-daily-time',      key: 'time',       label: '时间 (min)', color: '#70ad47', fmt: v => Math.round(v) + ' min' },
-    { id: 'pmc-daily-elevation', key: 'elevation',  label: '爬升 (m)',   color: '#f39c12', fmt: v => Math.round(v) + ' m' },
-    { id: 'pmc-daily-tss',       key: 'tss',        label: 'TSS',        color: '#9b59b6', fmt: v => Math.round(v) },
-    { id: 'pmc-daily-count',     key: 'count',      label: '次数',       color: '#e74c3c', fmt: v => v + ' 次' },
+    { id: 'pmc-daily-distance',  key: 'distance',  label: '距离', unit: 'km',  color: '#5b9bd5', fmt: v => v.toFixed(1) + ' km', axisFmt: v => v.toFixed(v >= 10 ? 0 : 1) },
+    { id: 'pmc-daily-time',      key: 'time',      label: '时间', unit: 'min', color: '#70ad47', fmt: v => Math.round(v) + ' min', axisFmt: v => Math.round(v) },
+    { id: 'pmc-daily-elevation', key: 'elevation', label: '爬升', unit: 'm',   color: '#f39c12', fmt: v => Math.round(v) + ' m', axisFmt: v => Math.round(v) },
+    { id: 'pmc-daily-tss',       key: 'tss',       label: 'TSS',  unit: '',    color: '#9b59b6', fmt: v => Math.round(v), axisFmt: v => Math.round(v) },
+    { id: 'pmc-daily-count',     key: 'count',     label: '次数', unit: '次',  color: '#e74c3c', fmt: v => v + ' 次', axisFmt: v => Math.round(v), minInterval: 1 },
   ];
 
+  const dailyTheme = _pmcChartTheme();
   for (const cfg of cfgs) {
-    const el = document.getElementById(cfg.id);
-    if (!el) continue;
+    const wrap = document.getElementById(cfg.id);
+    if (!wrap) continue;
 
     const data = days.map(d => byDay[d][cfg.key]);
+    wrap.innerHTML = '';
+    const theme = dailyTheme;
 
-    const chart = echarts.init(el, 'dark', { renderer: 'svg' });
-    new ResizeObserver(() => chart.resize()).observe(el);
+    const chart = echarts.init(wrap, null, { renderer: 'svg' });
     _pmcDailyCharts.push(chart);
+    const ro = new ResizeObserver(() => {
+      try { chart.resize(); } catch {}
+    });
+    ro.observe(wrap);
+    _pmcDailyResizeObservers.push(ro);
 
     chart.setOption({
+      animation: true,
+      animationDuration: 500,
       backgroundColor: 'transparent',
-      grid: { top: 24, bottom: 28, left: 52, right: 12 },
+      grid: { top: 14, bottom: 30, left: 8, right: 10, containLabel: true },
       xAxis: {
         type: 'category',
-        data: xLabels,
+        data: days,
+        boundaryGap: true,
+        axisLine: { show: true, lineStyle: { color: theme.axisColor } },
+        axisTick: { show: true, alignWithLabel: true, lineStyle: { color: theme.axisColor } },
         axisLabel: {
+          interval: 0,
+          color: theme.tickColor,
           fontSize: 10,
-          interval: 4,
-          color: '#666',
-          formatter: (v, i) => days[i] === todayStr
-            ? `{today|${v}}`
-            : v,
-          rich: { today: { color: '#3a8dde', fontWeight: 'bold' } },
+          formatter: value => {
+            const day = Number(value.slice(8, 10));
+            return (day - 1) % 5 === 0 ? value.slice(5) : '';
+          },
         },
-        axisLine: { lineStyle: { color: '#333' } },
-        axisTick: { show: false },
+        splitLine: {
+          show: true,
+          interval: 4,
+          lineStyle: { color: theme.gridColor },
+        },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { fontSize: 10, color: '#666' },
-        splitLine: { lineStyle: { color: '#2a2a3a' } },
-        minInterval: 1,
         min: 0,
+        minInterval: cfg.minInterval || 0,
+        name: cfg.unit,
+        nameTextStyle: { color: theme.tickColor, fontSize: 10, padding: [0, 0, 0, 4] },
+        axisLine: { show: true, lineStyle: { color: theme.axisColor } },
+        axisTick: { show: true, lineStyle: { color: theme.axisColor } },
+        axisLabel: { color: theme.tickColor, fontSize: 10, formatter: cfg.axisFmt },
+        splitLine: { show: true, lineStyle: { color: theme.gridColor } },
       },
       series: [{
+        name: cfg.label,
         type: 'bar',
         data: data.map((v, i) => ({
           value: v,
           itemStyle: {
-            color:   days[i] === todayStr ? '#3a8dde' : cfg.color,
-            opacity: v > 0 ? 0.85 : 0.12,
+            color: days[i] === todayStr ? '#3a8dde' : cfg.color,
+            opacity: v > 0 ? 0.88 : 0.12,
           },
         })),
-        barMaxWidth: 16,
+        barMaxWidth: 12,
       }],
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#1e1e2e',
-        borderColor: '#444',
-        textStyle: { color: '#ddd', fontSize: 12 },
+        backgroundColor: theme.tooltipBg,
+        borderColor: theme.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: theme.tooltipText, fontSize: 12 },
         formatter: params => {
           const p = params[0];
-          return `${days[p.dataIndex]}<br/>${cfg.label}：${cfg.fmt(p.value)}`;
+          return `${p.axisValue}<br/>${cfg.label}: ${cfg.fmt(Number(p.value || 0))}`;
         },
       },
-      graphic: [{
-        type: 'text',
-        left: 12, top: 6,
-        style: { text: cfg.label, fill: '#888', fontSize: 11 },
-      }],
     });
   }
 }
 
 function _renderPmcZones(activities, settings) {
+  const BAR_H = 150;
   const wrap = document.getElementById('pmc-zone-bars');
   const note = document.getElementById('pmc-zone-note');
   if (!wrap) return;
 
-  // Aggregate zone_time_s keys "1"–"7" = Z1–Z7 (key "0" = rest, excluded from display)
   const total = new Array(8).fill(0);
   let count = 0;
   for (const act of activities) {
@@ -3789,30 +3964,28 @@ function _renderPmcZones(activities, settings) {
   }
 
   note.textContent = `基于 ${count} 次有功率骑行`;
-  wrap.innerHTML = '';
 
-  const ftp = settings?.ftp || 0;
-  for (let i = 1; i <= 7; i++) {
-    const pct = pedalS > 0 ? (total[i] / pedalS * 100) : 0;
-    const mins = Math.round(total[i] / 60);
-    const wattLabel = _zoneWattLabel(i, ftp);
-    const [lo, hi] = _ZONE_THRESHOLDS[i];
-    const pctLabel = lo === 0 ? '<55%' : hi != null ? `${lo}–${hi}%` : `>${lo}%`;
-    const row = document.createElement('div');
-    row.className = 'pmc-zone-row';
-    row.innerHTML = `
-      <span class="pmc-zone-label">
-        ${wattLabel ? `<span class="pmc-zone-watts">${wattLabel}</span>` : ''}
-        <span class="pmc-zone-pct-label">${pctLabel}</span>
-      </span>
-      <div class="pmc-zone-bar-track">
-        <div class="pmc-zone-bar-fill" style="width:${pct.toFixed(1)}%;background:${_ZONE_COLORS[i]}"></div>
-      </div>
-      <span class="pmc-zone-pct">${pct.toFixed(1)}%</span>
-      <span class="pmc-zone-name">${_ZONE_NAMES[i]}（${mins}min）</span>
-    `;
-    wrap.appendChild(row);
-  }
+  const pcts = Array.from({length: 8}, (_, i) => pedalS > 0 ? total[i] / pedalS * 100 : 0);
+
+  wrap.innerHTML = `<div class="pmc-col-chart pmc-percent-chart">
+    ${_pmcPercentGridHtml()}
+    ${
+    Array.from({length: 7}, (_, idx) => {
+      const i = idx + 1;
+      const pct = pcts[i];
+      const barPx = pct > 0 ? Math.max(2, Math.round(pct / 100 * BAR_H)) : 0;
+      const mins = Math.round(total[i] / 60);
+      return `
+        <div class="pmc-col-item">
+          <div class="pmc-col-bar-wrap">
+            <span class="pmc-col-val">${pct.toFixed(1)}%</span>
+            <div class="pmc-col-bar" style="height:${barPx}px;background:${_ZONE_COLORS[i]}"></div>
+          </div>
+          <span class="pmc-col-label">Z${i}</span>
+          <span class="pmc-col-count">${mins}min</span>
+        </div>`;
+    }).join('')
+  }</div>`;
 }
 
 /* ── 峰值功率曲线 ─────────────────────────────────────────────────────────── */
@@ -3832,6 +4005,8 @@ function _renderPmcCurve(activities, settings) {
   const today = new Date();
   const d90 = new Date(today); d90.setDate(d90.getDate() - 90);
   const d30 = new Date(today); d30.setDate(d30.getDate() - 30);
+  const d90Str = _pmcLocalDateString(d90);
+  const d30Str = _pmcLocalDateString(d30);
 
   const best = {}, best90 = {}, best30 = {};
   for (const { key } of _CURVE_DURATIONS) { best[key] = 0; best90[key] = 0; best30[key] = 0; }
@@ -3839,9 +4014,9 @@ function _renderPmcCurve(activities, settings) {
   for (const act of activities) {
     const pp = act.peak_power;
     if (!pp || !Object.keys(pp).length) continue;
-    const actDate = new Date(act.date);
-    const in90 = actDate >= d90;
-    const in30 = actDate >= d30;
+    const actDate = (act.date || '').slice(0, 10);
+    const in90 = actDate >= d90Str;
+    const in30 = actDate >= d30Str;
     for (const { key } of _CURVE_DURATIONS) {
       const w = pp[key] || 0;
       if (w > best[key])   best[key]   = w;
@@ -3852,7 +4027,7 @@ function _renderPmcCurve(activities, settings) {
 
   const hasAny = Object.values(best).some(v => v > 0);
   if (!hasAny) {
-    if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} _pmcCurveChart = null; }
+    _disposePmcCurveChart();
     wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据</div>';
     if (note) note.textContent = '';
     return;
@@ -3876,42 +4051,50 @@ function _renderPmcCurve(activities, settings) {
     connectNulls: false,
   });
 
+  _disposePmcCurveChart();
+
   wrap.innerHTML = '<div id="pmc-curve-chart" style="height:220px"></div>'
     + '<div id="pmc-curve-summary" style="margin-top:8px;font-size:12px;color:#888;display:flex;flex-wrap:wrap;gap:8px 16px"></div>';
 
-  if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} _pmcCurveChart = null; }
-  _pmcCurveChart = echarts.init(document.getElementById('pmc-curve-chart'), 'dark', { renderer: 'svg' });
-  new ResizeObserver(() => _pmcCurveChart?.resize()).observe(document.getElementById('pmc-curve-chart'));
+  const curveEl = document.getElementById('pmc-curve-chart');
+  const theme = _pmcChartTheme(curveEl.closest('.pmc-section'));
+  _pmcCurveChart = echarts.init(curveEl, null, { renderer: 'svg' });
+  _pmcCurveResizeObserver = new ResizeObserver(() => _pmcCurveChart?.resize());
+  _pmcCurveResizeObserver.observe(curveEl);
 
   _pmcCurveChart.setOption({
     backgroundColor: 'transparent',
-    legend: { top: 4, right: 8, textStyle: { color: '#aaa', fontSize: 11 } },
+    legend: { top: 4, right: 8, textStyle: { color: theme.legendColor, fontSize: 11 } },
     grid:   { top: 36, bottom: 36, left: 52, right: 16 },
     xAxis: {
       type: 'log',
       min: 4,
       max: 4000,
       axisLabel: {
-        color: '#888',
+        color: theme.tickColor,
         fontSize: 11,
         formatter: v => xLabels[v] || '',
       },
-      axisLine:  { lineStyle: { color: '#444' } },
-      splitLine: { lineStyle: { color: '#2a2a3a' } },
+      axisLine: { show: true, lineStyle: { color: theme.axisColor } },
+      axisTick: { show: true, lineStyle: { color: theme.axisColor } },
+      splitLine: { show: true, lineStyle: { color: theme.gridColor } },
     },
     yAxis: {
       type: 'value',
       name: 'W',
-      nameTextStyle: { color: '#666', fontSize: 11 },
-      axisLabel:  { color: '#888', fontSize: 11 },
-      splitLine:  { lineStyle: { color: '#2a2a3a' } },
+      nameTextStyle: { color: theme.tickColor, fontSize: 11 },
+      axisLine: { show: true, lineStyle: { color: theme.axisColor } },
+      axisTick: { show: true, lineStyle: { color: theme.axisColor } },
+      axisLabel: { color: theme.tickColor, fontSize: 11 },
+      splitLine: { show: true, lineStyle: { color: theme.gridColor } },
       min: 0,
     },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#1e1e2e',
-      borderColor: '#444',
-      textStyle: { color: '#ddd', fontSize: 12 },
+      backgroundColor: theme.tooltipBg,
+      borderColor: theme.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: theme.tooltipText, fontSize: 12 },
       formatter: params => {
         const x     = params[0]?.axisValue;
         const label = xLabels[Math.round(Number(x))] || `${x}s`;
@@ -3934,13 +4117,14 @@ function _renderPmcCurve(activities, settings) {
 
   const summaryEl = document.getElementById('pmc-curve-summary');
   if (summaryEl) {
+    summaryEl.style.color = theme.tickColor;
     summaryEl.innerHTML = _CURVE_DURATIONS
       .filter(({ key }) => best[key] > 0)
       .map(({ key, label }) => {
         const w      = best[key];
         const wkgStr = showWkg ? ` · ${(w / weight).toFixed(2)} W/kg` : '';
-        return `<span>${label}：<b style="color:#eee">${w} W</b>${wkgStr}</span>`;
-      }).join('<span style="color:#333;margin:0 4px">｜</span>');
+        return `<span>${label}：<b style="color:${theme.strongText}">${w} W</b>${wkgStr}</span>`;
+      }).join(`<span style="color:${theme.dividerColor};margin:0 4px">｜</span>`);
   }
 }
 
@@ -3968,7 +4152,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
     loading.style.display = 'none';
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      resultEl.innerHTML = `<div class="ai-error">${d.error || '请求失败，请检查 config.json 配置'}</div>`;
+      _setErrorHtml(resultEl, d.error || '请求失败，请检查 config.json 配置');
       return;
     }
     const reader = res.body.getReader();
@@ -3986,14 +4170,14 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
         if (ds === '[DONE]') break;
         try {
           const chunk = JSON.parse(ds);
-          if (chunk.error) { resultEl.innerHTML = `<div class="ai-error">${chunk.error}</div>`; return; }
+          if (chunk.error) { _setErrorHtml(resultEl, chunk.error); return; }
           if (chunk.text)  { fullText += chunk.text; resultEl.innerHTML = _renderMarkdown(fullText); }
         } catch {}
       }
     }
   } catch (e) {
     loading.style.display = 'none';
-    resultEl.innerHTML = `<div class="ai-error">网络错误：${e.message}</div>`;
+    _setErrorHtml(resultEl, `网络错误：${e.message}`);
   }
 }
 
@@ -4061,24 +4245,24 @@ async function startPmcAi() {
   // 构建发送给 AI 的数据
   const recentActs = _pmcAllData.activities.slice(-14).map(a => ({
     date:      a.date,
-    dist_km:   a.summary.total_dist_km,
-    dur_min:   Math.round(((a.summary.moving_time_s || a.summary.total_duration_s || 0) / 60)),
-    tss:       _computeTSS(a.summary, settings),
-    avg_hr:    a.summary.avg_hr,
-    avg_power: a.summary.avg_power,
+    dist_km:   a.summary?.total_dist_km,
+    dur_min:   Math.round((a.summary?.moving_time_s || a.summary?.total_duration_s || 0) / 60),
+    tss:       _computeTSS(a.summary || {}, settings),
+    avg_hr:    a.summary?.avg_hr,
+    avg_power: a.summary?.avg_power,
   }));
 
   // Compute zone totals for AI context
-  const zoneTotals = new Array(7).fill(0);
+  const zoneTotals = new Array(8).fill(0);
   let zonePedalS = 0;
   for (const act of _pmcAllData.activities) {
     const z = act.zone_time_s;
     if (!z) continue;
-    for (let i = 0; i <= 6; i++) zoneTotals[i] += (z[String(i)] || 0);
+    for (let i = 1; i <= 7; i++) zoneTotals[i] += (z[String(i)] || 0);
   }
   zonePedalS = zoneTotals.slice(1).reduce((a, b) => a + b, 0);
   const zoneDistStr = zonePedalS > 0
-    ? ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6'].map((z, i) => {
+    ? ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7'].map((z, i) => {
         const pct = (zoneTotals[i + 1] / zonePedalS * 100).toFixed(1);
         return `${z}:${pct}%`;
       }).join(' ')

@@ -2374,22 +2374,75 @@ body {
 
 /* ── PMC 通用 section ── */
 .pmc-section {
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.06);
+  --pmc-section-bg: rgba(255,255,255,0.02);
+  --pmc-section-border: rgba(255,255,255,0.06);
+  --pmc-chart-axis-line: rgba(255,255,255,0.18);
+  --pmc-chart-axis-label: #888;
+  --pmc-chart-grid-line: rgba(255,255,255,0.08);
+  --pmc-chart-muted-text: #666;
+  background: var(--pmc-section-bg);
+  border: 1px solid var(--pmc-section-border);
   border-radius: 10px;
   padding: 16px;
 }
 
+.pmc-chart-group {
+  --pmc-chart-card-min: 520px;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--pmc-chart-card-min), 1fr));
+  gap: 12px;
+  align-items: stretch;
+  justify-content: start;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.pmc-chart-group .pmc-section {
+  min-width: var(--pmc-chart-card-min);
+  width: 100%;
+  height: 306px;
+}
+
 .pmc-section-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 14px;
+  gap: 12px;
+  min-height: 39px;
+  min-width: 0;
+}
+
+.pmc-chart-title {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pmc-period-group {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.pmc-period-btn {
+  flex-shrink: 0;
+}
+
+.pmc-zone-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  min-width: 0;
 }
 
 .pmc-zone-note {
   font-size: 11px;
-  color: #555;
+  color: var(--pmc-chart-muted-text);
+  line-height: 1;
+  min-height: 11px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ── 区间分布 ── */
@@ -2466,6 +2519,134 @@ body {
 .pmc-dist-bar-fill  { border-radius: 3px; height: 8px; }
 .pmc-dist-pct  { font-size: 12px; color: #aaa; text-align: right; }
 .pmc-dist-count { font-size: 11px; color: #666; }
+
+/* ── 纵向柱状分布图 ── */
+.pmc-col-chart {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.pmc-percent-chart {
+  position: relative;
+  padding-left: 32px;
+  height: 220px;
+}
+.pmc-percent-chart::before,
+.pmc-percent-chart::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+.pmc-percent-chart::before {
+  left: 32px;
+  top: 8px;
+  height: 150px;
+  border-left: 1px solid var(--pmc-chart-axis-line);
+}
+.pmc-percent-chart::after {
+  left: 32px;
+  right: 0;
+  top: 158px;
+  border-top: 1px solid var(--pmc-chart-axis-line);
+}
+.pmc-col-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 8px;
+  height: 150px;
+  pointer-events: none;
+  z-index: 0;
+}
+.pmc-col-grid-line {
+  position: absolute;
+  left: 32px;
+  right: 0;
+  border-top: 1px solid var(--pmc-chart-grid-line);
+}
+.pmc-col-grid-line span {
+  position: absolute;
+  left: -32px;
+  top: -7px;
+  width: 26px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--pmc-chart-axis-label);
+  text-align: right;
+}
+.pmc-col-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+.pmc-col-bar-wrap {
+  width: 100%;
+  height: 150px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+.pmc-col-val {
+  font-size: 11px;
+  color: var(--pmc-chart-axis-label);
+  margin-bottom: 3px;
+  white-space: nowrap;
+}
+.pmc-col-bar {
+  width: min(70%, 50px);
+  border-radius: 3px 3px 0 0;
+}
+.pmc-col-label {
+  font-size: 11px;
+  color: var(--pmc-chart-axis-label);
+  text-align: center;
+  margin-top: 5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  word-break: normal;
+}
+.pmc-col-count {
+  font-size: 10px;
+  color: var(--pmc-chart-muted-text);
+  margin-top: 2px;
+  text-align: center;
+}
+.light-theme .pmc-section {
+  --pmc-section-bg: rgba(255,255,255,0.6);
+  --pmc-section-border: rgba(0,0,0,0.14);
+  --pmc-chart-axis-line: rgba(0,0,0,0.22);
+  --pmc-chart-axis-label: #666;
+  --pmc-chart-grid-line: rgba(0,0,0,0.1);
+  --pmc-chart-muted-text: #777;
+}
+
+.pmc-daily-col-chart { gap: 3px; }
+.pmc-daily-col-item .pmc-col-bar { width: 100%; border-radius: 2px 2px 0 0; }
+.pmc-daily-col-item .pmc-col-label { font-size: 9px; }
+
+#pmc-daily-distance,
+#pmc-daily-time,
+#pmc-daily-elevation,
+#pmc-daily-tss,
+#pmc-daily-count {
+  height: 220px;
+}
+
+#pmc-zone-bars,
+#pmc-dist-duration,
+#pmc-dist-distance,
+#pmc-dist-elevation,
+#pmc-dist-tss {
+  height: 220px;
+}
 
 /* ── 功率曲线 ── */
 .pmc-curve-table {
@@ -3341,7 +3522,6 @@ body {
 .light-theme .pmc-curve-wkg { color: #777; }
 
 /* PMC sections */
-.light-theme .pmc-section { background: rgba(255,255,255,0.6); border-color: rgba(0,0,0,0.14); }
 .light-theme .pmc-zone-note { color: #666; }
 .light-theme .pmc-zone-label { color: #333; }
 .light-theme .pmc-zone-watts { color: #555; }

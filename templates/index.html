@@ -421,51 +421,107 @@
         <div id="pmc-chart-wrap"><div id="pmc-canvas" style="width:100%;height:100%"></div></div>
         <div id="pmc-no-data" style="display:none">暂无骑行数据，请先将 .fit 文件放入 input/ 目录</div>
       </div>
-      <div class="pmc-section" id="pmc-zone-section">
-        <div class="pmc-section-header">
-          <span class="pmc-chart-title">功率分布区间</span>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span id="pmc-zone-note" class="pmc-zone-note"></span>
-            <div id="pmc-zone-period-btns" class="pmc-period-group">
-              <button class="pmc-period-btn active" data-zone-period="0">全部</button>
-              <button class="pmc-period-btn" data-zone-period="90">近3月</button>
-              <button class="pmc-period-btn" data-zone-period="30">近1月</button>
-              <button class="pmc-period-btn" data-zone-period="7">近1周</button>
+      <div class="pmc-chart-group pmc-distribution-grid">
+        <div class="pmc-section" id="pmc-dist-distance-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">距离分布</span>
+            <div class="pmc-period-group pmc-dist-period-group" data-dist-id="pmc-dist-distance">
+              <button class="pmc-period-btn" data-dist-period="7">7天</button>
+              <button class="pmc-period-btn" data-dist-period="30">30天</button>
+              <button class="pmc-period-btn" data-dist-period="90">90天</button>
+              <button class="pmc-period-btn" data-dist-period="180">180天</button>
+              <button class="pmc-period-btn active" data-dist-period="0">全部</button>
             </div>
           </div>
-        </div>
-        <div id="pmc-zone-bars"></div>
-      </div>
-      <div class="pmc-section" id="pmc-dist-section">
-        <div class="pmc-section-header">
-          <span class="pmc-chart-title">单次骑行分布</span>
-        </div>
-        <div class="pmc-dist-block">
-          <div class="pmc-dist-label">骑行时长</div>
-          <div id="pmc-dist-duration"></div>
-        </div>
-        <div class="pmc-dist-block">
-          <div class="pmc-dist-label">骑行距离</div>
           <div id="pmc-dist-distance"></div>
         </div>
-        <div class="pmc-dist-block">
-          <div class="pmc-dist-label">爬升</div>
+        <div class="pmc-section" id="pmc-dist-duration-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">时长分布</span>
+            <div class="pmc-period-group pmc-dist-period-group" data-dist-id="pmc-dist-duration">
+              <button class="pmc-period-btn" data-dist-period="7">7天</button>
+              <button class="pmc-period-btn" data-dist-period="30">30天</button>
+              <button class="pmc-period-btn" data-dist-period="90">90天</button>
+              <button class="pmc-period-btn" data-dist-period="180">180天</button>
+              <button class="pmc-period-btn active" data-dist-period="0">全部</button>
+            </div>
+          </div>
+          <div id="pmc-dist-duration"></div>
+        </div>
+        <div class="pmc-section" id="pmc-dist-elevation-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">爬升分布</span>
+            <div class="pmc-period-group pmc-dist-period-group" data-dist-id="pmc-dist-elevation">
+              <button class="pmc-period-btn" data-dist-period="7">7天</button>
+              <button class="pmc-period-btn" data-dist-period="30">30天</button>
+              <button class="pmc-period-btn" data-dist-period="90">90天</button>
+              <button class="pmc-period-btn" data-dist-period="180">180天</button>
+              <button class="pmc-period-btn active" data-dist-period="0">全部</button>
+            </div>
+          </div>
           <div id="pmc-dist-elevation"></div>
         </div>
-        <div class="pmc-dist-block">
-          <div class="pmc-dist-label">TSS</div>
+        <div class="pmc-section" id="pmc-dist-tss-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">TSS分布</span>
+            <div class="pmc-period-group pmc-dist-period-group" data-dist-id="pmc-dist-tss">
+              <button class="pmc-period-btn" data-dist-period="7">7天</button>
+              <button class="pmc-period-btn" data-dist-period="30">30天</button>
+              <button class="pmc-period-btn" data-dist-period="90">90天</button>
+              <button class="pmc-period-btn" data-dist-period="180">180天</button>
+              <button class="pmc-period-btn active" data-dist-period="0">全部</button>
+            </div>
+          </div>
           <div id="pmc-dist-tss"></div>
         </div>
-      </div>
-      <div class="pmc-section" id="pmc-daily-section">
-        <div class="pmc-section-header">
-          <span class="pmc-chart-title">近30天每日训练</span>
+        <div class="pmc-section" id="pmc-zone-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">功率分布</span>
+            <div class="pmc-zone-controls">
+              <div id="pmc-zone-period-btns" class="pmc-period-group">
+                <button class="pmc-period-btn" data-zone-period="7">7天</button>
+                <button class="pmc-period-btn" data-zone-period="30">30天</button>
+                <button class="pmc-period-btn" data-zone-period="90">90天</button>
+                <button class="pmc-period-btn" data-zone-period="180">180天</button>
+                <button class="pmc-period-btn active" data-zone-period="0">全部</button>
+              </div>
+              <span id="pmc-zone-note" class="pmc-zone-note"></span>
+            </div>
+          </div>
+          <div id="pmc-zone-bars"></div>
         </div>
-        <div id="pmc-daily-distance"  style="height:120px"></div>
-        <div id="pmc-daily-time"      style="height:120px;margin-top:8px"></div>
-        <div id="pmc-daily-elevation" style="height:120px;margin-top:8px"></div>
-        <div id="pmc-daily-tss"       style="height:120px;margin-top:8px"></div>
-        <div id="pmc-daily-count"     style="height:120px;margin-top:8px"></div>
+      </div>
+      <div class="pmc-chart-group pmc-month-grid">
+        <div class="pmc-section" id="pmc-daily-distance-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">当月 · 距离</span>
+          </div>
+          <div id="pmc-daily-distance"></div>
+        </div>
+        <div class="pmc-section" id="pmc-daily-time-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">当月 · 时间</span>
+          </div>
+          <div id="pmc-daily-time"></div>
+        </div>
+        <div class="pmc-section" id="pmc-daily-elevation-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">当月 · 爬升</span>
+          </div>
+          <div id="pmc-daily-elevation"></div>
+        </div>
+        <div class="pmc-section" id="pmc-daily-tss-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">当月 · TSS</span>
+          </div>
+          <div id="pmc-daily-tss"></div>
+        </div>
+        <div class="pmc-section" id="pmc-daily-count-section">
+          <div class="pmc-section-header">
+            <span class="pmc-chart-title">当月 · 次数</span>
+          </div>
+          <div id="pmc-daily-count"></div>
+        </div>
       </div>
       <div class="pmc-section" id="pmc-curve-section">
         <div class="pmc-section-header">

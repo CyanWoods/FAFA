@@ -26,7 +26,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 - **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. ECharts SVG line charts (metric selectable, x-axis: km / per-100 m / cumulative time) + per-km data table. Below the header bar is `#detail-meta` — a tag & note bar where users can assign colour-coded tags and write Markdown notes per activity (persisted to `input/fafa.db`). Opened from either activities or map view; closing returns to the originating view.
 
-- **PMC view** (`#analytics-view`, `data-view="pmc"`, z-index 960): Full-screen overlay showing Performance Management Chart — CTL/ATL/TSB curves (ECharts SVG renderer, no DPR blurriness on Cmd+scroll), power curve, zone distribution, and AI training-state commentary (`startPmcAi`). Opened via the sidebar 体能管理 icon.
+- **PMC view** (`#analytics-view`, `data-view="pmc"`, z-index 960): Full-screen overlay showing Performance Management Chart — CTL/ATL/TSB curves (ECharts SVG renderer, no DPR blurriness on Cmd+scroll), power curve; distribution charts (功率分布 Z1-Z7, 距离分布, 时长分布, 爬升分布, TSS分布) rendered as CSS vertical bar charts with independent time-range filter buttons (7/30/90/180/全部天) per chart; current-month daily training ECharts bar charts (距离/时间/爬升/TSS/次数, extends to 30-day window if fewer than 14 days into the month); and AI training-state commentary (`startPmcAi`). Opened via the sidebar 体能管理 icon.
 
 - **Training Calendar view** (`#analytics-view`, `data-view="calendar"`, z-index 960): Full-screen overlay showing a monthly calendar grid of daily rides. Per-day detail modal on click. AI period buttons trigger `startCalendarAi(period)` for weekly or monthly training suggestions. Opened via the sidebar 训练日历 icon.
 
@@ -119,7 +119,7 @@ Key sections in order:
 | Detail meta | `_loadAndRenderDetailMeta`, `_renderDetailTagsRow`, `_renderDetailNote`, `_initDetailNoteButtons`, `_openTagPicker`, `_closeTagPicker`, `_renderTagPickerList`, `_saveDetailTags`, `_syncActivityTagsInCache` |
 | File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, select mode helpers (`_enterLibSelectMode`, `_exitLibSelectMode`, `_libBulkDelete`) |
 | Global export | export-all modal, calls `/api/export/all` |
-| Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcCurve`, `pmcRecalc` |
+| Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcDistOne`, `_renderPmcDist`, `_renderPmcDaily`, `_renderPmcCurve`, `_applyZonePeriod`, `_applyDistPeriod`, `_pmcChartTheme`, `_pmcLocalDateString`, `pmcRecalc` |
 | Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
 | AI | `_initAiConfig`, `_llmStream`, `_renderMarkdown`, `_openAndStreamModal` (shared SSE modal helper), `openActAiModal`, `startPmcAi`, `startCalendarAi` |
 | Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |

@@ -1,6 +1,6 @@
-# PMC 体能管理视图增强 · 设计规格
+# PMC 体能管理视图增强 · 设计规格 v2
 
-日期：2026-05-29
+日期：2026-05-29（更新于同日）
 
 ## 背景
 
@@ -8,108 +8,139 @@
 
 ---
 
-## 功能一：区间分布时间筛选
+## 功能一：骑行指标分布图（扩展区间分布区）
 
 ### 目标
-"训练区间分布 · 骑行时间"区块支持按时间段筛选，默认显示全部历史。
+在现有"训练区间分布 · 骑行时间（功率区间）"后，新增四张基于**单次骑行值**的固定桶分布图，展示骑行习惯的分布规律。所有五张分布图（含现有功率区间）共享同一组时间筛选按钮。
 
-### UI 变更
-- `#pmc-zone-section` 的 `.pmc-section-header` 内，在 `#pmc-zone-note` 左侧插入一组 pill 按钮：**全部 / 近3月 / 近1月 / 近1周**
-- 激活按钮样式：蓝色背景 + 白字；非激活：透明背景 + 灰字，hover 变亮
+### 时间筛选
+在现有 `#pmc-zone-section` 的 `pmc-section-header` 内，标题右侧插入 pill 按钮组：**全部 / 近3月 / 近1月 / 近1周**
 
-### 状态
-新增模块级变量 `_pmcZonePeriod`（初始值 `0`，0 = 全部，90/30/7 = 天数）。
+- 模块级状态变量：`_pmcZonePeriod`（默认 `0`，0=全部，90/30/7=天数）
+- 切换后对 `_pmcAllData.activities` 按日期过滤，重渲所有分布图
 
-### 逻辑
-```
-onZonePeriodClick(days):
-  _pmcZonePeriod = days
-  更新按钮激活样式
-  cutoff = today - days（days=0 时无截止）
-  filtered = _pmcAllData.activities.filter(act => days === 0 || act.date >= cutoff)
-  _renderPmcZones(filtered, settings)
-```
-`_renderPmcZones` 签名不变，直接接受过滤后的 activities 数组。
+### 四张新增分布图
 
-### 数据来源
-`act.date`（字符串 "YYYY-MM-DD"，已存在于 `/api/activities` 返回值）。
+每张图样式与现有功率区间条相同（`pmc-zone-row` 横向进度条 + 百分比 + 次数）。
 
----
+| 图表 | 固定桶 | 数据字段 |
+|---|---|---|
+| 单次骑行时间 | `<1h / 1-2h / 2-3h / >3h` | `act.summary.moving_time_s` ÷ 3600 |
+| 骑行距离 | `<50km / 50-100km / 100-150km / >150km` | `act.summary.distance_km` |
+| 爬升 | `<500m / 500-1000m / 1000-2000m / >2000m` | `act.summary.elevation_gain` |
+| TSS | `<50 / 50-100 / 100-150 / >150` | `act.summary.tss` |
 
-## 功能二：峰值功率曲线图（ECharts 折线图，对数 X 轴）
+- 每桶显示：次数（count）+ 百分比（%）
+- TSS 为 null 的骑行跳过（不计入总数）
+- 标题栏：`单次骑行时间分布`、`骑行距离分布`、`爬升分布`、`TSS 分布`
 
-### 目标
-替换现有 HTML 表格，改为 ECharts SVG 折线图，X 轴为对数刻度（按时间秒数），展示功率随时长的衰减曲线。
-
-### 图表规格
-- **容器**：`#pmc-curve-wrap` 内新建一个固定高度（220px）的 ECharts 实例
-- **X 轴**：`type: 'log'`，数据点：`[5, 60, 300, 1200, 3600]`（秒）
-  - formatter：`5→"5s"`, `60→"1m"`, `300→"5m"`, `1200→"20m"`, `3600→"60m"`
-- **Y 轴**：`type: 'value'`，单位 W，从 0 开始，不强制 max
-- **三条系列**：
-  | 系列 | 颜色 | 线型 |
-  |---|---|---|
-  | 历史最佳 | `#5b9bd5` | 实线 2px |
-  | 近90天   | `#70ad47` | 虚线 1.5px |
-  | 近30天   | `#f39c12` | 虚线 1.5px |
-- **Tooltip**：每点显示 `XXX W`，若 weight>0 同时显示 `X.XX W/kg`
-- **图例**：顶部 legend
-- **无数据**：保持现有文字提示逻辑不变
-
-### 实现要点
-- 复用 `_pmcCurveChart` 模块级变量存 ECharts 实例，`openAnalyticsView` 时检查存在性 dispose 再重建（避免 resize 问题）
-- ECharts 已在项目中引入（PMC 图、detail 图均使用），直接调用 `echarts.init`
-
-### 保留数值表
-在图表下方保留一个小 summary 行，显示历史最佳各时长数值（原表格简化版，单行 flex 排列）：`5s: 850W · 1m: 620W · 5m: 410W · 20m: 340W · 60m: 290W`。若 weight>0 追加 W/kg。
-
----
-
-## 功能三：分时段骑行统计汇总表
-
-### 目标
-在 PMC 页面新增一个 section，展示四个时间维度下的汇总统计，方便用户横向对比训练量变化。
-
-### UI
-新 `.pmc-section` 插入位置：`#pmc-curve-section` 之后（PMC body 末尾）。
-
-HTML 骨架：
+### HTML 骨架（新增 section，紧跟 `#pmc-zone-section`）
 ```html
-<div class="pmc-section" id="pmc-stats-section">
+<div class="pmc-section" id="pmc-dist-section">
   <div class="pmc-section-header">
-    <span class="pmc-chart-title">骑行统计汇总</span>
+    <span class="pmc-chart-title">单次骑行分布</span>
   </div>
-  <div id="pmc-stats-table"></div>
+  <!-- 四个子区块 -->
+  <div class="pmc-dist-block" id="pmc-dist-duration"></div>
+  <div class="pmc-dist-block" id="pmc-dist-distance"></div>
+  <div class="pmc-dist-block" id="pmc-dist-elevation"></div>
+  <div class="pmc-dist-block" id="pmc-dist-tss"></div>
 </div>
 ```
 
-### 表格结构
-4列（全部/近3月/近1月/近1周）× 4行（里程/次数/爬升/TSS）：
-
-| 指标 | 全部 | 近3月 | 近1月 | 近1周 |
-|---|---|---|---|---|
-| 里程 | — km | — km | — km | — km |
-| 骑行次数 | — 次 | — 次 | — 次 | — 次 |
-| 爬升 | — m | — m | — m | — m |
-| TSS | — | — | — | — |
-
-### 数据来源
-`_pmcAllData.activities`，各字段：
-- 里程：`act.summary.distance_km`
-- 爬升：`act.summary.elevation_gain`
-- TSS：`act.summary.tss`（可为 null，汇总时跳过 null）
-- 次数：count
-
 ### 渲染函数
-新增 `_renderPmcStats(activities)`，在 `pmcRecalc` 末尾和 `openAnalyticsView` 内与其他 render 函数并列调用。
+新增 `_renderPmcDist(activities)`，计算四张图并写入对应 DOM。在区间筛选切换 + `pmcRecalc` + `openAnalyticsView` 内调用。
+
+---
+
+## 功能二：近30天每日训练柱状图
+
+### 目标
+新增 section，展示过去30天（含今日）每天的训练量，5 个指标各一张 ECharts 柱状图，竖向堆叠。
+
+### 位置
+新 `.pmc-section#pmc-daily-section`，插入在 `#pmc-dist-section` 之后、`#pmc-curve-section` 之前。
+
+### 5 张图规格
+
+| 图 | 指标 | 数据字段 | 颜色 | Y 轴单位 |
+|---|---|---|---|---|
+| ① | 距离 | `distance_km` | `#5b9bd5` | km |
+| ② | 骑行时间 | `moving_time_s` ÷ 60 | `#70ad47` | 分钟 |
+| ③ | 爬升 | `elevation_gain` | `#f39c12` | m |
+| ④ | TSS | `tss` | `#9b59b6` | — |
+| ⑤ | 次数 | count（每天骑行次数） | `#e74c3c` | 次 |
+
+每张图规格：
+- 高度 120px（ECharts 实例）
+- X 轴：近30天日期，category，格式 `M/D`，当天用高亮色
+- Y 轴：value，不含数值时柱高0（休息日自然空白）
+- tooltip：显示日期 + 该日具体值
+- 无 legend（标题已说明指标）
+- 同一天多次骑行：值求和（次数累加）
+
+### 数据计算
+```
+_renderPmcDaily(activities):
+  生成近30天日期数组 [today-29, ..., today]
+  对 activities 按日期分组聚合
+  for each 图表指标:
+    echarts.init(容器).setOption(...)
+```
+
+### HTML 骨架
+```html
+<div class="pmc-section" id="pmc-daily-section">
+  <div class="pmc-section-header">
+    <span class="pmc-chart-title">近30天每日训练</span>
+  </div>
+  <div id="pmc-daily-distance"></div>
+  <div id="pmc-daily-time"></div>
+  <div id="pmc-daily-elevation"></div>
+  <div id="pmc-daily-tss"></div>
+  <div id="pmc-daily-count"></div>
+</div>
+```
+
+### ECharts 实例管理
+5 个实例存入 `_pmcDailyCharts = []`，`openAnalyticsView` 时 dispose 旧实例再重建。
+
+---
+
+## 功能三：峰值功率曲线（ECharts 折线图，对数 X 轴）
+
+### 目标
+替换现有 HTML 表格，改为 ECharts SVG 折线图。
+
+### 图表规格
+- 容器：`#pmc-curve-wrap` 内 ECharts 实例，高度 220px
+- X 轴：`type: 'log'`，数据点 `[5, 60, 300, 1200, 3600]`（秒），formatter：`5s / 1m / 5m / 20m / 60m`
+- Y 轴：`type: 'value'`，单位 W，min 0
+- 三条系列：
+
+| 系列 | 颜色 | 线型 |
+|---|---|---|
+| 历史最佳 | `#5b9bd5` | 实线 2px |
+| 近90天   | `#70ad47` | 虚线 1.5px |
+| 近30天   | `#f39c12` | 虚线 1.5px |
+
+- tooltip：显示时长标签 + `XXX W`，若 weight>0 同时显示 `X.XX W/kg`
+- 图表下方保留一行数值摘要（flex 排列）：`5s: 850W · 1m: 620W · ...`
+- ECharts 实例存 `_pmcCurveChart`，切换视图时 dispose 重建
 
 ---
 
 ## 文件变更范围
 
-| 文件 | 变更 |
+| 文件 | 变更内容 |
 |---|---|
-| `templates/index.html` | 区间筛选按钮、统计 section HTML |
-| `static/app.js` | `_renderPmcZones`（接受已过滤数组）、`_renderPmcCurve`（ECharts 折线图）、`_renderPmcStats`（新函数）、调用处更新 |
+| `templates/index.html` | 区间筛选按钮；新增 `#pmc-dist-section`、`#pmc-daily-section` |
+| `static/app.js` | 时间筛选逻辑 `_pmcZonePeriod`；`_renderPmcZones` 接受已过滤数组；新增 `_renderPmcDist`、`_renderPmcDaily`；`_renderPmcCurve` 改为 ECharts；调用处更新 |
 
-无后端改动。
+无后端改动。所有数据来自 `_pmcAllData.activities`（`/api/activities` 已返回所有字段）。
+
+---
+
+## 字段可用性确认
+
+需确认 `act.summary` 含 `moving_time_s`、`elevation_gain`、`tss`。如字段名不同，实现时按实际 API 返回值调整。
