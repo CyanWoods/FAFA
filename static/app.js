@@ -3650,6 +3650,107 @@ function _renderPmcDist(activities, settings) {
   }
 }
 
+function _renderPmcDaily(activities, settings) {
+  for (const c of _pmcDailyCharts) { try { c.dispose(); } catch {} }
+  _pmcDailyCharts = [];
+
+  // 近30天日期数组
+  const days = [];
+  const today = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const todayStr = today.toISOString().slice(0, 10);
+  const xLabels  = days.map(d => d.slice(5).replace('-', '/'));
+
+  // 按天聚合
+  const byDay = {};
+  for (const d of days) byDay[d] = { distance: 0, time: 0, elevation: 0, tss: 0, count: 0 };
+  for (const act of activities) {
+    const d = (act.date || '').slice(0, 10);
+    if (!byDay[d]) continue;
+    const s = act.summary || {};
+    byDay[d].distance  += s.total_dist_km || 0;
+    byDay[d].time      += ((s.moving_time_s || s.total_duration_s || 0)) / 60;
+    byDay[d].elevation += s.total_elevation_gain_m || 0;
+    byDay[d].tss       += _computeTSS(s, settings);
+    byDay[d].count++;
+  }
+
+  const cfgs = [
+    { id: 'pmc-daily-distance',  key: 'distance',  label: '距离 (km)',  color: '#5b9bd5', fmt: v => v.toFixed(1) + ' km' },
+    { id: 'pmc-daily-time',      key: 'time',       label: '时间 (min)', color: '#70ad47', fmt: v => Math.round(v) + ' min' },
+    { id: 'pmc-daily-elevation', key: 'elevation',  label: '爬升 (m)',   color: '#f39c12', fmt: v => Math.round(v) + ' m' },
+    { id: 'pmc-daily-tss',       key: 'tss',        label: 'TSS',        color: '#9b59b6', fmt: v => Math.round(v) },
+    { id: 'pmc-daily-count',     key: 'count',      label: '次数',       color: '#e74c3c', fmt: v => v + ' 次' },
+  ];
+
+  for (const cfg of cfgs) {
+    const el = document.getElementById(cfg.id);
+    if (!el) continue;
+
+    const data = days.map(d => byDay[d][cfg.key]);
+
+    const chart = echarts.init(el, 'dark', { renderer: 'svg' });
+    _pmcDailyCharts.push(chart);
+
+    chart.setOption({
+      backgroundColor: 'transparent',
+      grid: { top: 24, bottom: 28, left: 52, right: 12 },
+      xAxis: {
+        type: 'category',
+        data: xLabels,
+        axisLabel: {
+          fontSize: 10,
+          interval: 4,
+          color: '#666',
+          formatter: (v, i) => days[i] === todayStr
+            ? `{today|${v}}`
+            : v,
+          rich: { today: { color: '#3a8dde', fontWeight: 'bold' } },
+        },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { fontSize: 10, color: '#666' },
+        splitLine: { lineStyle: { color: '#2a2a3a' } },
+        minInterval: 1,
+        min: 0,
+      },
+      series: [{
+        type: 'bar',
+        data: data.map((v, i) => ({
+          value: v,
+          itemStyle: {
+            color:   days[i] === todayStr ? '#3a8dde' : cfg.color,
+            opacity: v > 0 ? 0.85 : 0.12,
+          },
+        })),
+        barMaxWidth: 16,
+      }],
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: '#1e1e2e',
+        borderColor: '#444',
+        textStyle: { color: '#ddd', fontSize: 12 },
+        formatter: params => {
+          const p = params[0];
+          return `${days[p.dataIndex]}<br/>${cfg.label}：${cfg.fmt(p.value)}`;
+        },
+      },
+      graphic: [{
+        type: 'text',
+        left: 12, top: 6,
+        style: { text: cfg.label, fill: '#888', fontSize: 11 },
+      }],
+    });
+  }
+}
+
 function _renderPmcZones(activities, settings) {
   const wrap = document.getElementById('pmc-zone-bars');
   const note = document.getElementById('pmc-zone-note');
