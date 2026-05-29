@@ -3527,21 +3527,20 @@ function _renderPmcChart(pmc, periodDays) {
   requestAnimationFrame(_pmcResize);
 }
 
-/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐） ──────────────────────── */
-// index 0 unused; 1-6 对应 FIT zone_time_s key "1"-"6"
-const _ZONE_COLORS     = ['', ...POWER_ZONE_COLORS]; // '#888','#3a86ff','#27ae60','#f1c40f','#e67e22','#e74c3c','#9b59b6'
-const _ZONE_NAMES      = ['', 'Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧'];
-// [low%, high%] thresholds; 0 = no lower bound, null = no upper bound
-const _ZONE_THRESHOLDS = [null, [0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, null]];
+/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐，0-indexed = Z1-Z7） ─────── */
+const _ZONE_COLORS     = POWER_ZONE_COLORS; // i=0..6 → gray/blue/green/yellow/orange/red/purple
+const _ZONE_NAMES      = ['Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧', 'Z7 神经'];
+// [low%, high%] thresholds per zone
+const _ZONE_THRESHOLDS = [[0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, 150], [150, null]];
 
 function _zoneWattLabel(i, ftp) {
   if (!ftp || ftp <= 0) return null;
   const [lo, hi] = _ZONE_THRESHOLDS[i];
   const loW = Math.round(ftp * lo / 100);
   const hiW = hi != null ? Math.round(ftp * hi / 100) : null;
-  if (lo === 0) return `<${hiW}W`;
-  if (hiW == null) return `>${loW}W`;
-  return `${loW}-${hiW}W`;
+  if (lo === 0) return `<${hiW} W`;
+  if (hiW == null) return `>${loW} W`;
+  return `${loW}–${hiW} W`;
 }
 
 function _pmcFilterActivities(activities, periodDays) {
@@ -3772,7 +3771,7 @@ function _renderPmcZones(activities, settings) {
   const note = document.getElementById('pmc-zone-note');
   if (!wrap) return;
 
-  // Aggregate zone_time_s across all activities that have it
+  // Aggregate zone_time_s (keys "0"–"6" = Z1–Z7) across all activities
   const total = new Array(7).fill(0);
   let count = 0;
   for (const act of activities) {
@@ -3781,8 +3780,8 @@ function _renderPmcZones(activities, settings) {
     for (let i = 0; i <= 6; i++) total[i] += (z[String(i)] || 0);
     count++;
   }
-  const pedalS = total.slice(1).reduce((a, b) => a + b, 0);
-  if (pedalS === 0) {
+  const totalS = total.reduce((a, b) => a + b, 0);
+  if (totalS === 0) {
     wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据（需要 FIT 文件含功率且设备记录了 FTP）</div>';
     note.textContent = '';
     return;
@@ -3792,16 +3791,18 @@ function _renderPmcZones(activities, settings) {
   wrap.innerHTML = '';
 
   const ftp = settings?.ftp || 0;
-  for (let i = 1; i <= 6; i++) {
-    const pct = pedalS > 0 ? (total[i] / pedalS * 100) : 0;
+  for (let i = 0; i <= 6; i++) {
+    const pct = totalS > 0 ? (total[i] / totalS * 100) : 0;
     const mins = Math.round(total[i] / 60);
     const wattLabel = _zoneWattLabel(i, ftp);
+    const [lo, hi] = _ZONE_THRESHOLDS[i];
+    const pctLabel = lo === 0 ? '<55%' : hi != null ? `${lo}–${hi}%` : `>${lo}%`;
     const row = document.createElement('div');
     row.className = 'pmc-zone-row';
     row.innerHTML = `
       <span class="pmc-zone-label">
         ${wattLabel ? `<span class="pmc-zone-watts">${wattLabel}</span>` : ''}
-        <span class="pmc-zone-pct-label">${_ZONE_THRESHOLDS[i][0] === 0 ? '<55%' : _ZONE_THRESHOLDS[i][1] != null ? `${_ZONE_THRESHOLDS[i][0]}-${_ZONE_THRESHOLDS[i][1]}%` : `>${_ZONE_THRESHOLDS[i][0]}%`}</span>
+        <span class="pmc-zone-pct-label">${pctLabel}</span>
       </span>
       <div class="pmc-zone-bar-track">
         <div class="pmc-zone-bar-fill" style="width:${pct.toFixed(1)}%;background:${_ZONE_COLORS[i]}"></div>
