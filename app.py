@@ -126,13 +126,13 @@ def _peak_powers(records) -> dict:
 
 
 def _zone_time_s(records, ftp) -> dict | None:
-    """Seconds in each power zone Z0(rest)-Z6 using given FTP. Returns None if no power data."""
+    """Seconds in each power zone: key 0=rest, 1-7=Z1-Z7 (Coggan 7-zone, matches heatmap thresholds)."""
     if not ftp or ftp <= 0 or not records or len(records) < 2:
         return None
     total_s = int((records[-1].timestamp - records[0].timestamp).total_seconds())
     t0 = records[0].timestamp
     ri = 0
-    zones = [0] * 7
+    zones = [0] * 8  # index 0=rest, 1-7=Z1-Z7
     for sec in range(total_s + 1):
         while ri + 1 < len(records) and (records[ri + 1].timestamp - t0).total_seconds() <= sec:
             ri += 1
@@ -146,10 +146,11 @@ def _zone_time_s(records, ftp) -> dict | None:
         elif pct < 0.90: zones[3] += 1
         elif pct < 1.05: zones[4] += 1
         elif pct < 1.20: zones[5] += 1
-        else:            zones[6] += 1
+        elif pct < 1.50: zones[6] += 1
+        else:            zones[7] += 1
     if sum(zones[1:]) == 0:
         return None
-    return {str(i): zones[i] for i in range(7)}
+    return {str(i): zones[i] for i in range(8)}
 
 
 # ── 通用 FIT 解析 ──────────────────────────────────────────────────────────────

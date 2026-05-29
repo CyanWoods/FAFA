@@ -3527,11 +3527,12 @@ function _renderPmcChart(pmc, periodDays) {
   requestAnimationFrame(_pmcResize);
 }
 
-/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐，0-indexed = Z1-Z7） ─────── */
-const _ZONE_COLORS     = POWER_ZONE_COLORS; // i=0..6 → gray/blue/green/yellow/orange/red/purple
-const _ZONE_NAMES      = ['Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧', 'Z7 神经'];
-// [low%, high%] thresholds per zone
-const _ZONE_THRESHOLDS = [[0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, 150], [150, null]];
+/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐，1-indexed = Z1-Z7） ─────── */
+// index 0 unused; 1-7 对应 zone_time_s key "1"-"7"（key "0" = 休息/无功率）
+const _ZONE_COLORS     = ['', ...POWER_ZONE_COLORS]; // [1]=#888 … [7]=#9b59b6
+const _ZONE_NAMES      = ['', 'Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧', 'Z7 神经'];
+// [low%, high%] thresholds — matches _powerZoneColor in route heatmap
+const _ZONE_THRESHOLDS = [null, [0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, 150], [150, null]];
 
 function _zoneWattLabel(i, ftp) {
   if (!ftp || ftp <= 0) return null;
@@ -3771,18 +3772,18 @@ function _renderPmcZones(activities, settings) {
   const note = document.getElementById('pmc-zone-note');
   if (!wrap) return;
 
-  // Aggregate zone_time_s (keys "0"–"6" = Z1–Z7) across all activities
-  const total = new Array(7).fill(0);
+  // Aggregate zone_time_s keys "1"–"7" = Z1–Z7 (key "0" = rest, excluded from display)
+  const total = new Array(8).fill(0);
   let count = 0;
   for (const act of activities) {
     const z = act.zone_time_s;
     if (!z) continue;
-    for (let i = 0; i <= 6; i++) total[i] += (z[String(i)] || 0);
+    for (let i = 1; i <= 7; i++) total[i] += (z[String(i)] || 0);
     count++;
   }
-  const totalS = total.reduce((a, b) => a + b, 0);
-  if (totalS === 0) {
-    wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据（需要 FIT 文件含功率且设备记录了 FTP）</div>';
+  const pedalS = total.slice(1).reduce((a, b) => a + b, 0);
+  if (pedalS === 0) {
+    wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据（需要 FIT 文件含功率且设置了 FTP）</div>';
     note.textContent = '';
     return;
   }
@@ -3791,8 +3792,8 @@ function _renderPmcZones(activities, settings) {
   wrap.innerHTML = '';
 
   const ftp = settings?.ftp || 0;
-  for (let i = 0; i <= 6; i++) {
-    const pct = totalS > 0 ? (total[i] / totalS * 100) : 0;
+  for (let i = 1; i <= 7; i++) {
+    const pct = pedalS > 0 ? (total[i] / pedalS * 100) : 0;
     const mins = Math.round(total[i] / 60);
     const wattLabel = _zoneWattLabel(i, ftp);
     const [lo, hi] = _ZONE_THRESHOLDS[i];
