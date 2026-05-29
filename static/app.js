@@ -3550,7 +3550,7 @@ function _applyZonePeriod(days) {
   const settings  = _pmcSettings();
   const filtered  = _pmcFilterActivities(_pmcAllData.activities, days);
   _renderPmcZones(filtered, settings);
-  _renderPmcDist(filtered, settings);
+  if (typeof _renderPmcDist === 'function') _renderPmcDist(filtered, settings);
 }
 
 function _renderPmcZones(activities, settings) {
