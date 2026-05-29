@@ -3527,9 +3527,10 @@ function _renderPmcChart(pmc, periodDays) {
   requestAnimationFrame(_pmcResize);
 }
 
-/* ── 训练区间分布 ─────────────────────────────────────────────────────────── */
-const _ZONE_COLORS  = ['', '#4a9eff', '#2ed573', '#f1c40f', '#e67e22', '#e74c3c', '#9b59b6'];
-const _ZONE_NAMES   = ['', '恢复 Z1', '有氧 Z2', '节奏 Z3', '阈值 Z4', 'VO₂ Z5', '无氧 Z6'];
+/* ── 功率分布区间（与路线热图 POWER_ZONE_COLORS 对齐） ──────────────────────── */
+// index 0 unused; 1-6 对应 FIT zone_time_s key "1"-"6"
+const _ZONE_COLORS     = ['', ...POWER_ZONE_COLORS]; // '#888','#3a86ff','#27ae60','#f1c40f','#e67e22','#e74c3c','#9b59b6'
+const _ZONE_NAMES      = ['', 'Z1 恢复', 'Z2 耐力', 'Z3 节奏', 'Z4 阈值', 'Z5 VO₂', 'Z6 无氧'];
 // [low%, high%] thresholds; 0 = no lower bound, null = no upper bound
 const _ZONE_THRESHOLDS = [null, [0, 55], [55, 75], [75, 90], [90, 105], [105, 120], [120, null]];
 
