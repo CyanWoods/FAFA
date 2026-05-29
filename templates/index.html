@@ -424,9 +424,48 @@
       <div class="pmc-section" id="pmc-zone-section">
         <div class="pmc-section-header">
           <span class="pmc-chart-title">训练区间分布 · 骑行时间</span>
-          <span id="pmc-zone-note" class="pmc-zone-note"></span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="pmc-zone-note" class="pmc-zone-note"></span>
+            <div id="pmc-zone-period-btns" class="pmc-period-group">
+              <button class="pmc-period-btn active" data-zone-period="0">全部</button>
+              <button class="pmc-period-btn" data-zone-period="90">近3月</button>
+              <button class="pmc-period-btn" data-zone-period="30">近1月</button>
+              <button class="pmc-period-btn" data-zone-period="7">近1周</button>
+            </div>
+          </div>
         </div>
         <div id="pmc-zone-bars"></div>
+      </div>
+      <div class="pmc-section" id="pmc-dist-section">
+        <div class="pmc-section-header">
+          <span class="pmc-chart-title">单次骑行分布</span>
+        </div>
+        <div class="pmc-dist-block">
+          <div class="pmc-dist-label">骑行时长</div>
+          <div id="pmc-dist-duration"></div>
+        </div>
+        <div class="pmc-dist-block">
+          <div class="pmc-dist-label">骑行距离</div>
+          <div id="pmc-dist-distance"></div>
+        </div>
+        <div class="pmc-dist-block">
+          <div class="pmc-dist-label">爬升</div>
+          <div id="pmc-dist-elevation"></div>
+        </div>
+        <div class="pmc-dist-block">
+          <div class="pmc-dist-label">TSS</div>
+          <div id="pmc-dist-tss"></div>
+        </div>
+      </div>
+      <div class="pmc-section" id="pmc-daily-section">
+        <div class="pmc-section-header">
+          <span class="pmc-chart-title">近30天每日训练</span>
+        </div>
+        <div id="pmc-daily-distance"  style="height:120px"></div>
+        <div id="pmc-daily-time"      style="height:120px;margin-top:8px"></div>
+        <div id="pmc-daily-elevation" style="height:120px;margin-top:8px"></div>
+        <div id="pmc-daily-tss"       style="height:120px;margin-top:8px"></div>
+        <div id="pmc-daily-count"     style="height:120px;margin-top:8px"></div>
       </div>
       <div class="pmc-section" id="pmc-curve-section">
         <div class="pmc-section-header">
