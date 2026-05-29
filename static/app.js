@@ -3550,7 +3550,104 @@ function _applyZonePeriod(days) {
   const settings  = _pmcSettings();
   const filtered  = _pmcFilterActivities(_pmcAllData.activities, days);
   _renderPmcZones(filtered, settings);
-  if (typeof _renderPmcDist === 'function') _renderPmcDist(filtered, settings);
+  _renderPmcDist(filtered, settings);
+}
+
+const _DIST_CONFIGS = [
+  {
+    id: 'pmc-dist-duration',
+    getValue: act => {
+      const s = act.summary;
+      if (!s) return null;
+      const raw = (s.moving_time_s || s.total_duration_s || 0) / 3600;
+      return raw > 0 ? raw : null;
+    },
+    buckets: [
+      { label: '< 1h',    test: v => v < 1 },
+      { label: '1 – 2h',  test: v => v >= 1  && v < 2 },
+      { label: '2 – 3h',  test: v => v >= 2  && v < 3 },
+      { label: '> 3h',    test: v => v >= 3 },
+    ],
+    color: '#70ad47',
+  },
+  {
+    id: 'pmc-dist-distance',
+    getValue: act => {
+      const v = act.summary?.total_dist_km;
+      return (v != null && v > 0) ? v : null;
+    },
+    buckets: [
+      { label: '< 50km',     test: v => v < 50 },
+      { label: '50 – 100km', test: v => v >= 50  && v < 100 },
+      { label: '100 – 150km',test: v => v >= 100 && v < 150 },
+      { label: '> 150km',    test: v => v >= 150 },
+    ],
+    color: '#5b9bd5',
+  },
+  {
+    id: 'pmc-dist-elevation',
+    getValue: act => {
+      const v = act.summary?.total_elevation_gain_m;
+      return (v != null && v >= 0) ? v : null;
+    },
+    buckets: [
+      { label: '< 500m',      test: v => v < 500 },
+      { label: '500 – 1000m', test: v => v >= 500  && v < 1000 },
+      { label: '1000 – 2000m',test: v => v >= 1000 && v < 2000 },
+      { label: '> 2000m',     test: v => v >= 2000 },
+    ],
+    color: '#f39c12',
+  },
+  {
+    id: 'pmc-dist-tss',
+    getValue: (act, settings) => {
+      const t = _computeTSS(act.summary, settings);
+      return t > 0 ? t : null;
+    },
+    buckets: [
+      { label: '< 50',     test: v => v < 50 },
+      { label: '50 – 100', test: v => v >= 50  && v < 100 },
+      { label: '100 – 150',test: v => v >= 100 && v < 150 },
+      { label: '> 150',    test: v => v >= 150 },
+    ],
+    color: '#9b59b6',
+  },
+];
+
+function _renderPmcDist(activities, settings) {
+  for (const cfg of _DIST_CONFIGS) {
+    const wrap = document.getElementById(cfg.id);
+    if (!wrap) continue;
+
+    const counts = new Array(cfg.buckets.length).fill(0);
+    let total = 0;
+    for (const act of activities) {
+      const v = cfg.getValue(act, settings);
+      if (v == null || isNaN(v)) continue;
+      for (let i = 0; i < cfg.buckets.length; i++) {
+        if (cfg.buckets[i].test(v)) { counts[i]++; break; }
+      }
+      total++;
+    }
+
+    if (total === 0) {
+      wrap.innerHTML = '<div style="color:#555;font-size:12px;padding:4px 0">暂无数据</div>';
+      continue;
+    }
+
+    wrap.innerHTML = cfg.buckets.map((b, i) => {
+      const pct = (counts[i] / total * 100).toFixed(1);
+      return `
+        <div class="pmc-dist-bucket-row">
+          <span class="pmc-dist-bucket-label">${b.label}</span>
+          <div class="pmc-dist-bar-track">
+            <div class="pmc-dist-bar-fill" style="width:${pct}%;background:${cfg.color}"></div>
+          </div>
+          <span class="pmc-dist-pct">${pct}%</span>
+          <span class="pmc-dist-count">${counts[i]} 次</span>
+        </div>`;
+    }).join('');
+  }
 }
 
 function _renderPmcZones(activities, settings) {
