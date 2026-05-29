@@ -3901,7 +3901,7 @@ function _renderPmcCurve(activities, settings) {
       textStyle: { color: '#ddd', fontSize: 12 },
       formatter: params => {
         const x     = params[0]?.axisValue;
-        const label = xLabels[x] || `${x}s`;
+        const label = xLabels[Math.round(Number(x))] || `${x}s`;
         const lines = [`<b>${label}</b>`];
         for (const p of params) {
           if (p.value[1] == null || p.value[1] === 0) continue;
