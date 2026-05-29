@@ -3820,13 +3820,8 @@ function _renderPmcCurve(activities, settings) {
   const d90 = new Date(today); d90.setDate(d90.getDate() - 90);
   const d30 = new Date(today); d30.setDate(d30.getDate() - 30);
 
-  // Compute all-time, 90-day, 30-day best for each duration
-  const best = {};
-  const best90 = {};
-  const best30 = {};
-  for (const { key } of _CURVE_DURATIONS) {
-    best[key] = 0; best90[key] = 0; best30[key] = 0;
-  }
+  const best = {}, best90 = {}, best30 = {};
+  for (const { key } of _CURVE_DURATIONS) { best[key] = 0; best90[key] = 0; best30[key] = 0; }
 
   for (const act of activities) {
     const pp = act.peak_power;
@@ -3836,7 +3831,7 @@ function _renderPmcCurve(activities, settings) {
     const in30 = actDate >= d30;
     for (const { key } of _CURVE_DURATIONS) {
       const w = pp[key] || 0;
-      if (w > best[key]) best[key] = w;
+      if (w > best[key])   best[key]   = w;
       if (in90 && w > best90[key]) best90[key] = w;
       if (in30 && w > best30[key]) best30[key] = w;
     }
@@ -3844,34 +3839,96 @@ function _renderPmcCurve(activities, settings) {
 
   const hasAny = Object.values(best).some(v => v > 0);
   if (!hasAny) {
+    if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} _pmcCurveChart = null; }
     wrap.innerHTML = '<div style="color:#555;font-size:13px;padding:8px 0">暂无功率数据</div>';
     if (note) note.textContent = '';
     return;
   }
 
-  const weight = settings.weight;
+  const weight  = settings.weight;
   const showWkg = weight > 0;
   if (note) note.textContent = showWkg ? `体重 ${weight} kg` : '';
 
-  let html = `<table class="pmc-curve-table"><thead><tr>
-    <th>时长</th><th>历史最佳</th><th>近90天</th><th>近30天</th>
-  </tr></thead><tbody>`;
+  const xVals   = _CURVE_DURATIONS.map(d => Number(d.key));
+  const xLabels = { 5: '5s', 60: '1m', 300: '5m', 1200: '20m', 3600: '60m' };
 
-  for (const { key, label } of _CURVE_DURATIONS) {
-    const allW  = best[key];
-    const d90W  = best90[key];
-    const d30W  = best30[key];
+  const makeSeries = (data, name, color, dashed) => ({
+    name,
+    type: 'line',
+    data: xVals.map((x, i) => [x, data[_CURVE_DURATIONS[i].key] || null]),
+    lineStyle: { color, width: dashed ? 1.5 : 2, type: dashed ? 'dashed' : 'solid' },
+    itemStyle: { color },
+    symbol: 'circle',
+    symbolSize: 5,
+    connectNulls: false,
+  });
 
-    const fmtW = (w, isBest) => {
-      if (!w) return '<td class="pmc-curve-none">—</td>';
-      const wkg = showWkg ? `<span class="pmc-curve-wkg">${(w/weight).toFixed(2)} W/kg</span>` : '';
-      return `<td${isBest ? ' class="pmc-curve-best"' : ''}>${w} W${wkg}</td>`;
-    };
+  wrap.innerHTML = '<div id="pmc-curve-chart" style="height:220px"></div>'
+    + '<div id="pmc-curve-summary" style="margin-top:8px;font-size:12px;color:#888;display:flex;flex-wrap:wrap;gap:8px 16px"></div>';
 
-    html += `<tr><td>${label}</td>${fmtW(allW, true)}${fmtW(d90W, false)}${fmtW(d30W, false)}</tr>`;
+  if (_pmcCurveChart) { try { _pmcCurveChart.dispose(); } catch {} }
+  _pmcCurveChart = echarts.init(document.getElementById('pmc-curve-chart'), 'dark', { renderer: 'svg' });
+  new ResizeObserver(() => _pmcCurveChart?.resize()).observe(document.getElementById('pmc-curve-chart'));
+
+  _pmcCurveChart.setOption({
+    backgroundColor: 'transparent',
+    legend: { top: 4, right: 8, textStyle: { color: '#aaa', fontSize: 11 } },
+    grid:   { top: 36, bottom: 36, left: 52, right: 16 },
+    xAxis: {
+      type: 'log',
+      min: 4,
+      max: 4000,
+      axisLabel: {
+        color: '#888',
+        fontSize: 11,
+        formatter: v => xLabels[v] || '',
+      },
+      axisLine:  { lineStyle: { color: '#444' } },
+      splitLine: { lineStyle: { color: '#2a2a3a' } },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'W',
+      nameTextStyle: { color: '#666', fontSize: 11 },
+      axisLabel:  { color: '#888', fontSize: 11 },
+      splitLine:  { lineStyle: { color: '#2a2a3a' } },
+      min: 0,
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#1e1e2e',
+      borderColor: '#444',
+      textStyle: { color: '#ddd', fontSize: 12 },
+      formatter: params => {
+        const x     = params[0]?.axisValue;
+        const label = xLabels[x] || `${x}s`;
+        const lines = [`<b>${label}</b>`];
+        for (const p of params) {
+          if (p.value[1] == null || p.value[1] === 0) continue;
+          const w      = p.value[1];
+          const wkgStr = showWkg ? ` (${(w / weight).toFixed(2)} W/kg)` : '';
+          lines.push(`${p.marker}${p.seriesName}：${w} W${wkgStr}`);
+        }
+        return lines.join('<br/>');
+      },
+    },
+    series: [
+      makeSeries(best,   '历史最佳', '#5b9bd5', false),
+      makeSeries(best90, '近90天',   '#70ad47', true),
+      makeSeries(best30, '近30天',   '#f39c12', true),
+    ],
+  });
+
+  const summaryEl = document.getElementById('pmc-curve-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = _CURVE_DURATIONS
+      .filter(({ key }) => best[key] > 0)
+      .map(({ key, label }) => {
+        const w      = best[key];
+        const wkgStr = showWkg ? ` · ${(w / weight).toFixed(2)} W/kg` : '';
+        return `<span>${label}：<b style="color:#eee">${w} W</b>${wkgStr}</span>`;
+      }).join('<span style="color:#333;margin:0 4px">｜</span>');
   }
-  html += '</tbody></table>';
-  wrap.innerHTML = html;
 }
 
 /* ── 共享 AI 弹窗 helper ───────────────────────────────────────────────────── */
