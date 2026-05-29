@@ -2451,6 +2451,22 @@ body {
   flex-shrink: 0;
 }
 
+/* 单次骑行分布 */
+.pmc-dist-block { margin: 10px 0; }
+.pmc-dist-label { font-size: 12px; color: #888; margin-bottom: 4px; }
+.pmc-dist-bucket-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 44px 54px;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+.pmc-dist-bucket-label { font-size: 12px; color: #aaa; }
+.pmc-dist-bar-track { background: #2a2a3a; border-radius: 3px; height: 8px; }
+.pmc-dist-bar-fill  { border-radius: 3px; height: 8px; }
+.pmc-dist-pct  { font-size: 12px; color: #aaa; text-align: right; }
+.pmc-dist-count { font-size: 11px; color: #666; }
+
 /* ── 功率曲线 ── */
 .pmc-curve-table {
   width: 100%;
