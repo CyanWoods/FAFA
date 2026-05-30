@@ -1081,6 +1081,7 @@ function initDetailTableResize() {
     const maxH = Math.max(DEFAULT_H, contentMaxH());
     const newH = Math.max(MIN_H, Math.min(maxH, startH + (startY - clientY)));
     section.style.height = newH + 'px';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
   }
 
   function endDrag() {
@@ -1088,6 +1089,7 @@ function initDetailTableResize() {
     dragging = false;
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
   }
 
   handle.addEventListener('mousedown',  e => { startDrag(e.clientY); e.preventDefault(); });
@@ -1101,6 +1103,7 @@ function initDetailTableResize() {
   handle.addEventListener('dblclick', () => {
     const h = section.getBoundingClientRect().height;
     section.style.height = (h > MIN_H + 10 ? MIN_H : DEFAULT_H) + 'px';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
   });
 }
 
