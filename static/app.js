@@ -163,6 +163,12 @@ let detailRouteLayers = [];
 let _detailZoomDrag = null;
 let _detailZoomActive = false;
 let _detailZoomHandlersInited = false;
+let _detailRouteCoords = null;
+let _detailRouteCumDist = null;
+let _detailRouteStepM = 1000;
+let _detailChartIsRecords = false;
+let _detailChartDataLen = 0;
+let _detailRouteMarker = null;
 let aiTrackId = null;
 let _aiModel  = '';
 let _analyticsOpen = false;
@@ -1485,6 +1491,9 @@ function closeDetailView() {
   if (resetBtn) resetBtn.style.display = 'none';
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
+  _detailRouteMarker = null;
+  _detailRouteCoords = null;
+  _detailRouteCumDist = null;
   detailTrackId = null;
   if (_sidebarView === 'activities') {
     document.getElementById('activities-view').classList.add('active');
@@ -1949,6 +1958,51 @@ function _renderDetailCharts(records, fallbackStats) {
   }
 
   echarts.connect('detail');
+
+  _detailChartIsRecords = useRecords;
+  _detailChartDataLen   = useRecords ? (records ? records.length : 0) : (fallbackStats ? fallbackStats.length : 0);
+
+  if (detailCharts.length > 0) {
+    const firstChart = detailCharts[0];
+    firstChart.getZr().on('mousemove', evt => {
+      const idx = Math.round(firstChart.convertFromPixel({ xAxisIndex: 0 }, evt.offsetX));
+      if (idx >= 0 && idx < _detailChartDataLen) _updateDetailRouteMarker(idx);
+    });
+    firstChart.getZr().on('mouseout', _hideDetailRouteMarker);
+  }
+}
+
+function _updateDetailRouteMarker(dataIdx) {
+  if (!detailRouteMap || !_detailRouteCoords || !_detailRouteCumDist) return;
+  const totalDist = _detailRouteCumDist[_detailRouteCumDist.length - 1];
+  const targetDist = _detailChartIsRecords
+    ? (dataIdx / Math.max(1, _detailChartDataLen - 1)) * totalDist
+    : (dataIdx + 0.5) * _detailRouteStepM;
+
+  // Binary search for nearest GPS point
+  let lo = 0, hi = _detailRouteCumDist.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (_detailRouteCumDist[mid] < targetDist) lo = mid + 1;
+    else hi = mid;
+  }
+  const latlng = _detailRouteCoords[lo];
+  if (!latlng) return;
+
+  if (!_detailRouteMarker) {
+    _detailRouteMarker = L.circleMarker(latlng, {
+      radius: 6, color: '#fff', weight: 2, fillColor: '#2e86de', fillOpacity: 1,
+    }).addTo(detailRouteMap);
+  } else {
+    _detailRouteMarker.setLatLng(latlng);
+  }
+}
+
+function _hideDetailRouteMarker() {
+  if (_detailRouteMarker && detailRouteMap) {
+    detailRouteMap.removeLayer(_detailRouteMarker);
+    _detailRouteMarker = null;
+  }
 }
 
 function _renderDetailTable() {
@@ -2093,6 +2147,12 @@ function _renderDetailRoute() {
 
   for (const layer of detailRouteLayers) detailRouteMap.removeLayer(layer);
   detailRouteLayers = [];
+  if (_detailRouteMarker) { detailRouteMap.removeLayer(_detailRouteMarker); _detailRouteMarker = null; }
+
+  // Store for chart→map hover sync
+  _detailRouteCoords = coords;
+  _detailRouteCumDist = cumDist;
+  _detailRouteStepM = stepM;
 
   // Assign each GPS point to a stat-bucket and draw colored runs
   const buckets = coords.map((_, i) =>
