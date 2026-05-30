@@ -314,10 +314,6 @@
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
       <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
-      <div id="detail-mode-group">
-        <button class="det-mode-btn active" id="detail-data-btn">数据详情</button>
-        <button class="det-mode-btn" id="detail-route-btn">路线热图</button>
-      </div>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
     <div id="detail-meta">
@@ -342,27 +338,29 @@
       </div>
     </div>
     <div id="detail-summary-row"></div>
-    <div id="detail-chart-section">
-      <div id="detail-charts-wrap"></div>
+    <div id="detail-main-row">
+      <div id="detail-chart-section">
+        <div id="detail-charts-wrap"></div>
+      </div>
+      <div id="detail-route-section">
+        <div id="detail-route-metric-bar"></div>
+        <div id="detail-route-map"></div>
+        <div id="detail-route-tooltip" style="display:none"></div>
+        <div id="detail-route-legend">
+          <span id="detail-route-legend-low"></span>
+          <div id="detail-route-legend-bar-wrap">
+            <div id="detail-route-legend-bar"></div>
+            <div id="detail-route-legend-marker" style="display:none"></div>
+            <div id="detail-route-legend-min-marker" style="display:none"></div>
+            <div id="detail-route-legend-ftp-marker" style="display:none"></div>
+          </div>
+          <span id="detail-route-legend-high"></span>
+        </div>
+      </div>
     </div>
     <div id="detail-table-section">
       <div id="detail-table-handle"><div id="detail-table-handle-bar"></div></div>
       <div id="detail-table-wrap"></div>
-    </div>
-    <div id="detail-route-section" style="display:none">
-      <div id="detail-route-metric-bar"></div>
-      <div id="detail-route-map"></div>
-      <div id="detail-route-tooltip" style="display:none"></div>
-      <div id="detail-route-legend">
-        <span id="detail-route-legend-low"></span>
-        <div id="detail-route-legend-bar-wrap">
-          <div id="detail-route-legend-bar"></div>
-          <div id="detail-route-legend-marker" style="display:none"></div>
-          <div id="detail-route-legend-min-marker" style="display:none"></div>
-          <div id="detail-route-legend-ftp-marker" style="display:none"></div>
-        </div>
-        <span id="detail-route-legend-high"></span>
-      </div>
     </div>
   </div>
 

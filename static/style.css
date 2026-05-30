@@ -839,28 +839,6 @@ body {
   white-space: nowrap;
 }
 
-#detail-mode-group {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.det-mode-btn {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 12px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.04);
-  color: #777;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.det-mode-btn:hover { background: rgba(46,134,222,0.18); color: #7ab0e8; border-color: rgba(46,134,222,0.3); }
-.det-mode-btn.active { background: #2e86de; border-color: #2e86de; color: #fff; }
-.det-mode-btn.active:hover { background: #2678c8; border-color: #2678c8; }
 
 .det-export-btn {
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -1113,6 +1091,13 @@ body {
   flex-shrink: 0;
 }
 
+#detail-main-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 #detail-chart-section {
   flex: 1;
   min-height: 0;
@@ -1120,6 +1105,7 @@ body {
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.15) transparent;
+  border-right: 1px solid rgba(255,255,255,0.06);
 }
 
 #detail-chart-section::-webkit-scrollbar { width: 4px; }
@@ -3531,10 +3517,7 @@ body {
 .light-theme #detail-filename-label { color: #111; }
 .light-theme #detail-back-btn { color: #444; border-color: rgba(0,0,0,0.20); }
 .light-theme #detail-back-btn:hover { background: rgba(0,0,0,0.07); color: #111; }
-.light-theme .det-mode-btn { border-color: rgba(0,0,0,0.18); color: #555; background: transparent; }
-.light-theme .det-mode-btn:hover { background: rgba(0,0,0,0.07); color: #111; border-color: rgba(0,0,0,0.25); }
-.light-theme .det-mode-btn.active { background: #2e86de; border-color: #2e86de; color: #fff; }
-.light-theme .det-mode-btn.active:hover { background: #2678c8; }
+.light-theme #detail-chart-section { border-right-color: rgba(0,0,0,0.08); }
 .light-theme .det-export-btn { border-color: rgba(0,0,0,0.18); color: #555; background: transparent; }
 .light-theme .det-export-btn:hover { background: rgba(0,0,0,0.07); color: #111; border-color: rgba(0,0,0,0.25); }
 .light-theme #detail-summary-row { border-bottom-color: rgba(0,0,0,0.08); }

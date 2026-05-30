@@ -154,7 +154,6 @@ const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor:
 let panelExpanded = false;
 let panelExpandedHeight = 320;
 let detailTrackId = null;
-let detailRouteActive = false;
 let detailMetric = 'speed';
 let detailCharts = [];
 let detailChartResizeObservers = [];
@@ -567,7 +566,7 @@ function _buildActivityCard(act) {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const data = await res.json();
       const id = addTrack(data);
-      await openDetailView(id, 'route');
+      await openDetailView(id);
     } catch (err) {
       toast('加载失败：' + err.message);
     } finally {
@@ -1442,24 +1441,19 @@ async function doExport() {
 }
 
 /* ── Detail view (界面二) ────────────────────────────────────────────────── */
-async function openDetailView(id, startTab = 'data') {
+async function openDetailView(id) {
   const t = tracks.get(id);
   if (!t) return;
   stopFlash(id);
   detailTrackId = id;
-  detailRouteActive = false;
 
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
-  document.getElementById('detail-chart-section').style.display = '';
-  document.getElementById('detail-table-section').style.display = '';
-  document.getElementById('detail-route-section').style.display = 'none';
 
   document.getElementById('detail-filename-label').textContent = t.name;
   document.getElementById('detail-view').classList.add('active');
 
   _renderDetailSummary(t.summary);
-  _setupDetailRouteButton();
   _loadAndRenderDetailMeta(t.name);
 
   document.getElementById('detail-charts-wrap').innerHTML =
@@ -1475,10 +1469,8 @@ async function openDetailView(id, startTab = 'data') {
 
   _renderDetailCharts(records, t.timeStats);
   _renderDetailTable();
-
-  if (startTab === 'route') {
-    document.getElementById('detail-route-btn')?.click();
-  }
+  _buildRouteMetricBar();
+  _renderDetailRoute();
 }
 
 function closeDetailView() {
@@ -1736,38 +1728,6 @@ function _renderDetailSummary(summary) {
     chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
 }
 
-function _setupDetailRouteButton() {
-  const dataBtn  = document.getElementById('detail-data-btn');
-  const routeBtn = document.getElementById('detail-route-btn');
-  if (!dataBtn || !routeBtn) return;
-
-  dataBtn.classList.add('active');
-  routeBtn.classList.remove('active');
-
-  dataBtn.onclick = () => {
-    if (detailRouteActive) {
-      detailRouteActive = false;
-      dataBtn.classList.add('active');
-      routeBtn.classList.remove('active');
-      document.getElementById('detail-chart-section').style.display = '';
-      document.getElementById('detail-table-section').style.display = '';
-      document.getElementById('detail-route-section').style.display = 'none';
-    }
-  };
-
-  routeBtn.onclick = () => {
-    if (!detailRouteActive) {
-      detailRouteActive = true;
-      routeBtn.classList.add('active');
-      dataBtn.classList.remove('active');
-      document.getElementById('detail-chart-section').style.display = 'none';
-      document.getElementById('detail-table-section').style.display = 'none';
-      document.getElementById('detail-route-section').style.display = 'flex';
-      _buildRouteMetricBar();
-      _renderDetailRoute();
-    }
-  };
-}
 
 function _buildRouteMetricBar() {
   const t = tracks.get(detailTrackId);
@@ -3185,7 +3145,7 @@ async function saveSettingsModal() {
       _pmcAllData = null;
       _loadAndRenderPmc();
     }
-    if (detailRouteActive) _renderDetailRoute();
+    if (detailTrackId != null) _renderDetailRoute();
   } catch { toast('保存失败'); }
 }
 
