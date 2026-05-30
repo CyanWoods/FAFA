@@ -2013,13 +2013,13 @@ function _renderDetailCharts(records, fallbackStats) {
   _detailChartIsRecords = useRecords;
   _detailChartDataLen   = useRecords ? (records ? records.length : 0) : (fallbackStats ? fallbackStats.length : 0);
 
-  if (detailCharts.length > 0) {
-    const firstChart = detailCharts[0];
-    firstChart.getZr().on('mousemove', evt => {
-      const idx = Math.round(firstChart.convertFromPixel({ xAxisIndex: 0 }, evt.offsetX));
+  for (const chart of detailCharts) {
+    const c = chart;
+    c.getZr().on('mousemove', evt => {
+      const idx = Math.round(c.convertFromPixel({ xAxisIndex: 0 }, evt.offsetX));
       if (idx >= 0 && idx < _detailChartDataLen) _updateDetailRouteMarker(idx);
     });
-    firstChart.getZr().on('mouseout', _hideDetailRouteMarker);
+    c.getZr().on('mouseout', _hideDetailRouteMarker);
   }
 }
 
