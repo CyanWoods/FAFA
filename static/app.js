@@ -1061,6 +1061,57 @@ function initPanelResize() {
   document.addEventListener('touchend', endDrag);
 }
 
+/* ── Detail chart/map split resize ──────────────────────────────────────── */
+function initDetailSplitResize() {
+  const row    = document.getElementById('detail-main-row');
+  const left   = document.getElementById('detail-chart-section');
+  const right  = document.getElementById('detail-route-section');
+  const handle = document.getElementById('detail-split-handle');
+  const MIN_W  = 180;
+  let dragging = false, startX = 0, startLeftW = 0;
+
+  function startDrag(clientX) {
+    dragging   = true;
+    startX     = clientX;
+    startLeftW = left.getBoundingClientRect().width;
+    document.body.style.cursor     = 'ew-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function doDrag(clientX) {
+    if (!dragging) return;
+    const rowW    = row.getBoundingClientRect().width;
+    const handleW = handle.getBoundingClientRect().width;
+    const maxLeftW = rowW - handleW - MIN_W;
+    const newLeftW = Math.max(MIN_W, Math.min(maxLeftW, startLeftW + (clientX - startX)));
+    left.style.flex  = `0 0 ${newLeftW}px`;
+    right.style.flex = '1 1 0';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
+  }
+
+  handle.addEventListener('mousedown',  e => { startDrag(e.clientX); e.preventDefault(); });
+  document.addEventListener('mousemove', e => doDrag(e.clientX));
+  document.addEventListener('mouseup',   endDrag);
+
+  handle.addEventListener('touchstart', e => { startDrag(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if (dragging) { doDrag(e.touches[0].clientX); e.preventDefault(); } }, { passive: false });
+  document.addEventListener('touchend',  endDrag);
+
+  handle.addEventListener('dblclick', () => {
+    left.style.flex  = '1 1 0';
+    right.style.flex = '1 1 0';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
+  });
+}
+
 /* ── Detail table resize ─────────────────────────────────────────────────── */
 function initDetailTableResize() {
   const section = document.getElementById('detail-table-section');
@@ -2285,6 +2336,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDragDrop();
   initZoomSlider();
   initPanelResize();
+  initDetailSplitResize();
   initDetailTableResize();
 
   // Activities view is default home

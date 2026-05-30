@@ -1099,13 +1099,40 @@ body {
 }
 
 #detail-chart-section {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 180px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+
+#detail-split-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  background: rgba(255,255,255,0.02);
+  border-left: 1px solid rgba(255,255,255,0.06);
   border-right: 1px solid rgba(255,255,255,0.06);
+  z-index: 1;
+}
+
+#detail-split-handle-bar {
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.15);
+  transition: background 0.15s, height 0.15s;
+}
+
+#detail-split-handle:hover { background: rgba(255,255,255,0.05); }
+#detail-split-handle:hover #detail-split-handle-bar {
+  background: rgba(255,255,255,0.38);
+  height: 56px;
 }
 
 #detail-chart-section::-webkit-scrollbar { width: 4px; }
@@ -1771,7 +1798,8 @@ body {
 
 /* ── Detail route view ───────────────────────────────────────────────────── */
 #detail-route-section {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 180px;
   min-height: 0;
   position: relative;
   display: flex;
@@ -3517,7 +3545,10 @@ body {
 .light-theme #detail-filename-label { color: #111; }
 .light-theme #detail-back-btn { color: #444; border-color: rgba(0,0,0,0.20); }
 .light-theme #detail-back-btn:hover { background: rgba(0,0,0,0.07); color: #111; }
-.light-theme #detail-chart-section { border-right-color: rgba(0,0,0,0.08); }
+.light-theme #detail-split-handle { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.08); }
+.light-theme #detail-split-handle:hover { background: rgba(0,0,0,0.05); }
+.light-theme #detail-split-handle-bar { background: rgba(0,0,0,0.15); }
+.light-theme #detail-split-handle:hover #detail-split-handle-bar { background: rgba(0,0,0,0.30); }
 .light-theme .det-export-btn { border-color: rgba(0,0,0,0.18); color: #555; background: transparent; }
 .light-theme .det-export-btn:hover { background: rgba(0,0,0,0.07); color: #111; border-color: rgba(0,0,0,0.25); }
 .light-theme #detail-summary-row { border-bottom-color: rgba(0,0,0,0.08); }
