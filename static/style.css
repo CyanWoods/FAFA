@@ -1833,6 +1833,7 @@ body {
 #detail-route-map {
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 #detail-route-fit-btn {

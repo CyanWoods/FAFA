@@ -169,6 +169,7 @@ let _detailRouteStepM = 1000;
 let _detailChartIsRecords = false;
 let _detailChartDataLen = 0;
 let _detailRouteMarker = null;
+let _detailRouteHideTimer = null;
 let aiTrackId = null;
 let _aiModel  = '';
 let _analyticsOpen = false;
@@ -1094,7 +1095,6 @@ function initDetailSplitResize() {
     dragging = false;
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
-    if (detailRouteMap) detailRouteMap.invalidateSize();
   }
 
   handle.addEventListener('mousedown',  e => { startDrag(e.clientX); e.preventDefault(); });
@@ -1146,7 +1146,6 @@ function initDetailTableResize() {
     dragging = false;
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
-    if (detailRouteMap) detailRouteMap.invalidateSize();
   }
 
   handle.addEventListener('mousedown',  e => { startDrag(e.clientY); e.preventDefault(); });
@@ -1542,6 +1541,7 @@ function closeDetailView() {
   if (resetBtn) resetBtn.style.display = 'none';
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
+  if (_detailRouteHideTimer) { clearTimeout(_detailRouteHideTimer); _detailRouteHideTimer = null; }
   _detailRouteMarker = null;
   _detailRouteCoords = null;
   _detailRouteCumDist = null;
@@ -2024,6 +2024,7 @@ function _renderDetailCharts(records, fallbackStats) {
 }
 
 function _updateDetailRouteMarker(dataIdx) {
+  if (_detailRouteHideTimer) { clearTimeout(_detailRouteHideTimer); _detailRouteHideTimer = null; }
   if (!detailRouteMap || !_detailRouteCoords || !_detailRouteCumDist) return;
   const totalDist = _detailRouteCumDist[_detailRouteCumDist.length - 1];
   const targetDist = _detailChartIsRecords
@@ -2050,10 +2051,13 @@ function _updateDetailRouteMarker(dataIdx) {
 }
 
 function _hideDetailRouteMarker() {
-  if (_detailRouteMarker && detailRouteMap) {
-    detailRouteMap.removeLayer(_detailRouteMarker);
-    _detailRouteMarker = null;
-  }
+  _detailRouteHideTimer = setTimeout(() => {
+    _detailRouteHideTimer = null;
+    if (_detailRouteMarker && detailRouteMap) {
+      detailRouteMap.removeLayer(_detailRouteMarker);
+      _detailRouteMarker = null;
+    }
+  }, 60);
 }
 
 function _detailRouteFitBounds() {
@@ -2262,11 +2266,7 @@ function _renderDetailRoute() {
   setTimeout(() => {
     if (!detailRouteMap) return;
     detailRouteMap.invalidateSize();
-    if (detailRouteLayers.length) {
-      const bounds = L.latLngBounds([]);
-      for (const layer of detailRouteLayers) bounds.extend(layer.getBounds());
-      detailRouteMap.fitBounds(bounds, { padding: [24, 24] });
-    }
+    _detailRouteFitBounds();
   }, 80);
 
   // Update legend labels
