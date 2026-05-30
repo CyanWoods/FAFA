@@ -698,7 +698,8 @@ def _load_onelap_credentials() -> dict | None:
     return None
 
 
-def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str) -> str:
+def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str,
+                       time_stats: list | None = None) -> str:
     def fmt(v, unit="", digits=1):
         return "无数据" if v is None else f"{round(v, digits)}{unit}"
 
@@ -754,6 +755,25 @@ def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time:
         show = km_stats if len(km_stats) <= 15 else (km_stats[:7] + [None] + km_stats[-7:])
         for s in show:
             lines.append("…（中间段省略）" if s is None else km_row(s))
+
+    if time_stats:
+        lines.append("")
+        lines.append(f"## 逐分钟数据（共 {len(time_stats)} 分钟，用于识别节奏/疲劳变化）")
+        lines.append("分钟 | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm)")
+        lines.append("-----|-----------|------------|---------|----------")
+
+        def _v(s, key, d=0):
+            val = s.get(key)
+            return "—" if val is None else str(round(val, d))
+
+        def t_row(s):
+            return (f"{s.get('km','?')} | {_v(s,'avg_speed_kmh',1)} | "
+                    f"{_v(s,'avg_hr',0)} | {_v(s,'avg_power',0)} | {_v(s,'avg_cadence',0)}")
+
+        step = max(1, len(time_stats) // 40)
+        sampled = time_stats[::step]
+        for s in sampled:
+            lines.append(t_row(s))
 
     lines += [
         "",
@@ -890,6 +910,7 @@ def ai_evaluate():
     prompt = _build_eval_prompt(
         body.get("summary") or {}, body.get("km_stats") or [],
         body.get("filename", ""), body.get("start_time", ""),
+        time_stats=body.get("time_stats") or None,
     )
     return _llm_stream(cfg, prompt)
 

@@ -2288,6 +2288,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 3) return;
+    e.preventDefault();
+    if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
+    else if (aiTrackId != null) closeAiView();
+    else if (detailTrackId != null) closeDetailView();
+    else if (_analyticsOpen) closeAnalyticsView();
+  });
+
+  let _calWheelLast = 0;
+  document.getElementById('cal-body').addEventListener('wheel', e => {
+    e.preventDefault();
+    const now = Date.now();
+    if (now - _calWheelLast < 300) return;
+    _calWheelLast = now;
+    calNavMonth(e.deltaY > 0 ? 1 : -1);
+  }, { passive: false });
+
   // Period selector buttons (scoped to #pmc-chart-header to avoid cross-contamination with zone period buttons)
   document.querySelectorAll('#pmc-chart-header .pmc-period-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2966,10 +2984,12 @@ async function startAiEval() {
   }
 
   const body = {
-    summary:    t.summary    || {},
-    km_stats:   t.kmStats    || [],
-    filename:   t.name       || '',
-    start_time: t.timeStatsStart || '',
+    summary:    t.summary         || {},
+    km_stats:   t.kmStats         || [],
+    dist_stats: t.distStats       || [],
+    time_stats: t.timeStats       || [],
+    filename:   t.name            || '',
+    start_time: t.timeStatsStart  || '',
   };
 
   try {
@@ -4426,7 +4446,7 @@ function _renderCalendarMonth(year, month, activities) {
   grid.innerHTML = '';
 
   for (let row = 0; row < totalRows; row++) {
-    let weekKm = 0, weekTSS = 0;
+    let weekKm = 0, weekTSS = 0, weekSecs = 0;
 
     for (let col = 0; col < 7; col++) {
       const cellIndex = row * 7 + col;
@@ -4454,15 +4474,24 @@ function _renderCalendarMonth(year, month, activities) {
         const chipsWrap = cell.querySelector('.cal-day-chips');
         for (const act of actByDate.get(dateStr) || []) {
           const tss    = _computeTSS(act.summary, settings);
-          weekKm  += act.summary?.total_dist_km || 0;
-          weekTSS += tss;
+          const durS   = act.summary?.moving_time_s || act.summary?.total_duration_s || 0;
+          weekKm   += act.summary?.total_dist_km || 0;
+          weekTSS  += tss;
+          weekSecs += durS;
 
           const km     = act.summary?.total_dist_km != null
                          ? act.summary.total_dist_km.toFixed(1) : '—';
-          const durS   = act.summary?.moving_time_s || act.summary?.total_duration_s || 0;
           const durStr = _calFmtDur(durS);
+          const elev   = act.summary?.total_elevation_gain_m != null
+                         ? Math.round(act.summary.total_elevation_gain_m) : null;
           const color  = _calTssColor(tss);
           const barPct = Math.min(100, tss > 0 ? (tss / 200) * 100 : 0).toFixed(0);
+          const tags   = act.tags || [];
+          const tagDots = tags.length > 0
+            ? `<div class="cal-act-tag-dots">${tags.slice(0, 4).map(t =>
+                `<span class="cal-act-tag-dot" style="background:${t.color}" title="${t.name}"></span>`
+              ).join('')}</div>`
+            : '';
 
           const chip = document.createElement('div');
           chip.className = 'cal-activity-chip';
@@ -4475,7 +4504,9 @@ function _renderCalendarMonth(year, month, activities) {
               <span class="cal-act-km">${km} km</span>
               ${durStr ? `<span class="cal-act-dur">${durStr}</span>` : ''}
             </div>
+            ${elev != null ? `<span class="cal-act-elev">↑${elev}m</span>` : ''}
             ${tss > 0 ? `<span class="cal-act-tss" style="color:${color}">TSS ${tss}</span>` : ''}
+            ${tagDots}
           `;
           chip.addEventListener('click', () => _calOpenActivityModal(act, tss));
           chipsWrap.appendChild(chip);
@@ -4486,14 +4517,145 @@ function _renderCalendarMonth(year, month, activities) {
 
     const totalCell = document.createElement('div');
     totalCell.className = 'cal-week-total';
-    if (weekKm > 0 || weekTSS > 0) {
+    if (weekKm > 0 || weekTSS > 0 || weekSecs > 0) {
+      const wh = Math.floor(weekSecs / 3600), wm = Math.floor((weekSecs % 3600) / 60);
+      const wDurStr = weekSecs > 0 ? (wh ? `${wh}h${wm}m` : `${wm}m`) : '';
       totalCell.innerHTML = `
-        ${weekKm > 0  ? `<span class="cal-week-km">${weekKm.toFixed(0)} km</span>` : ''}
-        ${weekTSS > 0 ? `<span class="cal-week-tss">TSS ${weekTSS}</span>` : ''}
+        ${weekKm   > 0 ? `<span class="cal-week-km">${weekKm.toFixed(0)} km</span>` : ''}
+        ${wDurStr       ? `<span class="cal-week-dur">${wDurStr}</span>` : ''}
+        ${weekTSS  > 0 ? `<span class="cal-week-tss">TSS ${Math.round(weekTSS)}</span>` : ''}
       `;
     }
     grid.appendChild(totalCell);
   }
+
+  _renderCalSidePanel(year, month, activities, settings);
+}
+
+function _renderCalSidePanel(year, month, activities, settings) {
+  const panel = document.getElementById('cal-side-panel');
+  if (!panel) return;
+
+  const pad   = n => String(n).padStart(2, '0');
+  const monthStr = `${year}-${pad(month + 1)}`;
+  const lastDate = new Date(year, month - 1, 1);
+  const lastMonthStr = `${lastDate.getFullYear()}-${pad(lastDate.getMonth() + 1)}`;
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  function monthAgg(mStr) {
+    let rides = 0, km = 0, secs = 0, elev = 0, tss = 0;
+    for (const a of activities) {
+      if (!a.date.startsWith(mStr)) continue;
+      rides++;
+      km   += a.summary?.total_dist_km || 0;
+      secs += a.summary?.moving_time_s || a.summary?.total_duration_s || 0;
+      elev += a.summary?.total_elevation_gain_m || 0;
+      tss  += _computeTSS(a.summary, settings);
+    }
+    return { rides, km, secs, elev, tss };
+  }
+
+  const cur  = monthAgg(monthStr);
+  const prev = monthAgg(lastMonthStr);
+
+  // streak — consecutive ride days ending at today
+  const rideDays = new Set(activities.map(a => a.date));
+  let streak = 0;
+  const d = new Date(todayStr);
+  while (rideDays.has(d.toISOString().slice(0, 10))) {
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+
+  // month bests
+  let bestKm = null, bestElev = null, bestTss = null;
+  for (const a of activities) {
+    if (!a.date.startsWith(monthStr)) continue;
+    const t   = _computeTSS(a.summary, settings);
+    const km  = a.summary?.total_dist_km || 0;
+    const elv = a.summary?.total_elevation_gain_m || 0;
+    if (!bestKm   || km  > bestKm.val)   bestKm   = { val: km,  date: a.date, act: a };
+    if (!bestElev || elv > bestElev.val) bestElev = { val: elv, date: a.date, act: a };
+    if (!bestTss  || t   > bestTss.val)  bestTss  = { val: t,   date: a.date, act: a };
+  }
+
+  function delta(cur, prev) {
+    if (!prev || prev === 0) return null;
+    return ((cur - prev) / prev) * 100;
+  }
+  function deltaHtml(pct) {
+    if (pct === null) return `<span class="cal-sp-cmp-delta cal-sp-delta-flat">—</span>`;
+    const sign = pct >= 0 ? '+' : '';
+    const cls  = pct > 2 ? 'cal-sp-delta-up' : pct < -2 ? 'cal-sp-delta-down' : 'cal-sp-delta-flat';
+    return `<span class="cal-sp-cmp-delta ${cls}">${sign}${Math.round(pct)}%</span>`;
+  }
+  function fmtSecs(s) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? `${h}h${m}m` : `${m}m`;
+  }
+
+  const cmpRows = [
+    { label: '次数', cur: cur.rides,              prev: prev.rides,              fmt: v => `${v}` },
+    { label: '里程', cur: Math.round(cur.km),     prev: Math.round(prev.km),     fmt: v => `${v} km` },
+    { label: '时间', cur: cur.secs,               prev: prev.secs,               fmt: v => fmtSecs(v) },
+    { label: 'TSS',  cur: Math.round(cur.tss),    prev: Math.round(prev.tss),    fmt: v => `${v}` },
+  ];
+
+  const streakHtml = `
+    <div class="cal-sp-section">
+      <div class="cal-sp-title">连续骑行</div>
+      <div class="cal-sp-streak">
+        <span class="cal-sp-streak-num">${streak}</span>
+        <span class="cal-sp-streak-unit">天</span>
+      </div>
+      <div class="cal-sp-streak-sub">${streak > 0 ? '保持节奏，继续骑' : '今天还没骑，出发吧'}</div>
+    </div>
+  `;
+
+  const cmpHtml = `
+    <div class="cal-sp-section">
+      <div class="cal-sp-title">本月 vs 上月</div>
+      ${cmpRows.map(r => `
+        <div class="cal-sp-cmp-row">
+          <span class="cal-sp-cmp-label">${r.label}</span>
+          <span class="cal-sp-cmp-val">${r.cur > 0 ? r.fmt(r.cur) : '—'}</span>
+          ${deltaHtml(delta(r.cur, r.prev))}
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  function bestRow(icon, label, item, fmt) {
+    if (!item) return '';
+    return `
+      <div class="cal-sp-best-item" data-filename="${item.act.filename}">
+        <span class="cal-sp-best-icon">${icon}</span>
+        <span class="cal-sp-best-label">${label}</span>
+        <div style="text-align:right">
+          <div class="cal-sp-best-val">${fmt(item.val)}</div>
+          <div class="cal-sp-best-date">${item.date.slice(5)}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const bestsHtml = `
+    <div class="cal-sp-section">
+      <div class="cal-sp-title">本月最佳</div>
+      ${bestRow('🛣', '最长',   bestKm,   v => `${v.toFixed(1)} km`)}
+      ${bestRow('⛰', '最大爬升', bestElev, v => `${Math.round(v)} m`)}
+      ${bestRow('⚡', '最高TSS', bestTss,  v => `TSS ${v}`)}
+    </div>
+  `;
+
+  panel.innerHTML = streakHtml + cmpHtml + bestsHtml;
+
+  panel.querySelectorAll('.cal-sp-best-item[data-filename]').forEach(el => {
+    el.addEventListener('click', () => {
+      const act = activities.find(a => a.filename === el.dataset.filename);
+      if (act) _calOpenActivityModal(act, _computeTSS(act.summary, settings));
+    });
+  });
 }
 
 function _calOpenActivityModal(act, tss) {
