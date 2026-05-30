@@ -1835,6 +1835,30 @@ body {
   min-height: 0;
 }
 
+#detail-route-fit-btn {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1000;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(15,15,20,0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #aaa;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+#detail-route-fit-btn:hover { background: rgba(46,134,222,0.25); color: #7ab0e8; border-color: rgba(46,134,222,0.4); }
+
 #detail-route-tooltip {
   position: fixed;
   z-index: 1100;
@@ -3564,6 +3588,8 @@ body {
 .light-theme .detail-table td:first-child { color: #666; }
 .light-theme .detail-table tr:hover td { background: rgba(0,0,0,0.04); }
 .light-theme #detail-route-metric-bar { background: rgba(242,242,246,0.98); border-bottom-color: rgba(0,0,0,0.12); }
+.light-theme #detail-route-fit-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: #555; }
+.light-theme #detail-route-fit-btn:hover { background: rgba(46,134,222,0.15); color: #2e86de; }
 .light-theme .det-route-metric-btn { border-color: rgba(0,0,0,0.20); color: #444; background: transparent; }
 .light-theme .det-route-metric-btn.active { background: #2e86de; border-color: #2e86de; color: #fff; }
 .light-theme .det-route-metric-btn:hover:not(.active) { background: rgba(0,0,0,0.07); color: #111; }

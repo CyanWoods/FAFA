@@ -2056,6 +2056,13 @@ function _hideDetailRouteMarker() {
   }
 }
 
+function _detailRouteFitBounds() {
+  if (!detailRouteMap || !detailRouteLayers.length) return;
+  const bounds = L.latLngBounds([]);
+  for (const layer of detailRouteLayers) bounds.extend(layer.getBounds());
+  detailRouteMap.fitBounds(bounds, { padding: [24, 24] });
+}
+
 function _renderDetailTable() {
   const t = tracks.get(detailTrackId);
   if (!t) return;
