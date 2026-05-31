@@ -232,7 +232,7 @@
       <div class="modal-title">上传到 Strava</div>
 
       <div id="strava-auth-view">
-        <p class="sync-desc">需要先完成 Strava 授权。请在 <code>config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。</p>
+        <p class="sync-desc" id="strava-auth-msg">需要先完成 Strava 授权。请在 <code>config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。</p>
         <div class="modal-actions">
           <button class="modal-cancel" onclick="closeStravaModal()">取消</button>
           <button class="modal-export" onclick="stravaStartAuth()">授权 Strava</button>

@@ -69,7 +69,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
-- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `config.json`. `get_access_token()` auto-refreshes. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
+- `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `config.json`. `get_access_token()` auto-refreshes (raises a re-auth message if the `refresh_token` is rejected). `classify_error(text)` tags Strava errors (`auth`/`duplicate`/`permission`/`rate_limit`); `auth` errors abort `upload_files` and surface an `auth_error` flag through `/api/strava/diff` and the upload status so the frontend can re-prompt OAuth. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
 - `db.py` — SQLite persistence for activity metadata (`input/fafa.db`). Tables: `activity_meta` (note per filename), `tags` (id/name/color/is_preset), `activity_tags` (filename↔tag_id). `init_db(input_dir)` creates tables and seeds five preset tags on first run. Thread-safe via `_db_lock`.
 
 ### CLI tools (`fafa/tools/` — run as Python modules)
@@ -123,7 +123,7 @@ Key sections in order:
 | Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
 | AI | `_initAiConfig`, `_llmStream`, `_renderMarkdown`, `_openAndStreamModal` (shared SSE modal helper), `openActAiModal`, `startPmcAi`, `startCalendarAi` |
 | Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |
-| Strava upload | `_stravaCheckStatus`, `_stravaOpenUploadModal`, `_stravaStartUpload`, `_stravaFetchDiff`, `_stravaShowDiffView`, `_stravaConfirmDiff`, `_stravaUploadAllVisible`, `_stravaUploadSelected`, `stravaStartAuth`, `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
+| Strava upload | `_stravaCheckStatus`, `_stravaOpenUploadModal`, `_stravaStartUpload`, `_stravaFetchDiff`, `_stravaShowDiffView`, `_stravaConfirmDiff`, `_stravaUploadAllVisible`, `_stravaUploadSelected`, `stravaStartAuth`, `_onStravaAuthMessage` (popup → opener auto-close on auth success), `_stravaPromptReauth` (re-auth prompt when an `auth_error` is returned), `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
 | Boot | `DOMContentLoaded` wires everything up |
 
 ## z-index layers

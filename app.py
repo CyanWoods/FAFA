@@ -1160,8 +1160,10 @@ def _run_strava_upload(filenames: list[str], force: bool):
         with _strava_lock:
             _strava_upload.update({"state": "done", "done": len(filenames), **summary})
     except Exception as e:
+        kind, _ = _strava.classify_error(str(e))
         with _strava_lock:
-            _strava_upload.update({"state": "error", "error": str(e)})
+            _strava_upload.update({"state": "error", "error": str(e),
+                                   "auth_error": kind == "auth"})
 
 
 @app.route("/strava/callback")
@@ -1178,7 +1180,8 @@ def strava_callback():
         return (
             f"<html><body><p>Strava 授权成功！账号: {name}</p>"
             f"<p>此页面将自动关闭...</p>"
-            f"<script>setTimeout(()=>window.close(),2000)</script></body></html>"
+            f"<script>try{{if(window.opener)window.opener.postMessage('fafa-strava-auth-ok','*')}}catch(e){{}}"
+            f"setTimeout(()=>window.close(),2000)</script></body></html>"
         )
     except Exception as e:
         return f"<html><body><p>授权失败: {e}</p></body></html>", 500
@@ -1206,12 +1209,15 @@ def strava_diff():
     try:
         token = _strava.get_access_token()
     except Exception as e:
-        return jsonify(error=str(e)), 400
+        kind, _ = _strava.classify_error(str(e))
+        return jsonify(error=str(e), auth_error=kind == "auth"), 400
 
     try:
         strava_acts = _strava.fetch_all_activities(token)
     except Exception as e:
-        return jsonify(error=f"获取 Strava 活动列表失败：{e}"), 502
+        kind, _ = _strava.classify_error(str(e))
+        return jsonify(error=f"获取 Strava 活动列表失败：{e}",
+                       auth_error=kind == "auth"), 502
 
     # Build two lookup structures: exact filename set + sorted start times fallback.
     strava_external_ids = {a["external_id"] for a in strava_acts if a["external_id"]}

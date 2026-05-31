@@ -2770,6 +2770,10 @@ async function _pollSync() {
       clearInterval(_syncPollTimer);
       _syncPollTimer = null;
       document.getElementById('sync-close-btn').disabled = false;
+      // 同步结束（含无新文件）：停止进度条滚动动画
+      const bar = document.getElementById('sync-progress-bar');
+      bar.classList.remove('indeterminate');
+      bar.style.width = '100%';
 
       if (data.new_files && data.new_files.length) {
         const el = document.getElementById('sync-done-files');
@@ -2807,14 +2811,34 @@ function _setSyncUI(msg, pct, total) {
 /* ── Strava 上传 ─────────────────────────────────────────────────────────── */
 let _stravaPollTimer = null;
 
+const STRAVA_AUTH_MSG_DEFAULT = '需要先完成 Strava 授权。请在 <code>config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。';
+
 function openStravaModal() {
   document.getElementById('strava-modal').style.display = 'flex';
+}
+
+// Show the auth view with a custom message — used when sync fails because the
+// stored token / refresh_token is no longer valid and re-authorization is needed.
+function _stravaPromptReauth(msg) {
+  if (_stravaPollTimer) { clearInterval(_stravaPollTimer); _stravaPollTimer = null; }
+  openStravaModal();
+  const authMsg = document.getElementById('strava-auth-msg');
+  authMsg.textContent = '';
+  if (msg) {
+    authMsg.appendChild(document.createTextNode(msg));
+    authMsg.appendChild(document.createElement('br'));
+  }
+  authMsg.appendChild(document.createTextNode('Strava 授权已失效，请重新授权。'));
+  document.getElementById('strava-auth-view').style.display = '';
+  document.getElementById('strava-diff-view').style.display = 'none';
+  document.getElementById('strava-upload-view').style.display = 'none';
 }
 
 function closeStravaModal() {
   if (_stravaPollTimer) { clearInterval(_stravaPollTimer); _stravaPollTimer = null; }
   document.getElementById('strava-modal').style.display = 'none';
   document.getElementById('strava-auth-view').style.display = '';
+  document.getElementById('strava-auth-msg').innerHTML = STRAVA_AUTH_MSG_DEFAULT;
   document.getElementById('strava-diff-view').style.display = 'none';
   document.getElementById('strava-upload-view').style.display = 'none';
   document.getElementById('strava-close-btn').disabled = true;
@@ -2823,13 +2847,26 @@ function closeStravaModal() {
   document.getElementById('strava-progress-bar').classList.remove('indeterminate');
 }
 
+let _stravaAuthListenerAdded = false;
+
+function _onStravaAuthMessage(ev) {
+  if (ev.origin !== window.location.origin) return;
+  if (ev.data !== 'fafa-strava-auth-ok') return;
+  closeStravaModal();
+  toast('Strava 授权成功');
+}
+
 async function stravaStartAuth() {
   try {
     const res = await fetch('/api/strava/auth_url');
     const d = await res.json();
     if (d.error) { toast('Strava 授权失败：' + d.error); return; }
+    if (!_stravaAuthListenerAdded) {
+      window.addEventListener('message', _onStravaAuthMessage);
+      _stravaAuthListenerAdded = true;
+    }
     window.open(d.url, '_blank');
-    toast('请在新标签页完成 Strava 授权，完成后刷新页面');
+    toast('请在新标签页完成 Strava 授权');
   } catch (e) {
     toast('无法获取授权链接：' + e);
   }
@@ -2897,6 +2934,7 @@ async function _stravaFetchDiff() {
     const res = await fetch('/api/strava/diff');
     const data = await res.json();
     if (data.error) {
+      if (data.auth_error) { _stravaPromptReauth(data.error); return; }
       document.getElementById('strava-diff-msg').textContent = '错误：' + data.error;
       return;
     }
@@ -2950,6 +2988,12 @@ async function _pollStravaUpload() {
   try {
     const res = await fetch('/api/strava/upload/status');
     const data = await res.json();
+    if (data.state === 'error' && data.auth_error) {
+      clearInterval(_stravaPollTimer);
+      _stravaPollTimer = null;
+      _stravaPromptReauth(data.error);
+      return;
+    }
     const pct = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
     const msg = data.state === 'uploading'
       ? `正在上传: ${data.current || ''}  (${data.done}/${data.total})`

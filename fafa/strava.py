@@ -92,7 +92,10 @@ def get_access_token() -> str:
         },
         timeout=20,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception:
+        raise Exception("Strava 授权已失效，请重新授权 (refresh_token 刷新失败)")
     data = resp.json()
     athlete = data.get("athlete") or {}
     _save_tokens(
@@ -227,12 +230,14 @@ def fetch_all_activities(access_token: str, per_page: int = 200) -> list[dict]:
 
 # ── Upload core ───────────────────────────────────────────────────────────────
 
-def _classify_error(err_text: str) -> tuple[str, str]:
+def classify_error(err_text: str) -> tuple[str, str]:
     text = (err_text or "").lower()
     if "duplicate of" in text:
         m = re.search(r"/activities/(\d+)", err_text)
         return "duplicate", m.group(1) if m else ""
-    if "401" in text or "unauthorized" in text or "access token" in text:
+    if ("401" in text or "unauthorized" in text or "access token" in text
+            or "未授权" in text or "授权失效" in text or "授权已失效"
+            in text or "重新授权" in text):
         return "auth", ""
     if "403" in text or "scope" in text or "permission" in text:
         return "permission", ""
@@ -339,7 +344,10 @@ def upload_files(filenames: list[str], force: bool = False,
 
         except Exception as e:
             err_text = str(e)
-            kind, extra = _classify_error(err_text)
+            kind, extra = classify_error(err_text)
+            if kind == "auth":
+                # Token invalid for every file — abort so caller can re-auth.
+                raise Exception("Strava 授权已失效，请重新授权")
             if kind == "duplicate":
                 state[sig] = {
                     "uploaded": True,

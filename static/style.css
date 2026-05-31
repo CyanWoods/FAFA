@@ -2300,7 +2300,7 @@ body {
 /* ── 状态卡片 ── */
 #pmc-cards-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 12px;
 }
 
@@ -2361,9 +2361,11 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: #bbb;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
-.pmc-period-group { display: flex; gap: 4px; }
+.pmc-period-group { display: flex; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
 
 .pmc-period-btn {
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -2374,6 +2376,7 @@ body {
   background: transparent;
   color: #555;
   transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
 }
 .pmc-period-btn.active {
   background: rgba(46, 134, 222, 0.18);
@@ -2389,11 +2392,6 @@ body {
   color: #555;
   font-size: 14px;
   padding: 60px 0;
-}
-
-/* ── PMC 卡片自适应列 ── */
-#pmc-cards-row {
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
 }
 
 .pmc-card-wkg { border-top: 2px solid #9b59b6; }
@@ -2451,20 +2449,6 @@ body {
   gap: 12px;
   min-height: 39px;
   min-width: 0;
-}
-
-.pmc-chart-title {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.pmc-period-group {
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-
-.pmc-period-btn {
-  flex-shrink: 0;
 }
 
 .pmc-zone-controls {
@@ -3449,7 +3433,7 @@ body {
 .light-theme #files-view { background: #f2f2f6; }
 .light-theme #map-header { background: #f2f2f6; border-bottom-color: rgba(0,0,0,0.15); }
 .light-theme #detail-view { background: #f2f2f6; }
-.light-theme #analytics-view { background: #f2f2f6; }
+.light-theme #analytics-view { background: #f2f2f6; border: none; }
 .light-theme #ai-view { background: #f2f2f6; }
 
 .light-theme .act-list-title { color: #111; }
@@ -3613,7 +3597,6 @@ body {
 }
 .light-theme .leaflet-control-zoom a:hover { background: #fff !important; color: #111 !important; }
 
-.light-theme #analytics-view { border: none; }
 .light-theme #analytics-topbar { border-bottom-color: rgba(0,0,0,0.15); background: #f2f2f6; }
 .light-theme #analytics-title { color: #111; }
 .light-theme #analytics-close-btn { color: #444; border-color: rgba(0,0,0,0.20); }
