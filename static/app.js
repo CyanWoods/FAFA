@@ -1899,6 +1899,109 @@ function _setupChartZoomDrag(chart) {
   });
 }
 
+// 详情页分布柱状块（功率分布 / 心率分布）——纵向柱，内联样式，复用 zone 配色
+function _detailDistBlock(title, sub, items, isDark) {
+  const BAR_H = 140;
+  const block = document.createElement('div');
+  block.className = 'detail-chart-block';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'detail-chart-label';
+  lbl.innerHTML = `${title}${sub ? `  <span style="color:${isDark ? '#666' : '#999'};font-weight:400">${sub}</span>` : ''}`;
+  block.appendChild(lbl);
+
+  const valColor   = isDark ? '#bbb' : '#555';
+  const labelColor = isDark ? '#888' : '#666';
+  const subColor   = isDark ? '#666' : '#999';
+
+  const chart = document.createElement('div');
+  chart.style.cssText = `display:flex;align-items:flex-end;gap:6px;height:${BAR_H + 50}px;padding:14px 4px 0;`;
+  chart.innerHTML = items.map(it => {
+    const barPx = it.pct > 0 ? Math.max(2, Math.round(it.pct / 100 * BAR_H)) : 0;
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+        <span style="font-size:10px;color:${valColor};margin-bottom:3px">${it.pct.toFixed(1)}%</span>
+        <div style="width:100%;max-width:34px;height:${barPx}px;background:${it.color};border-radius:3px 3px 0 0"></div>
+        <span style="font-size:11px;color:${labelColor};margin-top:5px">${it.label}</span>
+        <span style="font-size:10px;color:${subColor};margin-top:1px">${it.count}min</span>
+      </div>`;
+  }).join('');
+  block.appendChild(chart);
+  return block;
+}
+
+function _renderDetailDistributions(wrap, records) {
+  if (!records || !records.length) return;
+  const isDark = !document.body.classList.contains('light-theme');
+  const ftp   = (typeof _pmcConfig !== 'undefined' && _pmcConfig.ftp)   ? _pmcConfig.ftp   : 0;
+  const maxHr = (typeof _pmcConfig !== 'undefined' && _pmcConfig.maxHr) ? _pmcConfig.maxHr : 0;
+  const blocks = [];
+
+  // 功率分布 — Coggan 7 区（%FTP），与 PMC 体能管理页一致；零功率/无数据计为休息，不计入百分比
+  if (ftp > 0 && records.some(r => r.power != null)) {
+    const z = new Array(8).fill(0); // 0=休息, 1-7=Z1-Z7
+    for (const r of records) {
+      const p = r.power;
+      if (p == null) continue;
+      if (p <= 0) { z[0]++; continue; }
+      const ratio = p / ftp;
+      let i;
+      if      (ratio < 0.55) i = 1;
+      else if (ratio < 0.75) i = 2;
+      else if (ratio < 0.90) i = 3;
+      else if (ratio < 1.05) i = 4;
+      else if (ratio < 1.20) i = 5;
+      else if (ratio < 1.50) i = 6;
+      else                   i = 7;
+      z[i]++;
+    }
+    const pedalS = z.slice(1).reduce((a, b) => a + b, 0);
+    if (pedalS > 0) {
+      const items = Array.from({ length: 7 }, (_, idx) => {
+        const i = idx + 1;
+        return { label: `Z${i}`, pct: z[i] / pedalS * 100, count: Math.round(z[i] / 60), color: POWER_ZONE_COLORS[i - 1] };
+      });
+      blocks.push(_detailDistBlock('功率分布', `FTP ${ftp} W`, items, isDark));
+    }
+  }
+
+  // 心率分布 — 按最大心率百分比分区，沿用 PMC 分区原则
+  if (maxHr > 0 && records.some(r => r.hr != null)) {
+    const h = new Array(6).fill(0); // 0=<50%, 1-5=Z1-Z5
+    for (const r of records) {
+      const hr = r.hr;
+      if (hr == null) continue;
+      const ratio = hr / maxHr;
+      let i;
+      if      (ratio < 0.50) i = 0;
+      else if (ratio < 0.60) i = 1;
+      else if (ratio < 0.70) i = 2;
+      else if (ratio < 0.80) i = 3;
+      else if (ratio < 0.90) i = 4;
+      else                   i = 5;
+      h[i]++;
+    }
+    const totalS = h.reduce((a, b) => a + b, 0);
+    if (totalS > 0) {
+      const HR_LABELS = ['<Z1', 'Z1', 'Z2', 'Z3', 'Z4', 'Z5'];
+      const items = Array.from({ length: 6 }, (_, i) => ({
+        label: HR_LABELS[i], pct: h[i] / totalS * 100, count: Math.round(h[i] / 60), color: HR_ZONE_COLORS[i],
+      }));
+      blocks.push(_detailDistBlock('心率分布', `最大心率 ${maxHr} bpm`, items, isDark));
+    }
+  }
+
+  if (!blocks.length) return;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;';
+  for (const b of blocks) {
+    b.style.flex = '1 1 240px';
+    b.style.minWidth = '0';
+    row.appendChild(b);
+  }
+  wrap.appendChild(row);
+}
+
 function _renderDetailCharts(records, fallbackStats) {
   _disposeDetailCharts();
   _detailZoomActive = false;
@@ -2021,6 +2124,8 @@ function _renderDetailCharts(records, fallbackStats) {
     });
     c.getZr().on('mouseout', _hideDetailRouteMarker);
   }
+
+  _renderDetailDistributions(wrap, useRecords ? records : null);
 }
 
 function _updateDetailRouteMarker(dataIdx) {
