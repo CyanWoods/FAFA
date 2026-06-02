@@ -1913,19 +1913,46 @@ function _detailDistBlock(title, sub, items, isDark) {
   const valColor   = isDark ? '#bbb' : '#555';
   const labelColor = isDark ? '#888' : '#666';
   const subColor   = isDark ? '#666' : '#999';
+  // 网格风格沿用详情页折线图：浅色横向分隔线 + 轴线
+  const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
+  const borderColor = isDark ? '#2a2a2a' : '#ddd';
+  const tickPcts    = [100, 75, 50, 25, 0]; // 自上而下
 
-  const chart = document.createElement('div');
-  chart.style.cssText = `display:flex;align-items:flex-end;gap:6px;height:${BAR_H + 50}px;padding:14px 4px 0;`;
-  chart.innerHTML = items.map(it => {
+  // Y 轴刻度区（百分比标签 + 横向网格线），与柱区共享 BAR_H 高度
+  const gridLines = tickPcts.map(p => {
+    const top = (100 - p) / 100 * BAR_H;
+    return `<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px solid ${gridColor}"></div>`;
+  }).join('');
+  const yTicks = tickPcts.map(p => {
+    const top = (100 - p) / 100 * BAR_H;
+    return `<div style="position:absolute;right:4px;top:${top}px;transform:translateY(-50%);font-size:9px;color:${subColor};line-height:1">${p}</div>`;
+  }).join('');
+
+  const cols = items.map(it => {
     const barPx = it.pct > 0 ? Math.max(2, Math.round(it.pct / 100 * BAR_H)) : 0;
     return `
       <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
         <span style="font-size:10px;color:${valColor};margin-bottom:3px">${it.pct.toFixed(1)}%</span>
         <div style="width:100%;max-width:34px;height:${barPx}px;background:${it.color};border-radius:3px 3px 0 0"></div>
-        <span style="font-size:11px;color:${labelColor};margin-top:5px">${it.label}</span>
-        <span style="font-size:10px;color:${subColor};margin-top:1px">${it.count}min</span>
       </div>`;
   }).join('');
+  const labels = items.map(it => `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+        <span style="font-size:11px;color:${labelColor}">${it.label}</span>
+        <span style="font-size:10px;color:${subColor};margin-top:1px">${it.count}min</span>
+      </div>`).join('');
+
+  const chart = document.createElement('div');
+  chart.style.cssText = 'padding:14px 4px 0;';
+  chart.innerHTML = `
+    <div style="display:flex;align-items:flex-end">
+      <div style="position:relative;width:24px;height:${BAR_H}px">${yTicks}</div>
+      <div style="position:relative;flex:1;height:${BAR_H}px;border-left:1px solid ${borderColor}">
+        ${gridLines}
+        <div style="position:absolute;left:0;right:0;bottom:0;display:flex;align-items:flex-end;gap:6px;height:100%;padding:0 4px">${cols}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;padding:5px 4px 0 28px">${labels}</div>`;
   block.appendChild(chart);
   return block;
 }
