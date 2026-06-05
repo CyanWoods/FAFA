@@ -1328,6 +1328,32 @@ def save_tags(filename):
     return jsonify(ok=True)
 
 
+@app.route("/api/meta/batch/tags", methods=["POST"])
+def batch_save_tags():
+    body = request.get_json(silent=True) or {}
+    filenames    = body.get("filenames", [])
+    add_ids      = body.get("add_tag_ids", [])
+    remove_ids   = body.get("remove_tag_ids", [])
+    if not isinstance(filenames, list) or not isinstance(add_ids, list) or not isinstance(remove_ids, list):
+        return jsonify(error="filenames, add_tag_ids, remove_tag_ids must be lists"), 400
+    if not all(isinstance(t, int) for t in add_ids + remove_ids):
+        return jsonify(error="tag ids must be integers"), 400
+    if set(add_ids) & set(remove_ids):
+        return jsonify(error="add_tag_ids and remove_tag_ids must not overlap"), 400
+    if not add_ids and not remove_ids:
+        return jsonify(ok=True, updated=0)
+    updated = 0
+    for filename in filenames:
+        if not isinstance(filename, str) or not filename.lower().endswith(".fit"):
+            continue
+        meta     = _db.get_activity_meta(filename)
+        cur_ids  = {t["id"] for t in meta["tags"]}
+        new_ids  = list((cur_ids | set(add_ids)) - set(remove_ids))
+        _db.save_tags(filename, new_ids)
+        updated += 1
+    return jsonify(ok=True, updated=updated)
+
+
 @app.route("/api/tags")
 def list_tags():
     return jsonify(tags=_db.get_all_tags())

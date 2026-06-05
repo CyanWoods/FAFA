@@ -18,7 +18,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 **Six views:**
 
-- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk upload to Strava, and bulk delete. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk tag editing, bulk upload to Strava, and bulk delete. Bulk tag picker (`#bulk-tag-picker`, appended to `<body>`) shows tri-state chips (all/some/none) for each tag; right-aligned to the anchor button, repositions on window resize. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
 - **Map view** (`#map`, `data-view="map"`): Dedicated sidebar nav entry (骑行轨迹). Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export; track list sorted reverse-chronologically. Hovering a panel row flashes the polyline. Header bar (`#map-header`) with tile selector and PNG export controls, consistent with other views. Right-side floating zoom slider (`#zoom-slider-wrap`). Bottom-left floating track panel (`#track-panel`). Map view is shown/hidden via `#map-view` active class toggle when switching sidebar views. Sidebar badge (`#track-badge`) shows loaded track count; panel count shown in `#panel-track-count`.
 
@@ -41,6 +41,8 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 **Activities API** (`/api/activities`): Returns lightweight summary of every `.fit` in `input/` — filename, date, start_time, summary fields, peak_power, zone_time_s, and a `tags` array (from `input/fafa.db`). Uses the same parse cache as `/api/load`. Used by both the activities view and the PMC computation.
 
 **Activity metadata API** (`/api/meta/<filename>`): GET returns `{note, tags}` for an activity. POST `/api/meta/<filename>/note` saves a Markdown note. POST `/api/meta/<filename>/tags` saves tag assignments (`{tag_ids: [int]}`). Tags and notes are stored in `input/fafa.db` via `fafa/db.py`.
+
+**Batch tags API** (`/api/meta/batch/tags`): POST `{filenames: [...], add_tag_ids: [...], remove_tag_ids: [...]}` — applies tag additions and removals atomically across multiple activities. Used by the bulk tag picker in multi-select mode.
 
 **Tags API** (`/api/tags`): GET lists all tags `[{id, name, color, is_preset}]`. POST creates a new tag `{name, color}` → 201 `{tag}`. DELETE `/api/tags/<id>` removes a user-created tag (preset tags return 403).
 
@@ -103,6 +105,7 @@ Key sections in order:
 | State | `map`, `tracks` (Map), `exportState`, sidebar/panel/detail/analytics state |
 | Sidebar nav | `switchSidebarView` — switches between `activities`, `map`, `files`, `pmc`, `calendar` |
 | Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers (`_toggleSelectMode`, `_enterSelectMode`, `_exitSelectMode`, `_updateSelectBar`, `_actSelectAll`), `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, `openActAiModal`, bulk actions |
+| Bulk tag picker | `_positionBulkTagPicker`, `_openBulkTagPicker`, `_onBulkTagPickerResize`, `_closeBulkTagPicker`, `_bulkPickerOutsideClick`, `_renderBulkTagPickerList`, `_confirmBulkTags` — tri-state (all/some/none) bulk tag editor; picker appended to `<body>`, right-aligned to anchor, repositions on resize |
 | Map init | `initMap`, `setTiles` |
 | Track coords | `getCoords`, `renderTrack` |
 | Track management | `addTrack`, `removeTrack`, `clearAllTracks`, `setTrackMode` |

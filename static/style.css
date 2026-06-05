@@ -1080,6 +1080,57 @@ body {
 .light-theme #tag-new-btn { border-color: rgba(0,0,0,0.2); color: #333; }
 .light-theme .tag-picker-chip { opacity: 1; }
 .light-theme .tag-filter-chip { border-color: rgba(0,0,0,0.18); color: #777; }
+
+/* ── bulk tag picker ─────────────────────────────────────────────────────── */
+#bulk-tag-picker {
+  position: fixed;
+  z-index: 1100;
+  background: #13131c;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 180px;
+  max-width: 260px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.65);
+}
+#bulk-tag-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#bulk-tag-picker-footer {
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+#bulk-tag-confirm-btn {
+  padding: 3px 14px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.08);
+  color: #e0e0e8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+#bulk-tag-confirm-btn:hover { background: rgba(255,255,255,0.15); }
+.bulk-tag-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s, border-color 0.15s;
+  border: 2px solid transparent;
+  user-select: none;
+}
+.bulk-tag-chip.state-all  { opacity: 1; border-color: rgba(255,255,255,0.7); }
+.bulk-tag-chip.state-some { opacity: 0.6; border-style: dashed; border-color: rgba(255,255,255,0.5); }
+.bulk-tag-chip.state-none { opacity: 0.3; background: transparent !important; border-color: rgba(255,255,255,0.18); }
+.bulk-tag-chip:hover { opacity: 1; }
 .light-theme .tag-filter-chip:hover { color: #333; border-color: rgba(0,0,0,0.3); }
 
 #detail-summary-row {
@@ -3470,6 +3521,11 @@ body {
 .light-theme #lib-select-bar button { border-color: rgba(0,0,0,0.20); color: #444; }
 .light-theme #act-select-bar button:hover,
 .light-theme #lib-select-bar button:hover { background: rgba(0,0,0,0.07); color: #111; }
+.light-theme #bulk-tag-picker { background: #fff; border-color: rgba(0,0,0,0.16); box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
+.light-theme #bulk-tag-picker-footer { border-top-color: rgba(0,0,0,0.12); }
+.light-theme #bulk-tag-confirm-btn { border-color: rgba(0,0,0,0.2); background: rgba(0,0,0,0.05); color: #333; }
+.light-theme .bulk-tag-chip.state-none { border-color: rgba(0,0,0,0.25); }
+.light-theme .bulk-tag-chip.state-some { border-color: rgba(0,0,0,0.4); }
 
 .light-theme #act-filter-bar { border-bottom-color: rgba(0,0,0,0.13); }
 .light-theme #act-filter-year,

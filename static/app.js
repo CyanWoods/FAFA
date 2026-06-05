@@ -240,6 +240,9 @@ let _actFilter      = { year: '', month: '', minKm: null, maxKm: null, tags: new
 let _actSelectMode  = false;
 let _actSelected    = new Set(); // filenames
 let _allTags        = []; // all tags from /api/tags
+let _bulkTagInitial = {}; // tagId → 'all' | 'some' | 'none'  (frozen at picker open)
+let _bulkTagIntent  = {}; // tagId → 'all' | 'some' | 'none'  (mutable; 'some' only before first click)
+let _bulkTagAnchor  = null; // anchor element for repositioning on resize
 
 function _actFilteredList() {
   if (!_actActivities) return [];
@@ -358,6 +361,7 @@ function _exitSelectMode() {
   document.getElementById('act-mode-btn').textContent = '选择';
   document.getElementById('act-select-all-btn').textContent = '全选';
   document.querySelectorAll('.act-card.selected').forEach(c => c.classList.remove('selected'));
+  _closeBulkTagPicker();
 }
 
 function _updateSelectBar() {
@@ -1644,6 +1648,114 @@ function _syncActivityTagsInCache(filename, tags) {
       }
     }
   }
+}
+
+// ── bulk tag picker (multi-select mode) ──────────────────────────────────────
+
+function _positionBulkTagPicker(anchorEl) {
+  const picker = document.getElementById('bulk-tag-picker');
+  if (!picker || picker.style.display === 'none') return;
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.top  = (rect.bottom + 4) + 'px';
+  picker.style.left = rect.left + 'px';
+  const pr = picker.getBoundingClientRect();
+  picker.style.left = Math.max(8, rect.right - pr.width) + 'px';
+}
+
+function _openBulkTagPicker(anchorEl) {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  _bulkTagAnchor  = anchorEl;
+  _bulkTagInitial = {};
+  _bulkTagIntent  = {};
+  const selected = [..._actSelected];
+  const total = selected.length;
+  _allTags.forEach(tag => {
+    const count = selected.filter(fn => {
+      const act = (_actActivities || []).find(a => a.filename === fn);
+      return act && Array.isArray(act.tags) && act.tags.some(t => t.id === tag.id);
+    }).length;
+    const state = count === 0 ? 'none' : count === total ? 'all' : 'some';
+    _bulkTagInitial[tag.id] = state;
+    _bulkTagIntent[tag.id]  = state;
+  });
+  _renderBulkTagPickerList();
+  const picker = document.getElementById('bulk-tag-picker');
+  if (!picker) return;
+  picker.style.display = 'block';
+  _positionBulkTagPicker(anchorEl);
+  setTimeout(() => document.addEventListener('click', _bulkPickerOutsideClick), 0);
+  window.addEventListener('resize', _onBulkTagPickerResize);
+}
+
+function _onBulkTagPickerResize() {
+  if (_bulkTagAnchor) _positionBulkTagPicker(_bulkTagAnchor);
+}
+
+function _closeBulkTagPicker() {
+  const picker = document.getElementById('bulk-tag-picker');
+  if (picker) picker.style.display = 'none';
+  _bulkTagAnchor = null;
+  document.removeEventListener('click', _bulkPickerOutsideClick);
+  window.removeEventListener('resize', _onBulkTagPickerResize);
+}
+
+function _bulkPickerOutsideClick(e) {
+  const picker = document.getElementById('bulk-tag-picker');
+  if (picker && !picker.contains(e.target) && e.target.id !== 'act-bulk-tag-btn') {
+    _closeBulkTagPicker();
+  }
+}
+
+function _renderBulkTagPickerList() {
+  const list = document.getElementById('bulk-tag-picker-list');
+  if (!list) return;
+  list.innerHTML = '';
+  _allTags.forEach(tag => {
+    const chip = document.createElement('button');
+    chip.className = 'bulk-tag-chip state-' + _bulkTagIntent[tag.id];
+    chip.style.background = tag.color;
+    chip.dataset.tagId = tag.id;
+    chip.textContent = tag.name;
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cur = _bulkTagIntent[tag.id];
+      _bulkTagIntent[tag.id] = cur === 'none' ? 'all' : cur === 'all' ? 'none' : 'all';
+      chip.className = 'bulk-tag-chip state-' + _bulkTagIntent[tag.id];
+    });
+    list.appendChild(chip);
+  });
+}
+
+async function _confirmBulkTags() {
+  const add_ids    = [];
+  const remove_ids = [];
+  _allTags.forEach(tag => {
+    const initial = _bulkTagInitial[tag.id];
+    const intent  = _bulkTagIntent[tag.id];
+    if (intent === 'all'  && initial !== 'all')  add_ids.push(tag.id);
+    if (intent === 'none' && initial !== 'none') remove_ids.push(tag.id);
+  });
+  if (!add_ids.length && !remove_ids.length) { _closeBulkTagPicker(); return; }
+  const filenames = [..._actSelected];
+  try {
+    const res = await fetch('/api/meta/batch/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames, add_tag_ids: add_ids, remove_tag_ids: remove_ids }),
+    });
+    if (!res.ok) { toast('标签保存失败'); return; }
+    filenames.forEach(fn => {
+      const act = (_actActivities || []).find(a => a.filename === fn);
+      if (!act) return;
+      const curIds = new Set((act.tags || []).map(t => t.id));
+      add_ids.forEach(id => curIds.add(id));
+      remove_ids.forEach(id => curIds.delete(id));
+      const newTags = _allTags.filter(t => curIds.has(t.id));
+      _syncActivityTagsInCache(fn, newTags);
+    });
+    toast('标签已更新');
+    _closeBulkTagPicker();
+  } catch (_) { toast('标签保存失败'); }
 }
 
 // ── tag picker popup ──────────────────────────────────────────────────────────

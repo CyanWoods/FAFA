@@ -126,6 +126,7 @@
       <button id="act-select-all-btn" onclick="_actSelectAll()">全选</button>
       <button onclick="_stravaUploadSelected()">上传 Strava</button>
       <button onclick="_actBulkLoad()">加载轨迹</button>
+      <button id="act-bulk-tag-btn" onclick="_openBulkTagPicker(this)">标签</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
     </div>
 
@@ -728,5 +729,11 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="/static/app.js"></script>
+  <div id="bulk-tag-picker" style="display:none">
+    <div id="bulk-tag-picker-list"></div>
+    <div id="bulk-tag-picker-footer">
+      <button id="bulk-tag-confirm-btn" onclick="_confirmBulkTags()">确定</button>
+    </div>
+  </div>
 </body>
 </html>
