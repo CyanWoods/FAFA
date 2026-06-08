@@ -10,6 +10,7 @@ import bisect
 import io
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -47,6 +48,7 @@ _parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
 _cache_lock  = threading.Lock()
 _CACHE_MAX   = 300
 _DISK_CACHE_DIR = INPUT_DIR / ".cache"
+_weather_cache: dict = {}
 
 
 def _cache_get(path_str: str, mtime: float) -> dict | None:
@@ -698,8 +700,125 @@ def _load_onelap_credentials() -> dict | None:
     return None
 
 
+def _wind_dir_label(deg: float) -> str:
+    labels = ["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]
+    return labels[round(deg / 45) % 8]
+
+
+def _wind_stats(
+    coords: list,
+    start_time_utc: str,
+    km_stats: list,
+    hourly: dict,
+) -> dict:
+    """
+    Compute headwind/tailwind/crosswind percentages from GPS track and hourly wind data.
+
+    coords       : [[lat, lon], ...] — any CRS, used only for bearing (tiny offset OK)
+    start_time_utc: ISO-8601 UTC string, e.g. "2025-08-20T10:40:34Z"
+    km_stats     : list of dicts with 'duration_s' key
+    hourly       : Open-Meteo response['hourly'] with keys time / windspeed_10m /
+                   winddirection_10m / windgusts_10m
+    """
+    start_dt = datetime.fromisoformat(start_time_utc.replace("Z", "+00:00"))
+    total_s = sum(s.get("duration_s", 0) for s in km_stats) if km_stats else 0
+
+    # Build hourly lookup keyed by integer epoch-hour
+    times  = hourly.get("time", [])
+    speeds = hourly.get("windspeed_10m", [])
+    dirs   = hourly.get("winddirection_10m", [])
+    gusts  = hourly.get("windgusts_10m", [])
+    hour_data: dict[int, tuple] = {}
+    for i, t in enumerate(times):
+        dt = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
+        h  = int(dt.timestamp()) // 3600
+        hour_data[h] = (
+            speeds[i] if i < len(speeds) else None,
+            dirs[i]   if i < len(dirs)   else None,
+            gusts[i]  if i < len(gusts)  else None,
+        )
+
+    # Cumulative distance per coord index (metres, flat-earth approximation)
+    n = len(coords)
+    cum_dist = [0.0]
+    for i in range(1, n):
+        dlat = math.radians(coords[i][0] - coords[i - 1][0])
+        dlon = math.radians(coords[i][1] - coords[i - 1][1])
+        lat_m = math.radians((coords[i][0] + coords[i - 1][0]) / 2)
+        d = math.sqrt((dlat * 6_371_000) ** 2 + (dlon * 6_371_000 * math.cos(lat_m)) ** 2)
+        cum_dist.append(cum_dist[-1] + d)
+    total_dist = cum_dist[-1]
+
+    head = tail = cross = 0.0
+    spd_sum = spd_n = 0
+    gust_max = 0.0
+    dir_sin = dir_cos = 0.0
+
+    for i in range(1, n):
+        seg = cum_dist[i] - cum_dist[i - 1]
+        if seg < 1:
+            continue
+
+        # Estimate elapsed seconds at segment midpoint
+        mid = (cum_dist[i - 1] + cum_dist[i]) / 2
+        elapsed = (mid / total_dist * total_s) if total_dist > 0 else 0
+
+        h_key = int((start_dt.timestamp() + elapsed) / 3600)
+        wind = hour_data.get(h_key)
+        if wind is None:
+            continue
+        w_spd, w_dir, w_gust = wind
+        if w_spd is None or w_dir is None:
+            continue
+
+        # Bearing of travel: atan2(dlon, dlat) → 0=N, 90=E, 180=S, 270=W
+        dlat = coords[i][0] - coords[i - 1][0]
+        dlon = coords[i][1] - coords[i - 1][1]
+        lat_m = math.radians((coords[i][0] + coords[i - 1][0]) / 2)
+        bearing = (math.degrees(math.atan2(dlon * math.cos(lat_m), dlat)) + 360) % 360
+
+        # Relative angle between travel direction and wind-from direction
+        rel = (bearing - w_dir + 360) % 360
+        if rel < 45 or rel > 315:
+            head += seg
+        elif 135 < rel < 225:
+            tail += seg
+        else:
+            cross += seg
+
+        spd_sum += w_spd
+        spd_n   += 1
+        if w_gust is not None:
+            gust_max = max(gust_max, w_gust)
+        dir_sin += math.sin(math.radians(w_dir))
+        dir_cos += math.cos(math.radians(w_dir))
+
+    classified = head + tail + cross
+    if classified == 0 or spd_n == 0:
+        return {"available": False}
+
+    head_pct  = round(100 * head  / classified)
+    tail_pct  = round(100 * tail  / classified)
+    cross_pct = 100 - head_pct - tail_pct  # ensure sum == 100
+
+    avg_spd = round(spd_sum / spd_n, 1)
+    avg_dir = (math.degrees(math.atan2(dir_sin / spd_n, dir_cos / spd_n)) + 360) % 360
+
+    return {
+        "available":         True,
+        "wind_speed_avg_kmh": avg_spd,
+        "wind_dir_deg":      round(avg_dir),
+        "wind_dir_label":    _wind_dir_label(avg_dir),
+        "gust_max_kmh":      round(gust_max, 1),
+        "headwind_pct":      head_pct,
+        "tailwind_pct":      tail_pct,
+        "crosswind_pct":     cross_pct,
+    }
+
+
 def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str,
-                       time_stats: list | None = None) -> str:
+                       time_stats: list | None = None,
+                       wind_data: dict | None = None) -> str:
     def fmt(v, unit="", digits=1):
         return "无数据" if v is None else f"{round(v, digits)}{unit}"
 
@@ -732,6 +851,22 @@ def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time:
         f"- 卡路里消耗：{fmt(summary.get('total_calories_kcal'), ' kcal', 0)}",
         f"- 平均气温：{fmt(summary.get('avg_temp_c'), ' °C')}",
     ]
+    if wind_data and wind_data.get("available"):
+        w = wind_data
+        lines += [
+            "",
+            "## 气象条件（来源：Open-Meteo 历史天气）",
+            f"- 平均风速：{w['wind_speed_avg_kmh']} km/h，阵风最大：{w['gust_max_kmh']} km/h",
+            f"- 主导风向：{w['wind_dir_label']}（{w['wind_dir_deg']}°）",
+            f"- 全程逆风：{w['headwind_pct']}%  顺风：{w['tailwind_pct']}%  侧风：{w['crosswind_pct']}%",
+        ]
+        if w["headwind_pct"] > 30:
+            lines.append("（逆风比例偏高，速度表现可能受明显影响，分析时请结合考虑）")
+        lines += [
+            "",
+            "### 8. 风力影响评估（仅当逆风 > 30% 时输出，否则跳过）",
+            "说明风力对本次骑行均速的影响程度，估算去除风力因素后的实际能力水平。",
+        ]
     if summary.get("left_pct") is not None:
         r = 100 - summary["left_pct"]
         lines.append(f"- 左右功率平衡：左 {summary['left_pct']:.0f}% / 右 {r:.0f}%")
@@ -911,8 +1046,86 @@ def ai_evaluate():
         body.get("summary") or {}, body.get("km_stats") or [],
         body.get("filename", ""), body.get("start_time", ""),
         time_stats=body.get("time_stats") or None,
+        wind_data=body.get("wind_data") or None,
     )
     return _llm_stream(cfg, prompt)
+
+
+@app.route("/api/weather/<path:filename>")
+def weather_for_activity(filename: str):
+    from fafa.gcj02 import gcj02_to_wgs84
+    import requests as _req
+
+    if not filename.lower().endswith(".fit"):
+        return jsonify(available=False)
+
+    # Security: prevent path traversal
+    path = (INPUT_DIR / filename).resolve()
+    if path.parent != INPUT_DIR.resolve():
+        return jsonify(error="非法路径"), 403
+
+    # Weather result cache: keyed on (filename, mtime) to survive FIT file updates
+    _wkey = (filename, path.stat().st_mtime if path.exists() else 0)
+    if _wkey in _weather_cache:
+        return jsonify(_weather_cache[_wkey])
+
+    try:
+        mtime  = path.stat().st_mtime if path.exists() else None
+        cached = _cache_get(str(path), mtime) if mtime else None
+        if cached is None:
+            cached = _disk_cache_load(str(path), mtime) if mtime else None
+        if cached is None:
+            cached = _parse_and_build(str(path), filename)
+    except Exception as e:
+        logging.warning("weather: load failed %s: %s", filename, e)
+        return jsonify(available=False)
+
+    coords         = cached.get("coords") or []
+    start_time_utc = cached.get("start_time_utc")
+    is_gcj02       = cached.get("is_gcj02", False)
+    km_stats       = cached.get("km_stats") or []
+
+    if not coords or not start_time_utc:
+        return jsonify(available=False)
+
+    # WGS-84 start point for API request
+    lat, lon = coords[0]
+    if is_gcj02:
+        lat, lon = gcj02_to_wgs84(lat, lon)
+
+    start_dt   = datetime.fromisoformat(start_time_utc.replace("Z", "+00:00"))
+    total_s    = sum(s.get("duration_s", 0) for s in km_stats)
+    end_dt     = start_dt + timedelta(seconds=max(total_s, 3600))
+    start_date = start_dt.strftime("%Y-%m-%d")
+    end_date   = end_dt.strftime("%Y-%m-%d")
+
+    try:
+        resp = _req.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                "latitude":        round(lat, 6),
+                "longitude":       round(lon, 6),
+                "start_date":      start_date,
+                "end_date":        end_date,
+                "hourly":          "windspeed_10m,winddirection_10m,windgusts_10m",
+                "wind_speed_unit": "kmh",
+                "timezone":        "UTC",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logging.warning("weather: Open-Meteo failed %s: %s", filename, e)
+        return jsonify(available=False)
+
+    try:
+        result = _wind_stats(coords, start_time_utc, km_stats, data.get("hourly", {}))
+    except Exception as e:
+        logging.warning("weather: _wind_stats failed %s: %s", filename, e)
+        return jsonify(available=False)
+    _weather_cache[_wkey] = result
+    return jsonify(result)
 
 
 # ── 活动列表（PMC 数据源） ────────────────────────────────────────────────────

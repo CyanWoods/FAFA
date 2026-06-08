@@ -1,0 +1,140 @@
+<h2>详情页布局方案</h2>
+<p class="subtitle">三种合并「数据详情 + 路线热图」的布局，底部固定每公里表格</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f0f14;border-radius:6px;padding:8px;font-size:11px;color:#888;height:220px;display:flex;flex-direction:column;gap:6px;">
+        <!-- topbar -->
+        <div style="background:#1a1a24;border-radius:4px;height:28px;display:flex;align-items:center;padding:0 10px;gap:8px;flex-shrink:0;">
+          <div style="background:#333;border-radius:3px;width:40px;height:14px;"></div>
+          <div style="flex:1;background:#222;border-radius:3px;height:12px;"></div>
+          <div style="background:#2e86de;border-radius:10px;width:50px;height:14px;"></div>
+        </div>
+        <!-- meta row -->
+        <div style="background:#161622;border-radius:4px;height:20px;flex-shrink:0;"></div>
+        <!-- main content: left charts + right map -->
+        <div style="display:flex;gap:6px;flex:1;min-height:0;">
+          <!-- left: charts -->
+          <div style="flex:1;background:#111118;border-radius:4px;display:flex;flex-direction:column;gap:4px;padding:6px;overflow:hidden;">
+            <div style="color:#555;font-size:9px;letter-spacing:.05em;text-transform:uppercase;">曲线图</div>
+            <div style="background:#1a2a3a;border-radius:3px;height:28px;"></div>
+            <div style="background:#1a3a2a;border-radius:3px;height:28px;"></div>
+            <div style="background:#2a1a3a;border-radius:3px;height:28px;"></div>
+            <div style="background:#3a2a1a;border-radius:3px;height:22px;"></div>
+          </div>
+          <!-- right: map -->
+          <div style="flex:1;background:#0d1a0d;border-radius:4px;position:relative;overflow:hidden;">
+            <div style="color:#555;font-size:9px;letter-spacing:.05em;text-transform:uppercase;padding:4px 6px;">路线热图</div>
+            <!-- fake map route -->
+            <svg width="100%" height="80%" viewBox="0 0 120 80" preserveAspectRatio="none" style="position:absolute;top:10px;left:0;">
+              <polyline points="20,60 35,45 50,30 65,40 80,20 95,35 105,25" stroke="#e74c3c" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
+              <polyline points="20,60 35,45" stroke="#27ae60" stroke-width="3" fill="none" stroke-linecap="round"/>
+            </svg>
+            <!-- metric bar -->
+            <div style="position:absolute;bottom:4px;left:0;right:0;display:flex;gap:3px;padding:0 4px;">
+              <div style="background:#2e86de;border-radius:8px;height:10px;width:30px;"></div>
+              <div style="background:#333;border-radius:8px;height:10px;width:25px;"></div>
+              <div style="background:#333;border-radius:8px;height:10px;width:22px;"></div>
+            </div>
+          </div>
+        </div>
+        <!-- bottom: table -->
+        <div style="background:#111118;border-radius:4px;height:36px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 8px;border-top:1px solid #1f1f2e;">
+          <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;">每公里数据</div>
+          <div style="flex:1;background:#1a1a24;border-radius:2px;height:16px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 A — 等分左右 (50/50)</h3>
+      <p>曲线图与热图各占一半宽度。曲线图区域可纵向滚动浏览多条指标，热图固定右侧。底部表格横跨全宽，拖拽调整高度。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f0f14;border-radius:6px;padding:8px;font-size:11px;color:#888;height:220px;display:flex;flex-direction:column;gap:6px;">
+        <!-- topbar -->
+        <div style="background:#1a1a24;border-radius:4px;height:28px;display:flex;align-items:center;padding:0 10px;gap:8px;flex-shrink:0;">
+          <div style="background:#333;border-radius:3px;width:40px;height:14px;"></div>
+          <div style="flex:1;background:#222;border-radius:3px;height:12px;"></div>
+          <div style="background:#2e86de;border-radius:10px;width:50px;height:14px;"></div>
+        </div>
+        <!-- meta row -->
+        <div style="background:#161622;border-radius:4px;height:20px;flex-shrink:0;"></div>
+        <!-- main content: left charts (40%) + right map (60%) -->
+        <div style="display:flex;gap:6px;flex:1;min-height:0;">
+          <!-- left: charts narrower -->
+          <div style="flex:2;background:#111118;border-radius:4px;display:flex;flex-direction:column;gap:4px;padding:6px;overflow:hidden;">
+            <div style="color:#555;font-size:9px;letter-spacing:.05em;text-transform:uppercase;">曲线图</div>
+            <div style="background:#1a2a3a;border-radius:3px;height:28px;"></div>
+            <div style="background:#1a3a2a;border-radius:3px;height:28px;"></div>
+            <div style="background:#2a1a3a;border-radius:3px;height:22px;"></div>
+          </div>
+          <!-- right: map wider -->
+          <div style="flex:3;background:#0d1a0d;border-radius:4px;position:relative;overflow:hidden;">
+            <div style="color:#555;font-size:9px;letter-spacing:.05em;text-transform:uppercase;padding:4px 6px;">路线热图</div>
+            <svg width="100%" height="80%" viewBox="0 0 160 80" preserveAspectRatio="none" style="position:absolute;top:10px;left:0;">
+              <polyline points="15,65 30,48 50,28 70,42 90,18 115,38 140,22" stroke="#e74c3c" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
+              <polyline points="15,65 30,48" stroke="#27ae60" stroke-width="3" fill="none" stroke-linecap="round"/>
+            </svg>
+            <div style="position:absolute;bottom:4px;left:0;right:0;display:flex;gap:3px;padding:0 4px;">
+              <div style="background:#2e86de;border-radius:8px;height:10px;width:30px;"></div>
+              <div style="background:#333;border-radius:8px;height:10px;width:25px;"></div>
+              <div style="background:#333;border-radius:8px;height:10px;width:22px;"></div>
+            </div>
+          </div>
+        </div>
+        <!-- bottom: table -->
+        <div style="background:#111118;border-radius:4px;height:36px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 8px;border-top:1px solid #1f1f2e;">
+          <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;">每公里数据</div>
+          <div style="flex:1;background:#1a1a24;border-radius:2px;height:16px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 B — 热图优先 (40/60)</h3>
+      <p>热图占 60% 宽度，曲线图占 40%。适合路线可视化为主、数据辅助的场景。地图细节更清晰。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0f0f14;border-radius:6px;padding:8px;font-size:11px;color:#888;height:220px;display:flex;flex-direction:column;gap:6px;">
+        <!-- topbar with panel toggles -->
+        <div style="background:#1a1a24;border-radius:4px;height:28px;display:flex;align-items:center;padding:0 10px;gap:8px;flex-shrink:0;">
+          <div style="background:#333;border-radius:3px;width:40px;height:14px;"></div>
+          <div style="flex:1;"></div>
+          <div style="display:flex;gap:4px;">
+            <div style="background:#2e86de;border-radius:10px;width:38px;height:14px;"></div>
+            <div style="background:#2e86de;border-radius:10px;width:38px;height:14px;opacity:.5;"></div>
+          </div>
+          <div style="background:#444;border-radius:10px;width:50px;height:14px;"></div>
+        </div>
+        <!-- meta row -->
+        <div style="background:#161622;border-radius:4px;height:20px;flex-shrink:0;"></div>
+        <!-- main content: chart full width (map collapsed) -->
+        <div style="display:flex;gap:6px;flex:1;min-height:0;">
+          <div style="flex:1;background:#111118;border-radius:4px;display:flex;flex-direction:column;gap:4px;padding:6px;overflow:hidden;">
+            <div style="color:#555;font-size:9px;letter-spacing:.05em;text-transform:uppercase;">曲线图 <span style="color:#2e86de;">[展开]→热图</span></div>
+            <div style="background:#1a2a3a;border-radius:3px;height:32px;"></div>
+            <div style="background:#1a3a2a;border-radius:3px;height:32px;"></div>
+            <div style="background:#2a1a3a;border-radius:3px;height:32px;"></div>
+          </div>
+        </div>
+        <!-- bottom: table -->
+        <div style="background:#111118;border-radius:4px;height:36px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 8px;border-top:1px solid #1f1f2e;">
+          <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;">每公里数据</div>
+          <div style="flex:1;background:#1a1a24;border-radius:2px;height:16px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 C — 可折叠面板</h3>
+      <p>默认展示曲线图全宽，Topbar 有开关按钮可展开热图变为左右分栏。适合屏幕宽度不够的场景，按需显示热图。</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:16px;">三个方案底部都有可拖拽调高的每公里数据表格（保留原有拖拽手柄）</p>

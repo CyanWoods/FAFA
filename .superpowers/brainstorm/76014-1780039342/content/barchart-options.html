@@ -1,0 +1,90 @@
+<h2>过往一个月柱状图 · 布局方式选择</h2>
+<p class="subtitle">5 个指标（时间/距离/爬升/TSS/次数），选择柱状图的组织方式</p>
+
+<div class="options">
+  <div class="option" data-choice="per-day-combined" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>按天显示 · 5 张独立小图（推荐）</h3>
+      <p>30天每天一根柱，每个指标单独一张 ECharts 图，竖向堆叠。可看出哪天骑车、哪天休息，训练规律一目了然</p>
+      <div style="margin-top:10px;background:#1a1a2e;border-radius:6px;padding:10px;font-size:11px">
+        <!-- mini mockup -->
+        <div style="color:#888;margin-bottom:4px;font-size:10px">距离 (km) · 近30天</div>
+        <svg viewBox="0 0 280 50" style="width:100%">
+          <!-- 30 bars, some 0 -->
+          <rect x="2"  y="35" width="6" height="13" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="10" y="42" width="6" height="6"  fill="#5b9bd5" opacity="0.8"/>
+          <rect x="18" y="20" width="6" height="28" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="26" y="48" width="6" height="0"  fill="#5b9bd5" opacity="0.4"/>
+          <rect x="34" y="30" width="6" height="18" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="42" y="48" width="6" height="0"  fill="#5b9bd5" opacity="0.4"/>
+          <rect x="50" y="48" width="6" height="0"  fill="#5b9bd5" opacity="0.4"/>
+          <rect x="58" y="10" width="6" height="38" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="66" y="38" width="6" height="10" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="74" y="48" width="6" height="0"  fill="#5b9bd5" opacity="0.4"/>
+          <rect x="82" y="25" width="6" height="23" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="90" y="48" width="6" height="0"  fill="#5b9bd5" opacity="0.4"/>
+          <rect x="98" y="40" width="6" height="8"  fill="#5b9bd5" opacity="0.8"/>
+          <rect x="106" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="114" y="15" width="6" height="33" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="122" y="45" width="6" height="3" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="130" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="138" y="32" width="6" height="16" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="146" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="154" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="162" y="8"  width="6" height="40" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="170" y="42" width="6" height="6" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="178" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="186" y="28" width="6" height="20" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="194" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="202" y="38" width="6" height="10" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="210" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="218" y="18" width="6" height="30" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="226" y="48" width="6" height="0" fill="#5b9bd5" opacity="0.4"/>
+          <rect x="234" y="35" width="6" height="13" fill="#3a8dde" opacity="1"/>
+          <line x1="0" y1="48" x2="245" y2="48" stroke="#333" stroke-width="0.5"/>
+          <text x="1" y="48" fill="#555" font-size="7" dy="8">5/1</text>
+          <text x="115" y="48" fill="#555" font-size="7" dy="8">5/15</text>
+          <text x="228" y="48" fill="#3a8dde" font-size="7" dy="8">今天</text>
+        </svg>
+        <div style="color:#666;font-size:10px;margin-top:6px">↑ 5 个指标各一张，共 5 图竖向排列</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="per-week" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>按周聚合 · 单张多系列图</h3>
+      <p>近 4~5 周，每周一组柱。多个指标选其中 1-2 个放在同一图（如距离+次数）。数据更平滑，但看不出单次骑行节奏</p>
+      <div style="margin-top:10px;background:#1a1a2e;border-radius:6px;padding:10px;font-size:11px">
+        <div style="color:#888;margin-bottom:4px;font-size:10px">各周汇总</div>
+        <svg viewBox="0 0 200 60" style="width:100%">
+          <!-- 5 weeks, 2 series each -->
+          <rect x="10" y="25" width="14" height="30" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="26" y="40" width="14" height="15" fill="#70ad47" opacity="0.8"/>
+          <rect x="50" y="15" width="14" height="40" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="66" y="35" width="14" height="20" fill="#70ad47" opacity="0.8"/>
+          <rect x="90" y="20" width="14" height="35" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="106" y="38" width="14" height="17" fill="#70ad47" opacity="0.8"/>
+          <rect x="130" y="10" width="14" height="45" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="146" y="30" width="14" height="25" fill="#70ad47" opacity="0.8"/>
+          <rect x="170" y="22" width="14" height="33" fill="#5b9bd5" opacity="0.8"/>
+          <rect x="186" y="42" width="14" height="13" fill="#70ad47" opacity="0.8"/>
+          <line x1="5" y1="55" x2="205" y2="55" stroke="#333" stroke-width="0.5"/>
+          <text x="18" y="55" fill="#555" font-size="7" dy="7">W1</text>
+          <text x="58" y="55" fill="#555" font-size="7" dy="7">W2</text>
+          <text x="98" y="55" fill="#555" font-size="7" dy="7">W3</text>
+          <text x="138" y="55" fill="#555" font-size="7" dy="7">W4</text>
+          <text x="178" y="55" fill="#555" font-size="7" dy="7">W5</text>
+          <rect x="10" y="2" width="8" height="5" fill="#5b9bd5"/>
+          <text x="20" y="7" fill="#aaa" font-size="7">距离</text>
+          <rect x="50" y="2" width="8" height="5" fill="#70ad47"/>
+          <text x="60" y="7" fill="#aaa" font-size="7">次数</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:12px">点击选择，在终端告诉我结果</p>

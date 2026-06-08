@@ -1,0 +1,199 @@
+<h2>PMC 体能管理 · 三处改动设计方案</h2>
+<p class="subtitle">先确认功率曲线图的 X 轴方式，其他两处（区间筛选、统计表）只有一种合理实现</p>
+
+<!-- ① 区间分布筛选 -->
+<div class="section">
+  <h3>① 区间分布 · 时间筛选按钮（已确定）</h3>
+  <p class="subtitle">在标题右侧加四个 pill 按钮，切换后重算比例条</p>
+  <div class="mockup">
+    <div class="mockup-header">训练区间分布 · 骑行时间</div>
+    <div class="mockup-body" style="padding:12px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <span style="color:#aaa;font-size:13px">基于 47 次有功率骑行</span>
+        <div style="display:flex;gap:6px">
+          <button style="padding:4px 10px;border-radius:14px;border:1px solid #444;background:#3a8dde;color:#fff;font-size:12px;cursor:pointer">全部</button>
+          <button style="padding:4px 10px;border-radius:14px;border:1px solid #444;background:transparent;color:#aaa;font-size:12px;cursor:pointer">近3月</button>
+          <button style="padding:4px 10px;border-radius:14px;border:1px solid #444;background:transparent;color:#aaa;font-size:12px;cursor:pointer">近1月</button>
+          <button style="padding:4px 10px;border-radius:14px;border:1px solid #444;background:transparent;color:#aaa;font-size:12px;cursor:pointer">近1周</button>
+        </div>
+      </div>
+      <!-- sample zone bars -->
+      <div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:6px 10px;align-items:center">
+        <span style="font-size:12px;color:#888">Z1 &lt;55%</span>
+        <div style="background:#333;border-radius:3px;height:10px"><div style="background:#9b9b9b;border-radius:3px;height:10px;width:8%"></div></div>
+        <span style="font-size:12px;color:#aaa;text-align:right">8.0%</span>
+        <span style="font-size:12px;color:#888">恢复（62min）</span>
+
+        <span style="font-size:12px;color:#888">Z2 55-75%</span>
+        <div style="background:#333;border-radius:3px;height:10px"><div style="background:#5b9bd5;border-radius:3px;height:10px;width:38%"></div></div>
+        <span style="font-size:12px;color:#aaa;text-align:right">38.0%</span>
+        <span style="font-size:12px;color:#888">耐力（295min）</span>
+
+        <span style="font-size:12px;color:#888">Z3 75-90%</span>
+        <div style="background:#333;border-radius:3px;height:10px"><div style="background:#70ad47;border-radius:3px;height:10px;width:30%"></div></div>
+        <span style="font-size:12px;color:#aaa;text-align:right">30.0%</span>
+        <span style="font-size:12px;color:#888">节奏（233min）</span>
+
+        <span style="font-size:12px;color:#888">Z4 90-105%</span>
+        <div style="background:#333;border-radius:3px;height:10px"><div style="background:#ffc000;border-radius:3px;height:10px;width:14%"></div></div>
+        <span style="font-size:12px;color:#aaa;text-align:right">14.0%</span>
+        <span style="font-size:12px;color:#888">乳酸阈（109min）</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ② 功率曲线图表方式 -->
+<div class="section">
+  <h3>② 峰值功率曲线 · X 轴方式选择</h3>
+  <p class="subtitle">两种 X 轴方式各有优劣，选择你更想要的视觉效果</p>
+  <div class="split">
+    <div class="card" data-choice="log-scale" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div style="padding:12px;font-size:12px">
+          <div style="font-weight:600;color:#ddd;margin-bottom:8px">A · 对数刻度 X 轴（推荐）</div>
+          <!-- SVG mock of log-scale power curve -->
+          <svg viewBox="0 0 280 130" style="width:100%;background:#1e1e2e;border-radius:6px">
+            <!-- axes -->
+            <line x1="32" y1="10" x2="32" y2="105" stroke="#444" stroke-width="1"/>
+            <line x1="32" y1="105" x2="270" y2="105" stroke="#444" stroke-width="1"/>
+            <!-- y labels -->
+            <text x="28" y="15" text-anchor="end" fill="#666" font-size="8">700</text>
+            <text x="28" y="45" text-anchor="end" fill="#666" font-size="8">500</text>
+            <text x="28" y="75" text-anchor="end" fill="#666" font-size="8">300</text>
+            <text x="28" y="105" text-anchor="end" fill="#666" font-size="8">100</text>
+            <!-- x labels (log) -->
+            <text x="40" y="115" text-anchor="middle" fill="#666" font-size="8">5s</text>
+            <text x="85" y="115" text-anchor="middle" fill="#666" font-size="8">1m</text>
+            <text x="155" y="115" text-anchor="middle" fill="#666" font-size="8">5m</text>
+            <text x="215" y="115" text-anchor="middle" fill="#666" font-size="8">20m</text>
+            <text x="260" y="115" text-anchor="middle" fill="#666" font-size="8">60m</text>
+            <!-- grid -->
+            <line x1="32" y1="45" x2="270" y2="45" stroke="#333" stroke-width="0.5" stroke-dasharray="3"/>
+            <line x1="32" y1="75" x2="270" y2="75" stroke="#333" stroke-width="0.5" stroke-dasharray="3"/>
+            <!-- all-time curve -->
+            <polyline points="40,14 85,32 155,52 215,72 260,82" fill="none" stroke="#5b9bd5" stroke-width="2"/>
+            <circle cx="40" cy="14" r="3" fill="#5b9bd5"/>
+            <circle cx="85" cy="32" r="3" fill="#5b9bd5"/>
+            <circle cx="155" cy="52" r="3" fill="#5b9bd5"/>
+            <circle cx="215" cy="72" r="3" fill="#5b9bd5"/>
+            <circle cx="260" cy="82" r="3" fill="#5b9bd5"/>
+            <!-- 90d curve -->
+            <polyline points="40,20 85,40 155,62 215,80 260,90" fill="none" stroke="#70ad47" stroke-width="1.5" stroke-dasharray="4"/>
+            <!-- 30d curve -->
+            <polyline points="40,28 85,50 155,70 215,88 260,96" fill="none" stroke="#f39c12" stroke-width="1.5" stroke-dasharray="2"/>
+            <!-- legend -->
+            <line x1="36" y1="8" x2="50" y2="8" stroke="#5b9bd5" stroke-width="2"/>
+            <text x="52" y="11" fill="#5b9bd5" font-size="7">历史最佳</text>
+            <line x1="100" y1="8" x2="114" y2="8" stroke="#70ad47" stroke-width="1.5" stroke-dasharray="4"/>
+            <text x="116" y="11" fill="#70ad47" font-size="7">近90天</text>
+            <line x1="155" y1="8" x2="169" y2="8" stroke="#f39c12" stroke-width="1.5" stroke-dasharray="2"/>
+            <text x="171" y="11" fill="#f39c12" font-size="7">近30天</text>
+          </svg>
+          <p style="color:#888;margin:6px 0 0;font-size:11px">X 轴：log₂ 时间。5s→60min 按对数均匀分布，曲线形状与真实功率衰减吻合（GoldenCheetals 同款）</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>对数刻度</h3>
+        <p>标准功率曲线展示方式，短时爆发力和长时耐力都能清晰对比</p>
+      </div>
+    </div>
+    <div class="card" data-choice="category" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div style="padding:12px;font-size:12px">
+          <div style="font-weight:600;color:#ddd;margin-bottom:8px">B · 均匀分类 X 轴</div>
+          <svg viewBox="0 0 280 130" style="width:100%;background:#1e1e2e;border-radius:6px">
+            <line x1="32" y1="10" x2="32" y2="105" stroke="#444" stroke-width="1"/>
+            <line x1="32" y1="105" x2="270" y2="105" stroke="#444" stroke-width="1"/>
+            <text x="28" y="15" text-anchor="end" fill="#666" font-size="8">700</text>
+            <text x="28" y="45" text-anchor="end" fill="#666" font-size="8">500</text>
+            <text x="28" y="75" text-anchor="end" fill="#666" font-size="8">300</text>
+            <text x="28" y="105" text-anchor="end" fill="#666" font-size="8">100</text>
+            <!-- evenly spaced x -->
+            <text x="50"  y="115" text-anchor="middle" fill="#666" font-size="8">5s</text>
+            <text x="100" y="115" text-anchor="middle" fill="#666" font-size="8">1m</text>
+            <text x="150" y="115" text-anchor="middle" fill="#666" font-size="8">5m</text>
+            <text x="210" y="115" text-anchor="middle" fill="#666" font-size="8">20m</text>
+            <text x="260" y="115" text-anchor="middle" fill="#666" font-size="8">60m</text>
+            <line x1="32" y1="45" x2="270" y2="45" stroke="#333" stroke-width="0.5" stroke-dasharray="3"/>
+            <line x1="32" y1="75" x2="270" y2="75" stroke="#333" stroke-width="0.5" stroke-dasharray="3"/>
+            <!-- all-time -->
+            <polyline points="50,14 100,35 150,58 210,74 260,82" fill="none" stroke="#5b9bd5" stroke-width="2"/>
+            <circle cx="50" cy="14" r="3" fill="#5b9bd5"/>
+            <circle cx="100" cy="35" r="3" fill="#5b9bd5"/>
+            <circle cx="150" cy="58" r="3" fill="#5b9bd5"/>
+            <circle cx="210" cy="74" r="3" fill="#5b9bd5"/>
+            <circle cx="260" cy="82" r="3" fill="#5b9bd5"/>
+            <polyline points="50,20 100,44 150,67 210,82 260,90" fill="none" stroke="#70ad47" stroke-width="1.5" stroke-dasharray="4"/>
+            <polyline points="50,28 100,54 150,76 210,90 260,97" fill="none" stroke="#f39c12" stroke-width="1.5" stroke-dasharray="2"/>
+            <line x1="36" y1="8" x2="50" y2="8" stroke="#5b9bd5" stroke-width="2"/>
+            <text x="52" y="11" fill="#5b9bd5" font-size="7">历史最佳</text>
+            <line x1="100" y1="8" x2="114" y2="8" stroke="#70ad47" stroke-width="1.5" stroke-dasharray="4"/>
+            <text x="116" y="11" fill="#70ad47" font-size="7">近90天</text>
+            <line x1="155" y1="8" x2="169" y2="8" stroke="#f39c12" stroke-width="1.5" stroke-dasharray="2"/>
+            <text x="171" y="11" fill="#f39c12" font-size="7">近30天</text>
+          </svg>
+          <p style="color:#888;margin:6px 0 0;font-size:11px">X 轴：5 个时长等间距排列。实现简单，但 5s→1min 和 20min→60min 视觉距离相同，失真</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>均匀分类轴</h3>
+        <p>实现简单，视觉上各时长间距相等，不反映时间比例关系</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ③ 统计表 -->
+<div class="section">
+  <h3>③ 分时段统计表（已确定）</h3>
+  <p class="subtitle">四列并排：全部 / 近3月 / 近1月 / 近1周，各列显示里程、次数、爬升、TSS</p>
+  <div class="mockup">
+    <div class="mockup-header">骑行统计汇总</div>
+    <div class="mockup-body" style="padding:12px 16px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr>
+            <th style="text-align:left;color:#666;font-weight:500;padding:6px 8px;border-bottom:1px solid #333"></th>
+            <th style="text-align:right;color:#aaa;font-weight:500;padding:6px 8px;border-bottom:1px solid #333">全部</th>
+            <th style="text-align:right;color:#aaa;font-weight:500;padding:6px 8px;border-bottom:1px solid #333">近3月</th>
+            <th style="text-align:right;color:#aaa;font-weight:500;padding:6px 8px;border-bottom:1px solid #333">近1月</th>
+            <th style="text-align:right;color:#aaa;font-weight:500;padding:6px 8px;border-bottom:1px solid #333">近1周</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:#888;padding:6px 8px;border-bottom:1px solid #2a2a2a">里程</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">8,420 km</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">1,240 km</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">380 km</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">95 km</td>
+          </tr>
+          <tr>
+            <td style="color:#888;padding:6px 8px;border-bottom:1px solid #2a2a2a">骑行次数</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">312 次</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">47 次</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">14 次</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">3 次</td>
+          </tr>
+          <tr>
+            <td style="color:#888;padding:6px 8px;border-bottom:1px solid #2a2a2a">爬升</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">92,500 m</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">13,200 m</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">4,100 m</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px;border-bottom:1px solid #2a2a2a">820 m</td>
+          </tr>
+          <tr>
+            <td style="color:#888;padding:6px 8px">TSS</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px">28,400</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px">4,180</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px">1,260</td>
+            <td style="text-align:right;color:#eee;padding:6px 8px">315</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:16px">点击功率曲线的方案选择（A 或 B），其他两处已确定，无需选择</p>

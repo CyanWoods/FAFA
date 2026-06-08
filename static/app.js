@@ -4697,19 +4697,38 @@ function closeActAiModal() {
   document.getElementById('act-ai-modal').style.display = 'none';
 }
 
+function _windDirArrow(deg) {
+  // Arrow points toward direction wind comes FROM (matches compass label)
+  // 0=N→↑, 45=NE→↗, 90=E→→, 135=SE→↘, 180=S→↓, 225=SW→↙, 270=W→←, 315=NW→↖
+  const arrows = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+  return arrows[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
 /* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
 async function openActAiModal(act) {
   if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
   const chips = _statChips(act.summary || {});
-  let kmStats = [];
+  let kmStats = [], windData = null;
   try {
-    const lr = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) });
+    const [lr, wr] = await Promise.all([
+      fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) }),
+      fetch(`/api/weather/${encodeURIComponent(act.filename || '')}`)
+    ]);
     if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
+    if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
   } catch {}
+  let weatherHtml = '';
+  if (windData) {
+    const arrow = _windDirArrow(windData.wind_dir_deg);
+    weatherHtml =
+      `<span class="stat-chip">🌬️ ${windData.wind_speed_avg_kmh} km/h</span>` +
+      `<span class="stat-chip">${arrow} ${windData.wind_dir_label}</span>` +
+      `<span class="stat-chip">逆风${windData.headwind_pct}% / 顺风${windData.tailwind_pct}%</span>`;
+  }
   await _openAndStreamModal(
     (act.filename || '').replace(/\.fit$/i, ''),
-    chips.map(c => `<span class="stat-chip">${c}</span>`).join(''),
-    () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '' }) })
+    chips.map(c => `<span class="stat-chip">${c}</span>`).join('') + weatherHtml,
+    () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '', wind_data: windData }) })
   );
 }
 

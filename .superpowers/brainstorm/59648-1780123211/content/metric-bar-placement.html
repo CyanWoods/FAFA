@@ -1,0 +1,44 @@
+<h2>指标选择栏放在哪里？</h2>
+<p class="subtitle">右侧热图区域的 速度 / 功率 / 心率 / 坡度 切换按钮</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>热图列顶部（保持原位）</h3>
+      <p>指标栏紧贴热图上方，右列独立。左列曲线图不受影响，视觉上「属于」热图区域。</p>
+      <div style="margin-top:8px;background:#0f0f14;border-radius:6px;padding:8px;height:100px;display:flex;gap:6px;">
+        <div style="flex:1;background:#111118;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#444;font-size:10px;">曲线图</div>
+        <div style="flex:1;background:#0d1a0d;border-radius:4px;display:flex;flex-direction:column;">
+          <div style="display:flex;gap:3px;padding:4px;background:rgba(255,255,255,.04);border-radius:4px 4px 0 0;flex-shrink:0;">
+            <div style="background:#2e86de;border-radius:8px;height:10px;width:28px;"></div>
+            <div style="background:#333;border-radius:8px;height:10px;width:22px;"></div>
+            <div style="background:#333;border-radius:8px;height:10px;width:22px;"></div>
+          </div>
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;color:#444;font-size:10px;">热图</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Topbar 右侧（节省垂直空间）</h3>
+      <p>指标按钮移到顶部导航栏右侧，热图区域更大。但 Topbar 已有「← 返回 / 文件名 / AI 评估」，可能较拥挤。</p>
+      <div style="margin-top:8px;background:#0f0f14;border-radius:6px;padding:8px;height:100px;display:flex;flex-direction:column;gap:6px;">
+        <div style="background:#1a1a24;border-radius:4px;height:20px;display:flex;align-items:center;padding:0 6px;gap:4px;flex-shrink:0;">
+          <div style="background:#444;border-radius:3px;width:22px;height:10px;"></div>
+          <div style="background:#333;border-radius:3px;flex:1;height:8px;"></div>
+          <div style="background:#2e86de;border-radius:8px;height:10px;width:22px;"></div>
+          <div style="background:#555;border-radius:8px;height:10px;width:22px;"></div>
+          <div style="background:#555;border-radius:8px;height:10px;width:22px;"></div>
+        </div>
+        <div style="display:flex;gap:6px;flex:1;min-height:0;">
+          <div style="flex:1;background:#111118;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#444;font-size:10px;">曲线图</div>
+          <div style="flex:1;background:#0d1a0d;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#444;font-size:10px;">热图（更大）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
