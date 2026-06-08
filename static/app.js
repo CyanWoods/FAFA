@@ -150,7 +150,7 @@ function decryptCoords(raw) { return raw.map(([a, b]) => gcj02ToWgs84(a, b)); }
 let map, tileLayer, currentTile = 'dark-nolabels';
 const tracks = new Map();
 let trackCounter = 0;
-const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K' };
+const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K', watermark: false, username: '' };
 let panelExpanded = false;
 let panelExpandedHeight = 320;
 let detailTrackId = null;
@@ -1277,7 +1277,7 @@ function _lngLatToWorld(lat, lon, zoom) {
   return [x, y];
 }
 
-// Find highest zoom where all tracks fit inside 80% of W×H
+// Compute exact (decimal) zoom so tracks fill image edge-to-edge without clipping
 function _calcZoom(allCoords, W, H) {
   let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
   for (const [lat, lon] of allCoords) {
@@ -1289,14 +1289,15 @@ function _calcZoom(allCoords, W, H) {
   if (maxLat - minLat < 0.001 && maxLon - minLon < 0.001) {
     return { zoom: 14, minLat, maxLat, minLon, maxLon };
   }
-  for (let z = 18; z >= 0; z--) {
-    const [x0, y0] = _lngLatToWorld(maxLat, minLon, z);
-    const [x1, y1] = _lngLatToWorld(minLat, maxLon, z);
-    if (x1 - x0 <= W * 0.80 && y1 - y0 <= H * 0.80) {
-      return { zoom: z, minLat, maxLat, minLon, maxLon };
-    }
-  }
-  return { zoom: 0, minLat, maxLat, minLon, maxLon };
+  const [x0, y0] = _lngLatToWorld(maxLat, minLon, 0);
+  const [x1, y1] = _lngLatToWorld(minLat, maxLon, 0);
+  const dx = x1 - x0, dy = y1 - y0;
+  // 0.94 = tracks fill central 94% of image, 3% dead zone on each side
+  const zoom = Math.min(18, Math.max(0, Math.min(
+    Math.log2(W * 0.94 / dx),
+    Math.log2(H * 0.94 / dy)
+  )));
+  return { zoom, minLat, maxLat, minLon, maxLon };
 }
 
 // Canvas origin (top-left world pixel) so all tracks are centered
@@ -1326,14 +1327,27 @@ async function _loadTileImg(url, retries = 3) {
 const _TILE_SUBS = ['a', 'b', 'c', 'd'];
 let _tileSubIdx = 0;
 
-async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate, onProgress) {
+// zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
+// zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
+async function _drawTiles(ctx, zoom, scaleFactor, originX, originY, W, H, urlTemplate, onProgress) {
   const TILE = 256;
+  const SCALED = TILE * scaleFactor;
   const CONCURRENCY = 10;
   const maxIdx = Math.pow(2, zoom) - 1;
-  const col0 = Math.floor(originX / TILE);
-  const col1 = Math.floor((originX + W - 1) / TILE);
-  const row0 = Math.floor(originY / TILE);
-  const row1 = Math.floor((originY + H - 1) / TILE);
+  const col0 = Math.floor(originX / SCALED);
+  const col1 = Math.floor((originX + W - 1) / SCALED);
+  const row0 = Math.floor(originY / SCALED);
+  const row1 = Math.floor((originY + H - 1) / SCALED);
+
+  // Pre-compute integer pixel boundaries per column/row to eliminate seams.
+  // Math.round per-tile causes adjacent tiles to misalign by 1px;
+  // computing boundaries from cumulative positions ensures shared edges.
+  const colX = [];
+  for (let col = col0; col <= col1 + 1; col++)
+    colX.push(Math.round(col * SCALED - originX));
+  const rowY = [];
+  for (let row = row0; row <= row1 + 1; row++)
+    rowY.push(Math.round(row * SCALED - originY));
 
   const tasks = [];
   for (let col = col0; col <= col1; col++) {
@@ -1343,12 +1357,12 @@ async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate, onProg
       const s = _TILE_SUBS[(_tileSubIdx++) % 4];
       const url = urlTemplate.replace('{s}', s).replace('{z}', zoom)
                              .replace('{x}', tx).replace('{y}', ty);
-      tasks.push({ url, dx: col * TILE - originX, dy: row * TILE - originY });
+      const px = colX[col - col0], py = rowY[row - row0];
+      const pw = colX[col - col0 + 1] - px, ph = rowY[row - row0 + 1] - py;
+      tasks.push({ url, px, py, pw, ph });
     }
   }
 
-  // Pool-based concurrency: always keep CONCURRENCY requests in-flight.
-  // A finished slot immediately picks up the next task — no batch waiting.
   let done = 0;
   await new Promise(resolve => {
     if (tasks.length === 0) { resolve(); return; }
@@ -1356,10 +1370,10 @@ async function _drawTiles(ctx, zoom, originX, originY, W, H, urlTemplate, onProg
 
     function pump() {
       while (running < CONCURRENCY && index < tasks.length) {
-        const { url, dx, dy } = tasks[index++];
+        const { url, px, py, pw, ph } = tasks[index++];
         running++;
         _loadTileImg(url).then(img => {
-          if (img) ctx.drawImage(img, dx, dy, TILE, TILE);
+          if (img) ctx.drawImage(img, px, py, pw, ph);
           onProgress?.(++done);
           running--;
           if (index < tasks.length) pump();
@@ -1433,6 +1447,103 @@ function _drawTracks(ctx, zoom, originX, originY, colorMode, uniformColor) {
   ctx.restore();
 }
 
+function _roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function _drawWatermark(ctx, W, H) {
+  if (!exportState.watermark) return;
+
+  const sc = H / 1080;
+  const pad = Math.round(40 * sc);
+  const font = '"PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif';
+  const lSz = Math.round(13 * sc);
+  const vSz = Math.round(22 * sc);
+  const lGap = Math.round(8 * sc);   // gap between label and value
+  const cGap = Math.round(36 * sc);  // gap between two columns
+  const rowH = Math.round(30 * sc);  // vertical distance between row baselines
+
+  const allTracks = [...tracks.values()];
+  const count = allTracks.length;
+  const dists = allTracks.map(t => (t.summary || {}).total_dist_km || 0).filter(d => d > 0);
+  const totalKm = dists.reduce((s, d) => s + d, 0);
+  const maxDist = dists.length > 0 ? Math.max(...dists) : 0;
+  const avgDist = dists.length > 0 ? totalKm / dists.length : 0;
+
+  // 2×2: [col0, col1] per row
+  const rows = [
+    [{ l: 'Total',   v: totalKm.toFixed(1) + ' km' }, { l: 'Average', v: avgDist.toFixed(1) + ' km' }],
+    [{ l: 'Count',   v: String(count) },               { l: 'Max',     v: maxDist.toFixed(1) + ' km' }],
+  ];
+
+  ctx.save();
+  ctx.shadowBlur = 0;
+
+  // Pre-measure widths for column layout
+  const meas = rows.map(row => row.map(({ l, v }) => {
+    ctx.font = `${lSz}px ${font}`;
+    const lw = ctx.measureText(l).width;
+    ctx.font = `bold ${vSz}px ${font}`;
+    const vw = ctx.measureText(v).width;
+    return { lw, vw };
+  }));
+
+  const colW = [0, 1].map(ci =>
+    Math.max(...rows.map((_, ri) => meas[ri][ci].lw + lGap + meas[ri][ci].vw))
+  );
+
+  // col right edges, both anchored from W - pad
+  const colRX = [
+    W - pad - colW[1] - cGap,  // col 0 right edge
+    W - pad,                    // col 1 right edge
+  ];
+  const by = H - pad - rowH * 2;
+
+  rows.forEach((row, ri) => {
+    const baseline = by + (ri + 1) * rowH;
+
+    row.forEach(({ l, v }, ci) => {
+      const { vw } = meas[ri][ci];
+      const rx = colRX[ci];
+
+      ctx.font = `bold ${vSz}px ${font}`;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(v, rx, baseline);
+
+      ctx.font = `${lSz}px ${font}`;
+      ctx.fillStyle = 'rgba(255,255,255,0.38)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(l, rx - vw - lGap, baseline);
+    });
+  });
+
+  // Bottom-left username
+  const uname = (exportState.username || '').trim();
+  if (uname) {
+    const uSz = Math.round(18 * sc);
+    ctx.font = `bold ${uSz}px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(uname, pad, H - pad);
+  }
+
+  ctx.restore();
+}
+
 async function doExport() {
   const btn = document.getElementById('ex-do-btn');
   btn.disabled = true;
@@ -1450,17 +1561,20 @@ async function doExport() {
     const allCoords = [];
     for (const t of tracks.values()) for (const pt of getCoords(t)) allCoords.push(pt);
 
-    const { zoom, minLat, maxLat, minLon, maxLon } = _calcZoom(allCoords, W, H);
-    const [_ox, _oy] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoom, W, H);
+    const { zoom: zoomExact, minLat, maxLat, minLon, maxLon } = _calcZoom(allCoords, W, H);
+    const zoomInt = Math.floor(zoomExact);
+    const scaleFactor = Math.pow(2, zoomExact - zoomInt);
+    const [_ox, _oy] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoomExact, W, H);
     const originX = Math.round(_ox);
     const originY = Math.round(_oy);
 
     const TILE = 256;
-    const col0 = Math.floor(originX / TILE), col1 = Math.floor((originX + W - 1) / TILE);
-    const row0 = Math.floor(originY / TILE), row1 = Math.floor((originY + H - 1) / TILE);
+    const SCALED = TILE * scaleFactor;
+    const col0 = Math.floor(originX / SCALED), col1 = Math.floor((originX + W - 1) / SCALED);
+    const row0 = Math.floor(originY / SCALED), row1 = Math.floor((originY + H - 1) / SCALED);
     const tileCount = (col1 - col0 + 1) * (row1 - row0 + 1);
     T('计算 zoom/origin');
-    console.log(`[export] 分辨率 ${W}×${H}，zoom=${zoom}，tiles=${tileCount}（${col1-col0+1}列×${row1-row0+1}行）`);
+    console.log(`[export] 分辨率 ${W}×${H}，zoom=${zoomExact.toFixed(3)}（tile z=${zoomInt} ×${scaleFactor.toFixed(3)}），tiles=${tileCount}（${col1-col0+1}列×${row1-row0+1}行）`);
 
     const canvas = document.createElement('canvas');
     canvas.width  = W;
@@ -1469,13 +1583,14 @@ async function doExport() {
 
     console.time('[export] 加载 tiles');
     btn.textContent = `加载地图 0/${tileCount}…`;
-    await _drawTiles(ctx, zoom, originX, originY, W, H, tileTemplate, n => {
+    await _drawTiles(ctx, zoomInt, scaleFactor, originX, originY, W, H, tileTemplate, n => {
       btn.textContent = `加载地图 ${n}/${tileCount}…`;
     });
     T('加载 tiles');
 
     console.time('[export] 绘制路径');
-    _drawTracks(ctx, zoom, originX, originY, exportState.colorMode, exportState.uniformColor);
+    _drawTracks(ctx, zoomExact, originX, originY, exportState.colorMode, exportState.uniformColor);
+    _drawWatermark(ctx, W, H);
     T('绘制路径');
 
     console.time('[export] PNG 编码 (toBlob)');
@@ -2603,6 +2718,13 @@ document.addEventListener('DOMContentLoaded', () => {
   _setupOptGroup('ex-res-group', 'resolution');
   document.getElementById('ex-color-picker').addEventListener('input', e => {
     exportState.uniformColor = e.target.value;
+  });
+  document.getElementById('ex-watermark-check').addEventListener('change', e => {
+    exportState.watermark = e.target.checked;
+    document.getElementById('ex-username-row').style.display = e.target.checked ? 'block' : 'none';
+  });
+  document.getElementById('ex-username-input').addEventListener('input', e => {
+    exportState.username = e.target.value;
   });
 
   document.addEventListener('keydown', e => {

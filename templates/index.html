@@ -302,6 +302,18 @@
           <button class="opt-btn" data-val="1080P">1080P</button>
         </div>
       </div>
+      <div class="modal-section">
+        <div class="modal-label">水印</div>
+        <div id="ex-watermark-row">
+          <label class="ex-toggle">
+            <input type="checkbox" id="ex-watermark-check">
+            <span>添加骑行统计水印</span>
+          </label>
+        </div>
+        <div id="ex-username-row">
+          <input type="text" id="ex-username-input" placeholder="用户名（左下角，可留空）" maxlength="30">
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="modal-cancel" onclick="closeExportModal()">取消</button>
         <button class="modal-export" id="ex-do-btn" onclick="doExport()">导出</button>

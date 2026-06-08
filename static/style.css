@@ -740,6 +740,59 @@ body {
   cursor: pointer;
 }
 
+#ex-watermark-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ex-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #888;
+  user-select: none;
+}
+
+.ex-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: #2e86de;
+  flex-shrink: 0;
+}
+
+#ex-username-row {
+  display: none;
+  margin-top: 8px;
+}
+
+#ex-username-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #ccc;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+#ex-username-input:focus { border-color: rgba(46,134,222,0.6); }
+#ex-username-input::placeholder { color: #555; }
+
+.light-theme #ex-username-input {
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.15);
+  color: #333;
+}
+.light-theme #ex-username-input::placeholder { color: #aaa; }
+.light-theme .ex-toggle { color: #666; }
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
