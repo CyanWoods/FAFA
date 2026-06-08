@@ -170,6 +170,10 @@ let _detailChartIsRecords = false;
 let _detailChartDataLen = 0;
 let _detailRouteMarker = null;
 let _detailRouteHideTimer = null;
+let _detailWindData = null;
+let _detailWindArrow = null;
+let _detailTotalDurationS = 0;
+let _detailWindEnabled = true;
 let aiTrackId = null;
 let _aiModel  = '';
 let _analyticsOpen = false;
@@ -1649,6 +1653,16 @@ async function openDetailView(id) {
   _renderDetailTable();
   _buildRouteMetricBar();
   _renderDetailRoute();
+  _detailWindData = null;
+  _detailWindArrow = null;
+  _detailWindEnabled = true;
+  _detailTotalDurationS = t.summary?.total_duration_s || t.summary?.moving_time_s || 0;
+  const _windBtn = document.getElementById('detail-route-wind-btn');
+  if (_windBtn) _windBtn.classList.add('active');
+  fetch(`/api/weather/${encodeURIComponent(t.name)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d?.available && d.hourly) _detailWindData = d; })
+    .catch(() => {});
 }
 
 function closeDetailView() {
@@ -1664,6 +1678,9 @@ function closeDetailView() {
   _detailRouteMarker = null;
   _detailRouteCoords = null;
   _detailRouteCumDist = null;
+  if (_detailWindArrow && detailRouteMap) detailRouteMap.removeLayer(_detailWindArrow);
+  _detailWindArrow = null;
+  _detailWindData = null;
   detailTrackId = null;
   if (_sidebarView === 'activities') {
     document.getElementById('activities-view').classList.add('active');
@@ -2400,12 +2417,44 @@ function _updateDetailRouteMarker(dataIdx) {
   const latlng = _detailRouteCoords[lo];
   if (!latlng) return;
 
-  if (!_detailRouteMarker) {
-    _detailRouteMarker = L.circleMarker(latlng, {
-      radius: 6, color: '#fff', weight: 2, fillColor: '#2e86de', fillOpacity: 1,
-    }).addTo(detailRouteMap);
-  } else {
-    _detailRouteMarker.setLatLng(latlng);
+  const _hasWind = _detailWindEnabled && _detailWindData?.hourly && _detailTotalDurationS > 0;
+  if (!_hasWind) {
+    if (!_detailRouteMarker) {
+      _detailRouteMarker = L.circleMarker(latlng, {
+        radius: 6, color: '#fff', weight: 2, fillColor: '#2e86de', fillOpacity: 1,
+      }).addTo(detailRouteMap);
+    } else {
+      _detailRouteMarker.setLatLng(latlng);
+    }
+  } else if (_detailRouteMarker && detailRouteMap) {
+    detailRouteMap.removeLayer(_detailRouteMarker);
+    _detailRouteMarker = null;
+  }
+
+  if (_hasWind && detailRouteMap) {
+    const totalDist = _detailRouteCumDist[_detailRouteCumDist.length - 1];
+    const elapsedS  = (targetDist / Math.max(totalDist, 1)) * _detailTotalDurationS;
+    const wind = _getHourlyWind(_detailWindData.hourly, _detailWindData.start_epoch, elapsedS);
+    if (wind) {
+      const bearing = _bearingAtIndex(lo);
+      const effect  = _windEffect(bearing, wind.dir);
+      const color   = effect === 'headwind' ? '#e74c3c' : effect === 'tailwind' ? '#27ae60' : '#f39c12';
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="transform:rotate(${(wind.dir + 180) % 360}deg);text-align:center;line-height:1;filter:drop-shadow(0 0 2px #000)">`
+             + `<svg width="14" height="22" viewBox="0 0 14 22" xmlns="http://www.w3.org/2000/svg"><polygon points="7,0 14,10 10,10 10,22 4,22 4,10 0,10" fill="${color}"/></svg>`
+             + `</div>`
+             + `<div style="font-size:10px;color:#fff;text-align:center;text-shadow:0 0 2px #000;white-space:nowrap">${wind.speed} km/h</div>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 11],
+      });
+      if (!_detailWindArrow) {
+        _detailWindArrow = L.marker(latlng, { icon, interactive: false }).addTo(detailRouteMap);
+      } else {
+        _detailWindArrow.setLatLng(latlng);
+        _detailWindArrow.setIcon(icon);
+      }
+    }
   }
 }
 
@@ -2416,7 +2465,50 @@ function _hideDetailRouteMarker() {
       detailRouteMap.removeLayer(_detailRouteMarker);
       _detailRouteMarker = null;
     }
+    if (_detailWindArrow && detailRouteMap) {
+      detailRouteMap.removeLayer(_detailWindArrow);
+      _detailWindArrow = null;
+    }
   }, 60);
+}
+
+function _toggleDetailWind() {
+  _detailWindEnabled = !_detailWindEnabled;
+  const btn = document.getElementById('detail-route-wind-btn');
+  if (btn) btn.classList.toggle('active', _detailWindEnabled);
+  if (!_detailWindEnabled && _detailWindArrow && detailRouteMap) {
+    detailRouteMap.removeLayer(_detailWindArrow);
+    _detailWindArrow = null;
+  }
+}
+
+function _getHourlyWind(hourly, startEpoch, elapsedS) {
+  const times  = hourly.time || [];
+  const speeds = hourly.windspeed_10m || [];
+  const dirs   = hourly.winddirection_10m || [];
+  const targetHour = Math.floor((startEpoch + elapsedS) / 3600);
+  for (let i = 0; i < times.length; i++) {
+    const h = Math.floor(new Date(times[i] + 'Z').getTime() / 3_600_000);
+    if (h === targetHour) return { speed: Math.round(speeds[i] * 10) / 10, dir: dirs[i] };
+  }
+  return null;
+}
+
+function _bearingAtIndex(idx) {
+  const coords = _detailRouteCoords;
+  const i1 = Math.min(idx + 1, coords.length - 1);
+  if (i1 === idx) return 0;
+  const dlat = coords[i1][0] - coords[idx][0];
+  const dlon = coords[i1][1] - coords[idx][1];
+  const latM = Math.PI / 180 * ((coords[idx][0] + coords[i1][0]) / 2);
+  return (Math.atan2(dlon * Math.cos(latM), dlat) * 180 / Math.PI + 360) % 360;
+}
+
+function _windEffect(bearing, windFromDir) {
+  const rel = (bearing - windFromDir + 360) % 360;
+  if (rel < 45 || rel > 315) return 'headwind';
+  if (rel > 135 && rel < 225) return 'tailwind';
+  return 'crosswind';
 }
 
 function _detailRouteFitBounds() {

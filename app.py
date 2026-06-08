@@ -1124,6 +1124,16 @@ def weather_for_activity(filename: str):
     except Exception as e:
         logging.warning("weather: _wind_stats failed %s: %s", filename, e)
         return jsonify(available=False)
+    if result.get("available"):
+        result["start_epoch"] = int(
+            datetime.fromisoformat(start_time_utc.replace("Z", "+00:00")).timestamp()
+        )
+        hourly_raw = data.get("hourly", {})
+        result["hourly"] = {
+            k: hourly_raw[k]
+            for k in ("time", "windspeed_10m", "winddirection_10m")
+            if k in hourly_raw
+        }
     _weather_cache[_wkey] = result
     return jsonify(result)
 

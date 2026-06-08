@@ -248,3 +248,23 @@ def test_prompt_wind_unavailable():
     prompt = _build_eval_prompt({}, [], "test.fit", "2025-08-20T10:00:00",
                                  wind_data={"available": False})
     assert "气象条件" not in prompt
+
+
+def test_weather_endpoint_includes_hourly_fields(client):
+    with patch("app._parse_and_build", return_value=_fake_cached()), \
+         patch("app._cache_get", return_value=None), \
+         patch("app._disk_cache_load", return_value=None):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = _fake_openmeteo()
+        with patch("requests.get", return_value=mock_resp):
+            r = client.get("/api/weather/test.fit")
+    data = r.get_json()
+    assert data["available"] is True
+    assert isinstance(data.get("start_epoch"), int)
+    assert data["start_epoch"] > 0
+    assert "hourly" in data
+    assert "time" in data["hourly"]
+    assert "windspeed_10m" in data["hourly"]
+    assert "winddirection_10m" in data["hourly"]
+    assert "windgusts_10m" not in data["hourly"]

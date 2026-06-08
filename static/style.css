@@ -1966,6 +1966,30 @@ body {
 }
 #detail-route-fit-btn:hover { background: rgba(46,134,222,0.25); color: #7ab0e8; border-color: rgba(46,134,222,0.4); }
 
+#detail-route-wind-btn {
+  position: absolute;
+  left: 8px;
+  top: calc(50% + 38px);
+  transform: translateY(-50%);
+  z-index: 1000;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(15,15,20,0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #555;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+#detail-route-wind-btn:hover { background: rgba(46,134,222,0.25); color: #7ab0e8; border-color: rgba(46,134,222,0.4); }
+#detail-route-wind-btn.active { color: #2e86de; border-color: rgba(46,134,222,0.6); }
+
 #detail-route-tooltip {
   position: fixed;
   z-index: 1100;
