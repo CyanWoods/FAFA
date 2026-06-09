@@ -89,6 +89,7 @@ def login_page():
         password = request.form.get('password') or ''
         user = _auth.verify_user(username, password)
         if user:
+            session.clear()          # prevent session fixation
             session['user_id']  = user['id']
             session['username'] = user['username']
             return redirect(url_for('index'))

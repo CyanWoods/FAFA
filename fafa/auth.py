@@ -1,8 +1,11 @@
 """User auth helpers. users.db lives at project root."""
+import re
 import sqlite3
 import threading
 from functools import wraps
 from pathlib import Path
+
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 
 from flask import session, redirect, url_for, request
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -27,12 +30,15 @@ def init_db() -> None:
 
 
 def create_user(username: str, password: str) -> None:
+    username = username.strip()
+    if not _USERNAME_RE.match(username):
+        raise ValueError("用户名只能包含字母、数字、_ 和 -，长度 1-32 位")
     with _db_lock:
         conn = sqlite3.connect(str(USERS_DB))
         try:
             conn.execute(
                 'INSERT INTO users (username, password_hash) VALUES (?, ?)',
-                (username.strip(), generate_password_hash(password)),
+                (username, generate_password_hash(password)),
             )
             conn.commit()
         finally:
