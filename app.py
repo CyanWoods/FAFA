@@ -781,14 +781,16 @@ def _load_ai_config() -> dict | None:
         return None
 
 
-def _load_onelap_credentials() -> dict | None:
+def _load_platform_credentials(prefix: str) -> dict | None:
+    """Load username/password for a sync platform from config.json.
+    prefix is e.g. 'onelap' or 'igpsport'."""
     if not AI_CONFIG_FILE.exists():
         return None
     try:
         with open(AI_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
-        username = (cfg.get("onelap_username") or "").strip()
-        password = (cfg.get("onelap_password") or "").strip()
+        username = (cfg.get(f"{prefix}_username") or "").strip()
+        password = (cfg.get(f"{prefix}_password") or "").strip()
         if username and password:
             return {"username": username, "password": password}
     except Exception:
@@ -796,19 +798,12 @@ def _load_onelap_credentials() -> dict | None:
     return None
 
 
+def _load_onelap_credentials() -> dict | None:
+    return _load_platform_credentials("onelap")
+
+
 def _load_igpsport_credentials() -> dict | None:
-    if not AI_CONFIG_FILE.exists():
-        return None
-    try:
-        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
-            cfg = json.load(f)
-        username = (cfg.get("igpsport_username") or "").strip()
-        password = (cfg.get("igpsport_password") or "").strip()
-        if not username or not password:
-            return None
-        return {"username": username, "password": password}
-    except Exception:
-        return None
+    return _load_platform_credentials("igpsport")
 
 
 def _wind_dir_label(deg: float) -> str:

@@ -427,6 +427,23 @@ async function _actBulkDelete() {
   openActivitiesView();
 }
 
+async function _fetchActivityData(act) {
+  let kmStats = [], windData = null;
+  try {
+    const [lr, wr] = await Promise.all([
+      fetch('/api/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: act.filename || '' }),
+      }),
+      fetch(`/api/weather/${encodeURIComponent(act.filename || '')}`),
+    ]);
+    if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
+    if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
+  } catch (e) { console.warn('[_fetchActivityData] fetch failed:', e); }
+  return { kmStats, windData };
+}
+
 async function _actBulkAiCompare() {
   if (_actSelected.size < 2) { toast('请至少选择 2 条记录'); return; }
   if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
@@ -440,19 +457,7 @@ async function _actBulkAiCompare() {
   toast('正在加载骑行数据…');
 
   const results = await Promise.all(acts.map(async act => {
-    let kmStats = [], windData = null;
-    try {
-      const [lr, wr] = await Promise.all([
-        fetch('/api/load', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: act.filename }),
-        }),
-        fetch(`/api/weather/${encodeURIComponent(act.filename || '')}`),
-      ]);
-      if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
-      if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
-    } catch {}
+    const { kmStats, windData } = await _fetchActivityData(act);
     return {
       summary:    act.summary    || {},
       km_stats:   kmStats,
@@ -1439,12 +1444,7 @@ function _hexToRgb(hex) {
 }
 
 function _haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return _haversineM(lat1, lon1, lat2, lon2) / 1000;
 }
 
 function _trackBboxCenter(t) {
@@ -1461,7 +1461,7 @@ function _trackBboxCenter(t) {
 // Groups trackList into sub-arrays where all tracks within a group have
 // centers within thresholdKm of each other (greedy single-pass).
 function _groupTracksByDistance(trackList, thresholdKm) {
-  const groups = []; // [{tracks, cLat, cLon}]
+  const groups = []; // [{tracks, cLat, cLon, sumLat, sumLon}]
   for (const t of trackList) {
     const [lat, lon] = _trackBboxCenter(t);
     let matched = null;
@@ -1470,12 +1470,12 @@ function _groupTracksByDistance(trackList, thresholdKm) {
     }
     if (matched) {
       matched.tracks.push(t);
-      // recompute group centroid
+      matched.sumLat += lat; matched.sumLon += lon;
       const n = matched.tracks.length;
-      matched.cLat = matched.tracks.reduce((s, x) => s + _trackBboxCenter(x)[0], 0) / n;
-      matched.cLon = matched.tracks.reduce((s, x) => s + _trackBboxCenter(x)[1], 0) / n;
+      matched.cLat = matched.sumLat / n;
+      matched.cLon = matched.sumLon / n;
     } else {
-      groups.push({ tracks: [t], cLat: lat, cLon: lon });
+      groups.push({ tracks: [t], cLat: lat, cLon: lon, sumLat: lat, sumLon: lon });
     }
   }
   return groups.map(g => g.tracks);
@@ -1647,15 +1647,16 @@ async function _exportGroup(groupTracks, W, H, tileTemplate, suffix, btn) {
   canvas.height = H;
   const ctx = canvas.getContext('2d');
 
-  btn.textContent = `${suffix} 加载地图 0/${tileCount}…`;
+  const _sfx = suffix ? suffix + ' ' : '';
+  btn.textContent = `${_sfx}加载地图 0/${tileCount}…`;
   await _drawTiles(ctx, zoomInt, scaleFactor, originX, originY, W, H, tileTemplate, n => {
-    btn.textContent = `${suffix} 加载地图 ${n}/${tileCount}…`;
+    btn.textContent = `${_sfx}加载地图 ${n}/${tileCount}…`;
   });
 
   _drawTracks(ctx, zoomExact, originX, originY, exportState.colorMode, exportState.uniformColor, groupTracks);
   _drawWatermark(ctx, W, H);
 
-  btn.textContent = `${suffix} PNG 编码中…`;
+  btn.textContent = `${_sfx}PNG 编码中…`;
   const baseName = `fafa_${exportState.resolution}_${exportState.ratio.replace(':', '-')}`;
   await new Promise(resolve => canvas.toBlob(blob => {
     const a = document.createElement('a');
@@ -2496,6 +2497,13 @@ function _renderDetailCharts(records, fallbackStats) {
   _renderDetailDistributions(wrap, useRecords ? records : null);
 }
 
+// Returns index of first element in arr >= val (leftmost binary search).
+function _bisectLeft(arr, val) {
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < val) lo = m + 1; else hi = m; }
+  return lo;
+}
+
 function _updateDetailRouteMarker(dataIdx) {
   if (_detailRouteHideTimer) { clearTimeout(_detailRouteHideTimer); _detailRouteHideTimer = null; }
   if (!detailRouteMap || !_detailRouteCoords || !_detailRouteCumDist) return;
@@ -2504,13 +2512,7 @@ function _updateDetailRouteMarker(dataIdx) {
     ? (dataIdx / Math.max(1, _detailChartDataLen - 1)) * totalDist
     : (dataIdx + 0.5) * _detailRouteStepM;
 
-  // Binary search for nearest GPS point
-  let lo = 0, hi = _detailRouteCumDist.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (_detailRouteCumDist[mid] < targetDist) lo = mid + 1;
-    else hi = mid;
-  }
+  const lo = _bisectLeft(_detailRouteCumDist, targetDist);
   const latlng = _detailRouteCoords[lo];
   if (!latlng) return;
 
@@ -2614,12 +2616,8 @@ function _bearingByTimeWindow(elapsedS) {
   const d0 = (Math.max(0,                      elapsedS - HALF_WIN) / _detailTotalDurationS) * totalDist;
   const d1 = (Math.min(_detailTotalDurationS,   elapsedS + HALF_WIN) / _detailTotalDurationS) * totalDist;
 
-  // Binary search: first index where cumDist >= d0
-  let lo0 = 0, hi0 = cumDist.length - 1;
-  while (lo0 < hi0) { const m = (lo0 + hi0) >> 1; if (cumDist[m] < d0) lo0 = m + 1; else hi0 = m; }
-  // Binary search: first index where cumDist >= d1
-  let lo1 = 0, hi1 = cumDist.length - 1;
-  while (lo1 < hi1) { const m = (lo1 + hi1) >> 1; if (cumDist[m] < d1) lo1 = m + 1; else hi1 = m; }
+  const lo0 = _bisectLeft(cumDist, d0);
+  const lo1 = _bisectLeft(cumDist, d1);
 
   // If window collapses to a single point, fall back to adjacent-point bearing
   if (lo0 >= lo1) return _bearingAtIndex(lo0);
@@ -5057,15 +5055,7 @@ function _windDirArrow(deg) {
 async function openActAiModal(act) {
   if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
   const chips = _statChips(act.summary || {});
-  let kmStats = [], windData = null;
-  try {
-    const [lr, wr] = await Promise.all([
-      fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) }),
-      fetch(`/api/weather/${encodeURIComponent(act.filename || '')}`)
-    ]);
-    if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
-    if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
-  } catch {}
+  const { kmStats, windData } = await _fetchActivityData(act);
   let weatherHtml = '';
   if (windData) {
     const arrow = _windDirArrow(windData.wind_dir_deg);

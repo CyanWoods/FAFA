@@ -105,7 +105,8 @@ class IGPSportClient:
             if not rows:
                 break
             page += 1
-            time.sleep(0.3)
+            if page <= total_pages:
+                time.sleep(0.3)
         return all_acts
 
     def download_file(self, ride_id: str, dst_path: Path) -> None:
