@@ -176,6 +176,8 @@ let _detailTotalDurationS = 0;
 let _detailWindEnabled = true;
 let aiTrackId = null;
 let _aiModel  = '';
+let _aiChatMessages  = [];
+let _aiChatStreaming  = false;
 let _analyticsOpen = false;
 let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
@@ -548,7 +550,6 @@ function _buildActivityCard(act) {
       <div class="act-card-tags"></div>
       <div class="act-card-actions">
         <button class="act-card-ai-btn">AI 分析</button>
-        <button class="act-card-ai-btn act-card-map-btn">路线热图</button>
       </div>
     </div>
   `;
@@ -566,27 +567,6 @@ function _buildActivityCard(act) {
   card.querySelector('.act-card-ai-btn').addEventListener('click', e => {
     e.stopPropagation();
     openActAiModal(act);
-  });
-  card.querySelector('.act-card-map-btn').addEventListener('click', async e => {
-    e.stopPropagation();
-    const mapBtn = e.currentTarget;
-    if (mapBtn.disabled) return;
-    mapBtn.disabled = true;
-    try {
-      const res = await fetch('/api/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: act.filename }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      const data = await res.json();
-      const id = addTrack(data);
-      await openDetailView(id);
-    } catch (err) {
-      toast('加载失败：' + err.message);
-    } finally {
-      mapBtn.disabled = false;
-    }
   });
   card.addEventListener('click', () => {
     if (_actSelectMode) {
@@ -2796,6 +2776,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initPanelResize();
   initDetailSplitResize();
   initDetailTableResize();
+  document.getElementById('act-ai-chat-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _sendAiChat(); }
+  });
 
   // Activities view is default home
   switchSidebarView('activities');
@@ -3522,23 +3505,44 @@ async function _loadPmcConfig() {
   }
 }
 
-function openAiView() {
+async function openAiView() {
   const id = detailTrackId;
   const t  = tracks.get(id);
   if (!t) return;
+  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
   aiTrackId = id;
 
-  document.getElementById('ai-filename-label').textContent = t.name;
-  document.getElementById('ai-model-tag').textContent = _aiModel || '';
-  document.getElementById('ai-model-tag').style.display = _aiModel ? '' : 'none';
-
-  const sumRow = document.getElementById('ai-summary-row');
-  const chips  = _statChips(t.summary);
-  sumRow.innerHTML = chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
-
-  document.getElementById('ai-result').innerHTML = '';
-  document.getElementById('ai-view').classList.add('active');
-  startAiEval();
+  const chips = _statChips(t.summary || {});
+  let windData = null;
+  try {
+    const wr = await fetch(`/api/weather/${encodeURIComponent(t.name || '')}`);
+    if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
+  } catch {}
+  let weatherHtml = '';
+  if (windData) {
+    const arrow = _windDirArrow(windData.wind_dir_deg);
+    weatherHtml =
+      `<span class="stat-chip">🌬️ ${windData.wind_speed_avg_kmh} km/h</span>` +
+      `<span class="stat-chip">${arrow} ${windData.wind_dir_label}</span>` +
+      `<span class="stat-chip">逆风${windData.headwind_pct}% / 顺风${windData.tailwind_pct}%</span>`;
+  }
+  await _openAndStreamModal(
+    (t.name || '').replace(/\.fit$/i, ''),
+    chips.map(c => `<span class="stat-chip">${c}</span>`).join('') + weatherHtml,
+    () => fetch('/api/ai/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        summary:    t.summary        || {},
+        km_stats:   t.kmStats        || [],
+        dist_stats: t.distStats      || [],
+        time_stats: t.timeStats      || [],
+        filename:   t.name           || '',
+        start_time: t.timeStatsStart || '',
+        wind_data:  windData,
+      }),
+    })
+  );
 }
 
 function closeAiView() {
@@ -4746,6 +4750,12 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
     summaryEl.style.display = 'none';
   }
   document.getElementById('act-ai-modal').style.display = 'flex';
+  _aiChatMessages = [];
+  _aiChatStreaming = false;
+  const sendBtn = document.getElementById('act-ai-chat-send');
+  if (sendBtn) sendBtn.disabled = true;
+  const chatInput = document.getElementById('act-ai-chat-input');
+  if (chatInput) chatInput.value = '';
 
   const loading  = document.getElementById('act-ai-modal-loading');
   const resultEl = document.getElementById('act-ai-modal-result');
@@ -4779,6 +4789,14 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
         } catch {}
       }
     }
+    if (fullText) {
+      _aiChatMessages = [
+        { role: 'system',    content: '你是专业骑行教练 AI，以下是你对本次骑行的分析报告，请基于此内容回答后续问题。' },
+        { role: 'user',      content: '请分析这次骑行。' },
+        { role: 'assistant', content: fullText },
+      ];
+      if (sendBtn) sendBtn.disabled = false;
+    }
   } catch (e) {
     loading.style.display = 'none';
     _setErrorHtml(resultEl, `网络错误：${e.message}`);
@@ -4787,6 +4805,74 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
 
 function closeActAiModal() {
   document.getElementById('act-ai-modal').style.display = 'none';
+  _aiChatMessages = [];
+  _aiChatStreaming = false;
+}
+
+async function _sendAiChat() {
+  const input = document.getElementById('act-ai-chat-input');
+  const question = input?.value.trim();
+  if (!question || _aiChatStreaming || !_aiChatMessages.length) return;
+  input.value = '';
+
+  const resultEl = document.getElementById('act-ai-modal-result');
+  const userDiv  = document.createElement('div');
+  userDiv.className = 'ai-chat-user-msg';
+  userDiv.textContent = question;
+  resultEl.appendChild(userDiv);
+
+  const respDiv = document.createElement('div');
+  respDiv.className = 'ai-chat-resp-msg';
+  resultEl.appendChild(respDiv);
+  resultEl.scrollTop = resultEl.scrollHeight;
+
+  const messages = [..._aiChatMessages, { role: 'user', content: question }];
+  _aiChatStreaming = true;
+  const sendBtn = document.getElementById('act-ai-chat-send');
+  if (sendBtn) sendBtn.disabled = true;
+
+  let fullText = '';
+  try {
+    const res = await fetch('/api/ai/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      _setErrorHtml(respDiv, d.error || '请求失败');
+      return;
+    }
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const ds = line.slice(6).trim();
+        if (ds === '[DONE]') break;
+        try {
+          const chunk = JSON.parse(ds);
+          if (chunk.error) { _setErrorHtml(respDiv, chunk.error); return; }
+          if (chunk.text)  { fullText += chunk.text; respDiv.innerHTML = _renderMarkdown(fullText); resultEl.scrollTop = resultEl.scrollHeight; }
+        } catch {}
+      }
+    }
+    if (fullText) {
+      _aiChatMessages.push({ role: 'user',      content: question  });
+      _aiChatMessages.push({ role: 'assistant', content: fullText  });
+    }
+  } catch (e) {
+    _setErrorHtml(respDiv, `网络错误：${e.message}`);
+  } finally {
+    _aiChatStreaming = false;
+    if (sendBtn) sendBtn.disabled = false;
+  }
 }
 
 function _windDirArrow(deg) {

@@ -985,7 +985,7 @@ def save_config_raw():
     return jsonify(ok=True)
 
 
-def _llm_stream(cfg: dict, prompt: str):
+def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = None):
     """共享 SSE 流式响应助手，所有 AI 端点都通过此函数返回。"""
     from flask import Response as _Resp, stream_with_context
     import requests as _req
@@ -994,7 +994,7 @@ def _llm_stream(cfg: dict, prompt: str):
     auth     = f"Bearer {cfg['api_key']}"
     payload  = {
         "model":      cfg.get("model", "gpt-4o-mini"),
-        "messages":   [{"role": "user", "content": prompt}],
+        "messages":   messages if messages is not None else [{"role": "user", "content": prompt}],
         "max_tokens": cfg.get("max_tokens", 2500),
         "stream":     True,
     }
@@ -1049,6 +1049,18 @@ def ai_evaluate():
         wind_data=body.get("wind_data") or None,
     )
     return _llm_stream(cfg, prompt)
+
+
+@app.route("/api/ai/chat", methods=["POST"])
+def ai_chat():
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
+    body = request.get_json(silent=True) or {}
+    messages = body.get("messages") or []
+    if not messages:
+        return jsonify(error="消息为空"), 400
+    return _llm_stream(cfg, messages=messages)
 
 
 @app.route("/api/weather/<path:filename>")

@@ -1616,9 +1616,10 @@ body {
 
 .act-card-stats {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(0, auto) minmax(0, auto);
   flex: 1;
   align-items: center;
+  gap: 0 8px;
 }
 
 .act-stat {
@@ -3341,23 +3342,23 @@ body {
 .act-card-actions {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  padding-left: 12px;
 }
 #activities-view.select-mode .act-card-actions { visibility: hidden; }
-.act-card-ai-btn:not(.act-card-map-btn) { display: none; }
 
 .act-card-ai-btn {
-  padding: 6px 14px;
+  padding: 5px 14px;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 20px;
   background: transparent;
-  color: #aaa;
+  color: #888;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.act-card-ai-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.act-card-ai-btn:hover { background: rgba(255,255,255,0.08); color: #fff; border-color: rgba(255,255,255,0.22); }
 
 /* ── 活动 AI 分析弹窗 ────────────────────────────────────────────────────────── */
 #act-ai-modal {
@@ -3377,8 +3378,8 @@ body {
   background: #1a1a24;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px;
-  width: min(720px, 90vw);
-  max-height: 82vh;
+  width: min(880px, 92vw);
+  max-height: 88vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -3420,6 +3421,68 @@ body {
 }
 #act-ai-modal-body::-webkit-scrollbar { width: 4px; }
 #act-ai-modal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+#act-ai-modal-footer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+#act-ai-chat-input {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 8px 12px;
+  resize: none;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#act-ai-chat-input:focus { border-color: rgba(46,134,222,0.5); }
+#act-ai-chat-input::placeholder { color: #555; }
+#act-ai-chat-send {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: none;
+  background: #2e86de;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, opacity 0.15s;
+}
+#act-ai-chat-send:hover:not(:disabled) { background: #1a6fc4; }
+#act-ai-chat-send:disabled { opacity: 0.35; cursor: default; }
+
+.ai-chat-user-msg {
+  margin: 16px 0 6px;
+  padding: 8px 12px;
+  background: rgba(46,134,222,0.12);
+  border-left: 3px solid #2e86de;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #b0c8e8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-chat-resp-msg {
+  margin-bottom: 8px;
+}
+.ai-chat-resp-msg:empty::after {
+  content: '▌';
+  animation: blink 0.7s infinite;
+  color: #2e86de;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
 .cal-ai-period-btn {
   padding: 6px 14px;
@@ -3812,6 +3875,10 @@ body {
 .light-theme #act-ai-modal-header button:hover { color: #111; background: rgba(0,0,0,0.07); }
 .light-theme #act-ai-modal-summary { border-bottom-color: rgba(0,0,0,0.06); }
 .light-theme #act-ai-modal-body::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
+.light-theme #act-ai-modal-footer { border-top-color: rgba(0,0,0,0.07); }
+.light-theme #act-ai-chat-input { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.12); color: #111; }
+.light-theme #act-ai-chat-input::placeholder { color: #aaa; }
+.light-theme .ai-chat-user-msg { background: rgba(46,134,222,0.08); color: #1a5a9a; }
 .light-theme .pmc-ai-loading-row { color: #777; }
 
 /* activity card stat values */
