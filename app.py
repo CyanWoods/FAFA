@@ -23,31 +23,89 @@ from pathlib import Path
 
 from html import escape as _html_escape
 
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, session, g, redirect, url_for
 
 from fafa.parser import parse_fit
 from fafa.gcj02 import needs_wgs84_conversion
 from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats, compute_summary
 import fafa.strava as _strava
 import fafa.db as _db
+import fafa.auth as _auth
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.secret_key = os.environ.get('FAFA_SECRET', 'dev-secret-change-in-prod')
 
-PROJECT_ROOT   = Path(__file__).parent
-INPUT_DIR      = PROJECT_ROOT / "input"
-STATE_FILE     = PROJECT_ROOT / "download_state.json"
+if not os.environ.get('FAFA_SECRET'):
+    logging.warning('FAFA_SECRET not set — using insecure dev secret. Set it for production!')
+
+PROJECT_ROOT      = Path(__file__).parent
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
 
-INPUT_DIR.mkdir(exist_ok=True)
-_db.init_db(INPUT_DIR)
+# Initialise the users database once at startup.
+_auth.init_db()
+
+# ── Per-request user helpers ───────────────────────────────────────────────────
+
+def _user_input_dir() -> Path:
+    d = PROJECT_ROOT / 'input' / g.username
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _user_config_file() -> Path:
+    return _user_input_dir() / 'config.json'
+
+
+def _user_db_path() -> Path:
+    return _user_input_dir() / 'fafa.db'
+
+
+@app.before_request
+def _load_user():
+    user_id = session.get('user_id')
+    if user_id:
+        user = _auth.get_user_by_id(user_id)
+        if user:
+            g.user_id  = user['id']
+            g.username = user['username']
+            udir = PROJECT_ROOT / 'input' / g.username
+            udir.mkdir(parents=True, exist_ok=True)
+            _db.init_db(udir)   # idempotent: CREATE TABLE IF NOT EXISTS
+        else:
+            session.clear()
+
+
+# ── Auth routes ────────────────────────────────────────────────────────────────
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if 'user_id' in session:
+        return redirect(url_for('index'))
+    error = None
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+        user = _auth.verify_user(username, password)
+        if user:
+            session['user_id']  = user['id']
+            session['username'] = user['username']
+            return redirect(url_for('index'))
+        error = '用户名或密码错误'
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
 
 # ── 解析结果缓存（按文件路径+mtime） ───────────────────────────────────────────
 _parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
 _cache_lock  = threading.Lock()
 _CACHE_MAX   = 300
-_DISK_CACHE_DIR = INPUT_DIR / ".cache"
 _weather_cache: dict = {}
 
 
@@ -60,7 +118,8 @@ def _cache_get(path_str: str, mtime: float) -> dict | None:
 
 
 def _disk_cache_load(path_str: str, mtime: float) -> dict | None:
-    cache_file = _DISK_CACHE_DIR / (Path(path_str).name + ".json")
+    cache_dir = Path(path_str).parent / '.cache'
+    cache_file = cache_dir / (Path(path_str).name + ".json")
     try:
         with cache_file.open(encoding="utf-8") as f:
             entry = json.load(f)
@@ -73,8 +132,9 @@ def _disk_cache_load(path_str: str, mtime: float) -> dict | None:
 
 def _disk_cache_save(path_str: str, mtime: float, data: dict) -> None:
     try:
-        _DISK_CACHE_DIR.mkdir(exist_ok=True)
-        cache_file = _DISK_CACHE_DIR / (Path(path_str).name + ".json")
+        cache_dir = Path(path_str).parent / '.cache'
+        cache_dir.mkdir(exist_ok=True)
+        cache_file = cache_dir / (Path(path_str).name + ".json")
         tmp_file   = cache_file.with_suffix(".tmp")
         with tmp_file.open("w", encoding="utf-8") as f:
             json.dump({"mtime": mtime, "data": data}, f)
@@ -253,26 +313,43 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
     return result
 
 
-# ── 同步状态（全局，被后台线程写、前端轮询读） ─────────────────────────────────
+# ── 同步状态（按用户，被后台线程写、前端轮询读） ────────────────────────────────
 _sync_lock = threading.Lock()
-_sync: dict = {
-    "state":     "idle",   # idle | login | fetching | downloading | done | error
-    "message":   "",
-    "total":     0,
-    "done":      0,
-    "new_files": [],
-}
+_sync: dict[str, dict] = {}   # {username: state_dict}
 
 
-def _set_sync(**kw):
+def _default_sync_state() -> dict:
+    return {'state': 'idle', 'message': '', 'total': 0, 'done': 0, 'new_files': []}
+
+
+def _set_sync(username: str, **kw) -> None:
     with _sync_lock:
-        _sync.update(kw)
+        if username not in _sync:
+            _sync[username] = _default_sync_state()
+        _sync[username].update(kw)
 
 
 _MAX_DL_WORKERS = 6
 
 
-def _run_sync(full: bool, limit: int | None):
+def _load_platform_credentials(prefix: str, config_file: Path) -> dict | None:
+    """Load username/password for a sync platform from config.json.
+    prefix is e.g. 'onelap' or 'igpsport'."""
+    if not config_file.exists():
+        return None
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            cfg = json.load(f)
+        username = (cfg.get(f"{prefix}_username") or "").strip()
+        password = (cfg.get(f"{prefix}_password") or "").strip()
+        if username and password:
+            return {"username": username, "password": password}
+    except Exception:
+        pass
+    return None
+
+
+def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, limit: int | None):
     """后台线程：登录顽鹿 → 拉取列表 → 并发下载 FIT。"""
     from fafa.onelap import (
         browser_login, api_login, build_session, fetch_activity_list,
@@ -280,53 +357,55 @@ def _run_sync(full: bool, limit: int | None):
     )
     from fafa.tools.fix_coords import auto_decrypt_if_gcj02
 
+    state_file = input_dir / "download_state.json"
+
     def load_state():
-        if STATE_FILE.exists():
+        if state_file.exists():
             try:
-                return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+                return json.loads(state_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
         return {}
 
     def save_state(st):
-        STATE_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        state_file.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
 
     try:
-        creds = _load_onelap_credentials()
+        creds = _load_platform_credentials("onelap", config_file)
         if creds:
-            _set_sync(state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
+            _set_sync(username, state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
             try:
                 auth = api_login(creds["username"], creds["password"])
             except Exception as e:
-                _set_sync(state="error", message=f"自动登录失败：{e}")
+                _set_sync(username, state="error", message=f"自动登录失败：{e}")
                 return
         else:
-            _set_sync(state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
+            _set_sync(username, state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
             try:
                 auth = browser_login()
             except Exception as e:
-                _set_sync(state="error", message=f"登录失败：{e}")
+                _set_sync(username, state="error", message=f"登录失败：{e}")
                 return
 
         state = {} if full else load_state()
-        if state and not any(INPUT_DIR.glob("*.fit")):
+        if state and not any(input_dir.glob("*.fit")):
             state = {}
         skip_ids = set(state.keys())
         sess     = build_session(auth["token"], auth["cookies"])
 
-        _set_sync(state="fetching", message="正在获取活动列表…")
+        _set_sync(username, state="fetching", message="正在获取活动列表…")
 
         def on_page(pg, col, tot):
-            _set_sync(message=f"获取列表：第 {pg} 页，已找到 {col} 条新活动")
+            _set_sync(username, message=f"获取列表：第 {pg} 页，已找到 {col} 条新活动")
 
         activities = fetch_activity_list(sess, skip_ids, limit, on_page=on_page)
 
         if not activities:
-            _set_sync(state="done", message="没有新活动需要下载", total=0, done=0)
+            _set_sync(username, state="done", message="没有新活动需要下载", total=0, done=0)
             return
 
         total = len(activities)
-        _set_sync(state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
+        _set_sync(username, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
 
         new_files: list[str] = []
         done_count = 0
@@ -336,14 +415,11 @@ def _run_sync(full: bool, limit: int | None):
             rid  = activity_id(act)
             t    = parse_activity_time(act)
             tstr = t.strftime("%Y-%m-%d %H:%M") if t else rid
-            # 如果活动已在 state 中标记为已下载，直接走 download_activity 的早返回路径，
-            # 无需再做 decrypt/rename（上次同步时已处理）。
             already_done = bool(state.get(rid, {}).get("downloaded"))
             try:
-                path = download_activity(sess, act, state, INPUT_DIR,
+                path = download_activity(sess, act, state, input_dir,
                                          skip_rename=not already_done)
                 if path and not already_done:
-                    # 仅对本次实际下载的文件执行：单次 FIT 解析完成版本检查+解密+提取型号
                     is_fresh = state.get(rid, {}).get("downloaded_at") is not None
                     if is_fresh:
                         try:
@@ -370,10 +446,11 @@ def _run_sync(full: bool, limit: int | None):
                     dc = done_count
                     if path:
                         new_files.append(path.name)
-                _set_sync(message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
+                _set_sync(username, message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
 
         save_state(state)
         _set_sync(
+            username,
             state="done",
             message=f"同步完成，新增 {len(new_files)} 个文件",
             done=total,
@@ -381,46 +458,46 @@ def _run_sync(full: bool, limit: int | None):
         )
 
     except Exception as e:
-        _set_sync(state="error", message=f"同步出错：{e}")
+        _set_sync(username, state="error", message=f"同步出错：{e}")
 
 
-def _run_igpsport_sync(full: bool):
+def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: bool):
     """后台线程：登录 iGPSport → 拉取列表 → 下载 FIT。"""
     from fafa.igpsport import IGPSportClient, make_filename, ride_id_exists, _parse_start_time
 
     try:
-        creds = _load_igpsport_credentials()
+        creds = _load_platform_credentials("igpsport", config_file)
         if not creds:
-            _set_sync(state="error", message="iGPSport 未配置账号密码，请在设置中填写")
+            _set_sync(username, state="error", message="iGPSport 未配置账号密码，请在设置中填写")
             return
 
-        _set_sync(state="login", message="正在登录 iGPSport…", total=0, done=0, new_files=[])
+        _set_sync(username, state="login", message="正在登录 iGPSport…", total=0, done=0, new_files=[])
         client = IGPSportClient(creds["username"], creds["password"])
         try:
             client.login()
         except Exception as e:
-            _set_sync(state="error", message=f"iGPSport 登录失败：{e}")
+            _set_sync(username, state="error", message=f"iGPSport 登录失败：{e}")
             return
 
-        _set_sync(state="fetching", message="正在获取 iGPSport 活动列表…")
+        _set_sync(username, state="fetching", message="正在获取 iGPSport 活动列表…")
         try:
             activities = client.get_all_activities()
         except Exception as e:
-            _set_sync(state="error", message=f"获取活动列表失败：{e}")
+            _set_sync(username, state="error", message=f"获取活动列表失败：{e}")
             return
 
         if not full:
             activities = [
                 act for act in activities
-                if not ride_id_exists(str(act.get("rideId", "")), INPUT_DIR)
+                if not ride_id_exists(str(act.get("rideId", "")), input_dir)
             ]
 
         if not activities:
-            _set_sync(state="done", message="没有新活动需要下载", total=0, done=0)
+            _set_sync(username, state="done", message="没有新活动需要下载", total=0, done=0)
             return
 
         total = len(activities)
-        _set_sync(state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
+        _set_sync(username, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
 
         new_files: list[str] = []
         failed = 0
@@ -429,7 +506,7 @@ def _run_igpsport_sync(full: bool):
             ride_id = str(act.get("rideId", ""))
             start_time = _parse_start_time(act)
             filename = make_filename(ride_id, start_time)
-            dst_path = INPUT_DIR / filename
+            dst_path = input_dir / filename
             ts_str = start_time.strftime("%Y-%m-%d %H:%M") if start_time else ride_id
 
             try:
@@ -439,24 +516,26 @@ def _run_igpsport_sync(full: bool):
                 failed += 1
                 logging.warning("iGPSport 下载 %s 失败: %s", ride_id, e)
 
-            _set_sync(message=f"[{i}/{total}] {ts_str}", done=i, new_files=list(new_files))
+            _set_sync(username, message=f"[{i}/{total}] {ts_str}", done=i, new_files=list(new_files))
 
         msg = f"同步完成，新增 {len(new_files)} 个文件"
         if failed:
             msg += f"，{failed} 个下载失败"
-        _set_sync(state="done", message=msg, done=total, new_files=new_files)
+        _set_sync(username, state="done", message=msg, done=total, new_files=new_files)
 
     except Exception as e:
-        _set_sync(state="error", message=f"同步出错：{e}")
+        _set_sync(username, state="error", message=f"同步出错：{e}")
 
 
-# ── 路由：原有功能 ─────────────────────────────────────────────────────────────
+# ── 路由：主页 ─────────────────────────────────────────────────────────────────
 @app.route("/")
+@_auth.login_required
 def index():
-    return render_template("index.html")
+    return render_template("index.html", username=g.username)
 
 
 @app.route("/api/upload", methods=["POST"])
+@_auth.login_required
 def upload():
     f = request.files.get("file")
     if not f:
@@ -482,13 +561,15 @@ def upload():
 
 # ── 路由：文件库 ──────────────────────────────────────────────────────────────
 @app.route("/api/files")
+@_auth.login_required
 def list_files():
-    """列出 input/ 目录下所有 .fit 文件（按修改时间倒序）。"""
-    if not INPUT_DIR.exists():
+    """列出用户 input/<username>/ 目录下所有 .fit 文件（按修改时间倒序）。"""
+    input_dir = _user_input_dir()
+    if not input_dir.exists():
         return jsonify(files=[])
 
     files = []
-    for p in sorted(INPUT_DIR.glob("*.fit"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in sorted(input_dir.glob("*.fit"), key=lambda x: x.stat().st_mtime, reverse=True):
         st = p.stat()
         files.append({
             "filename": p.name,
@@ -499,32 +580,36 @@ def list_files():
 
 
 @app.route("/api/files/delete", methods=["POST"])
+@_auth.login_required
 def delete_file():
-    """删除 input/ 中单个 .fit 文件，同步清理内存和磁盘缓存。"""
+    """删除用户 input/<username>/ 中单个 .fit 文件，同步清理内存和磁盘缓存。"""
+    input_dir = _user_input_dir()
     body     = request.get_json(silent=True) or {}
     filename = body.get("filename", "")
     if not filename or not filename.endswith(".fit"):
         return jsonify(error="invalid filename"), 400
-    path = (INPUT_DIR / filename).resolve()
-    if path.parent != INPUT_DIR.resolve():
+    path = (input_dir / filename).resolve()
+    if path.parent != input_dir.resolve():
         return jsonify(error="invalid path"), 403
     try:
         path.unlink(missing_ok=True)
         with _cache_lock:
             _parse_cache.pop(str(path), None)
-        (_DISK_CACHE_DIR / (filename + ".json")).unlink(missing_ok=True)
+        (input_dir / ".cache" / (filename + ".json")).unlink(missing_ok=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
     return jsonify(deleted=1)
 
 
 @app.route("/api/files/delete_all", methods=["POST"])
+@_auth.login_required
 def delete_all_files():
-    """删除 input/ 目录下所有 .fit 文件。"""
-    if not INPUT_DIR.exists():
+    """删除用户 input/<username>/ 目录下所有 .fit 文件。"""
+    input_dir = _user_input_dir()
+    if not input_dir.exists():
         return jsonify(deleted=0)
     deleted = 0
-    for p in INPUT_DIR.glob("*.fit"):
+    for p in input_dir.glob("*.fit"):
         try:
             p.unlink()
             deleted += 1
@@ -534,16 +619,18 @@ def delete_all_files():
 
 
 @app.route("/api/load", methods=["POST"])
+@_auth.login_required
 def load_file():
-    """从 input/ 目录加载指定文件（安全检查：只允许加载 input/ 内的 .fit）。"""
+    """从用户 input/<username>/ 目录加载指定文件（安全检查：只允许加载目录内的 .fit）。"""
+    input_dir = _user_input_dir()
     body = request.get_json(silent=True) or {}
     filename = body.get("filename", "")
 
     if not filename or not filename.lower().endswith(".fit"):
         return jsonify(error="无效的文件名"), 400
 
-    path = (INPUT_DIR / filename).resolve()
-    if path.parent != INPUT_DIR.resolve():
+    path = (input_dir / filename).resolve()
+    if path.parent != input_dir.resolve():
         return jsonify(error="非法路径"), 403
     if not path.exists():
         return jsonify(error="文件不存在"), 404
@@ -559,12 +646,14 @@ def load_file():
 
 
 @app.route("/api/records/<path:filename>")
+@_auth.login_required
 def get_records(filename):
     """Return raw FIT record data for detail-view charting (real-time x-axis)."""
+    input_dir = _user_input_dir()
     if not filename.lower().endswith(".fit"):
         return jsonify(error="invalid filename"), 400
-    path = (INPUT_DIR / filename).resolve()
-    if path.parent != INPUT_DIR.resolve():
+    path = (input_dir / filename).resolve()
+    if path.parent != input_dir.resolve():
         return jsonify(error="forbidden"), 403
     if not path.exists():
         return jsonify(error="not found"), 404
@@ -595,7 +684,9 @@ def get_records(filename):
 
 # ── 路由：坐标写回 ─────────────────────────────────────────────────────────────
 @app.route("/api/fix_coords", methods=["POST"])
+@_auth.login_required
 def fix_coords_api():
+    input_dir = _user_input_dir()
     body     = request.get_json(silent=True) or {}
     filename = body.get("filename", "")
     method   = body.get("method", "")
@@ -605,8 +696,8 @@ def fix_coords_api():
     if method not in ("decrypt", "encrypt"):
         return jsonify(error="method 必须是 decrypt 或 encrypt"), 400
 
-    path = (INPUT_DIR / filename).resolve()
-    if path.parent != INPUT_DIR.resolve():
+    path = (input_dir / filename).resolve()
+    if path.parent != input_dir.resolve():
         return jsonify(error="非法路径"), 403
     if not path.exists():
         return jsonify(error="文件不存在"), 404
@@ -616,8 +707,6 @@ def fix_coords_api():
         original_mtime = path.stat().st_mtime
         fix_file(path, path, method)
         os.utime(path, (original_mtime, original_mtime))
-        # Mtime was reset to its original value so the cache key still matches —
-        # explicitly evict the stale entry so the next load reads fresh data.
         with _cache_lock:
             _parse_cache.pop(str(path), None)
         return jsonify(ok=True)
@@ -627,16 +716,18 @@ def fix_coords_api():
 
 # ── 路由：全量导出 JSON ────────────────────────────────────────────────────────
 @app.route("/api/export/all")
+@_auth.login_required
 def export_all():
-    """导出 input/ 下所有 FIT 文件的解析结果为 JSON 文件（供 AI 使用）。"""
+    """导出用户 input/<username>/ 下所有 FIT 文件的解析结果为 JSON 文件（供 AI 使用）。"""
+    input_dir = _user_input_dir()
     no_km = request.args.get("no_km_stats", "0") == "1"
     try:
         min_km = float(request.args.get("min_km", "0") or "0")
     except ValueError:
         return jsonify(error="min_km 参数无效"), 400
 
-    if not INPUT_DIR.exists():
-        return jsonify(error="input/ 目录不存在"), 404
+    if not input_dir.exists():
+        return jsonify(error="用户数据目录不存在"), 404
 
     def _strip_nulls(obj):
         if isinstance(obj, dict):
@@ -645,7 +736,7 @@ def export_all():
             return [_strip_nulls(i) for i in obj]
         return obj
 
-    fit_files = sorted(INPUT_DIR.glob("*.fit"))
+    fit_files = sorted(input_dir.glob("*.fit"))
     activities = []
 
     for path in fit_files:
@@ -664,7 +755,6 @@ def export_all():
         if min_km > 0 and (summary_d.get("total_dist_km") or 0) < min_km:
             continue
 
-        # 从文件名提取日期（旧格式 _YYYYMMDD-HHMMSS_ 或新格式 _id_YYYYMMDD-HHMMSS）
         m = re.search(r"Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_|\d+_(\d{8}-\d{6}))", path.name)
         if m:
             date_str = datetime.strptime(m.group(1) or m.group(2), "%Y%m%d-%H%M%S").strftime("%Y-%m-%dT%H:%M:%S")
@@ -706,11 +796,15 @@ def export_all():
     )
 
 
-# ── 路由：顽鹿同步 ────────────────────────────────────────────────────────────
+# ── 路由：顽鹿同步（alias） ───────────────────────────────────────────────────
 @app.route("/api/onelap/sync", methods=["POST"])
+@_auth.login_required
 def onelap_sync():
+    username  = g.username
+    input_dir = _user_input_dir()
     with _sync_lock:
-        if _sync["state"] in ("login", "fetching", "downloading"):
+        state = _sync.get(username, _default_sync_state())
+        if state["state"] in ("login", "fetching", "downloading"):
             return jsonify(error="同步正在进行中"), 409
 
     body  = request.get_json(silent=True) or {}
@@ -722,21 +816,27 @@ def onelap_sync():
         except (TypeError, ValueError):
             limit = None
 
-    t = threading.Thread(target=_run_sync, args=(full, limit), daemon=True)
+    config_file = _user_config_file()
+    t = threading.Thread(target=_run_sync, args=(username, input_dir, config_file, full, limit), daemon=True)
     t.start()
     return jsonify(ok=True)
 
 
 @app.route("/api/onelap/status")
+@_auth.login_required
 def onelap_status():
     with _sync_lock:
-        return jsonify(**_sync)
+        return jsonify(**_sync.get(g.username, _default_sync_state()))
 
 
 @app.route("/api/sync/start", methods=["POST"])
+@_auth.login_required
 def sync_start():
+    username  = g.username
+    input_dir = _user_input_dir()
     with _sync_lock:
-        if _sync["state"] in ("login", "fetching", "downloading"):
+        state = _sync.get(username, _default_sync_state())
+        if state["state"] in ("login", "fetching", "downloading"):
             return jsonify(error="同步正在进行中"), 409
 
     body     = request.get_json(silent=True) or {}
@@ -749,61 +849,37 @@ def sync_start():
         except (TypeError, ValueError):
             limit = None
 
+    config_file = _user_config_file()
     if platform == "igpsport":
-        t = threading.Thread(target=_run_igpsport_sync, args=(full,), daemon=True)
+        t = threading.Thread(target=_run_igpsport_sync, args=(username, input_dir, config_file, full), daemon=True)
     else:
-        t = threading.Thread(target=_run_sync, args=(full, limit), daemon=True)
+        t = threading.Thread(target=_run_sync, args=(username, input_dir, config_file, full, limit), daemon=True)
     t.start()
     return jsonify(ok=True)
 
 
 @app.route("/api/sync/status")
+@_auth.login_required
 def sync_status():
     with _sync_lock:
-        return jsonify(**_sync)
+        return jsonify(**_sync.get(g.username, _default_sync_state()))
 
 
 # ── AI 骑行评估 ───────────────────────────────────────────────────────────────
-AI_CONFIG_FILE = PROJECT_ROOT / "config.json"
 
-
-def _load_ai_config() -> dict | None:
-    if not AI_CONFIG_FILE.exists():
+def _get_ai_config() -> dict | None:
+    config_file = _user_config_file()
+    if not config_file.exists():
         return None
     try:
-        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+        with open(config_file, encoding='utf-8') as f:
             cfg = json.load(f)
-        key = (cfg.get("api_key") or "").strip()
-        if not key or key.startswith("your-"):
+        key = (cfg.get('api_key') or '').strip()
+        if not key or key.startswith('your-'):
             return None
         return cfg
     except Exception:
         return None
-
-
-def _load_platform_credentials(prefix: str) -> dict | None:
-    """Load username/password for a sync platform from config.json.
-    prefix is e.g. 'onelap' or 'igpsport'."""
-    if not AI_CONFIG_FILE.exists():
-        return None
-    try:
-        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
-            cfg = json.load(f)
-        username = (cfg.get(f"{prefix}_username") or "").strip()
-        password = (cfg.get(f"{prefix}_password") or "").strip()
-        if username and password:
-            return {"username": username, "password": password}
-    except Exception:
-        pass
-    return None
-
-
-def _load_onelap_credentials() -> dict | None:
-    return _load_platform_credentials("onelap")
-
-
-def _load_igpsport_credentials() -> dict | None:
-    return _load_platform_credentials("igpsport")
 
 
 def _wind_dir_label(deg: float) -> str:
@@ -819,17 +895,10 @@ def _wind_stats(
 ) -> dict:
     """
     Compute headwind/tailwind/crosswind percentages from GPS track and hourly wind data.
-
-    coords       : [[lat, lon], ...] — any CRS, used only for bearing (tiny offset OK)
-    start_time_utc: ISO-8601 UTC string, e.g. "2025-08-20T10:40:34Z"
-    km_stats     : list of dicts with 'duration_s' key
-    hourly       : Open-Meteo response['hourly'] with keys time / windspeed_10m /
-                   winddirection_10m / windgusts_10m
     """
     start_dt = datetime.fromisoformat(start_time_utc.replace("Z", "+00:00"))
     total_s = sum(s.get("duration_s", 0) for s in km_stats) if km_stats else 0
 
-    # Build hourly lookup keyed by integer epoch-hour
     times  = hourly.get("time", [])
     speeds = hourly.get("windspeed_10m", [])
     dirs   = hourly.get("winddirection_10m", [])
@@ -844,7 +913,6 @@ def _wind_stats(
             gusts[i]  if i < len(gusts)  else None,
         )
 
-    # Cumulative distance per coord index (metres, flat-earth approximation)
     n = len(coords)
     cum_dist = [0.0]
     for i in range(1, n):
@@ -865,7 +933,6 @@ def _wind_stats(
         if seg < 1:
             continue
 
-        # Estimate elapsed seconds at segment midpoint
         mid = (cum_dist[i - 1] + cum_dist[i]) / 2
         elapsed = (mid / total_dist * total_s) if total_dist > 0 else 0
 
@@ -877,13 +944,11 @@ def _wind_stats(
         if w_spd is None or w_dir is None:
             continue
 
-        # Bearing of travel: atan2(dlon, dlat) → 0=N, 90=E, 180=S, 270=W
         dlat = coords[i][0] - coords[i - 1][0]
         dlon = coords[i][1] - coords[i - 1][1]
         lat_m = math.radians((coords[i][0] + coords[i - 1][0]) / 2)
         bearing = (math.degrees(math.atan2(dlon * math.cos(lat_m), dlat)) + 360) % 360
 
-        # Relative angle between travel direction and wind-from direction
         rel = (bearing - w_dir + 360) % 360
         if rel < 45 or rel > 315:
             head += seg
@@ -905,7 +970,7 @@ def _wind_stats(
 
     head_pct  = round(100 * head  / classified)
     tail_pct  = round(100 * tail  / classified)
-    cross_pct = 100 - head_pct - tail_pct  # ensure sum == 100
+    cross_pct = 100 - head_pct - tail_pct
 
     avg_spd = round(spd_sum / spd_n, 1)
     avg_dir = (math.degrees(math.atan2(dir_sin / spd_n, dir_cos / spd_n)) + 360) % 360
@@ -1172,16 +1237,19 @@ def _build_compare_prompt(activities: list) -> str:
 
 
 @app.route("/api/ai/config")
+@_auth.login_required
 def ai_config_status():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if cfg:
         return jsonify(configured=True, model=cfg.get("model", ""))
     return jsonify(configured=False, model="")
 
 
 @app.route("/api/config/raw", methods=["GET"])
+@_auth.login_required
 def get_config_raw():
-    if not AI_CONFIG_FILE.exists():
+    config_file = _user_config_file()
+    if not config_file.exists():
         template = PROJECT_ROOT / "config.template.json"
         if template.exists():
             with open(template, encoding="utf-8") as f:
@@ -1190,28 +1258,30 @@ def get_config_raw():
         else:
             data = {}
         return jsonify(data)
-    with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+    with open(config_file, encoding="utf-8") as f:
         data = json.load(f)
     data.pop("_comment", None)
     return jsonify(data)
 
 
 @app.route("/api/config/raw", methods=["POST"])
+@_auth.login_required
 def save_config_raw():
+    config_file = _user_config_file()
     data = request.get_json(force=True, silent=True)
     if data is None:
         return jsonify(error="invalid JSON"), 400
     existing: dict = {}
-    if AI_CONFIG_FILE.exists():
+    if config_file.exists():
         try:
-            with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+            with open(config_file, encoding="utf-8") as f:
                 existing = json.load(f)
         except Exception:
             pass
     _READONLY_KEYS = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
     filtered = {k: v for k, v in data.items() if k not in _READONLY_KEYS}
     existing.update(filtered)
-    with open(AI_CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(config_file, "w", encoding="utf-8") as f:
         json.dump(existing, f, ensure_ascii=False, indent=2)
     return jsonify(ok=True)
 
@@ -1268,10 +1338,11 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
 
 
 @app.route("/api/ai/evaluate", methods=["POST"])
+@_auth.login_required
 def ai_evaluate():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
+        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
     body = request.get_json(silent=True) or {}
     prompt = _build_eval_prompt(
         body.get("summary") or {}, body.get("km_stats") or [],
@@ -1283,10 +1354,11 @@ def ai_evaluate():
 
 
 @app.route("/api/ai/chat", methods=["POST"])
+@_auth.login_required
 def ai_chat():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
+        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
     body = request.get_json(silent=True) or {}
     messages = body.get("messages") or []
     if not messages:
@@ -1295,10 +1367,11 @@ def ai_chat():
 
 
 @app.route("/api/ai/compare", methods=["POST"])
+@_auth.login_required
 def ai_compare():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
+        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
     body       = request.get_json(silent=True) or {}
     activities = body.get("activities") or []
     if len(activities) < 2:
@@ -1309,20 +1382,20 @@ def ai_compare():
 
 
 @app.route("/api/weather/<path:filename>")
+@_auth.login_required
 def weather_for_activity(filename: str):
     from fafa.gcj02 import gcj02_to_wgs84
     import requests as _req
 
+    input_dir = _user_input_dir()
     if not filename.lower().endswith(".fit"):
         return jsonify(available=False)
 
-    # Security: prevent path traversal
-    path = (INPUT_DIR / filename).resolve()
-    if path.parent != INPUT_DIR.resolve():
+    path = (input_dir / filename).resolve()
+    if path.parent != input_dir.resolve():
         return jsonify(error="非法路径"), 403
 
-    # Weather result cache: keyed on (filename, mtime) to survive FIT file updates
-    _wkey = (filename, path.stat().st_mtime if path.exists() else 0)
+    _wkey = (str(path), path.stat().st_mtime if path.exists() else 0)
     if _wkey in _weather_cache:
         return jsonify(_weather_cache[_wkey])
 
@@ -1345,7 +1418,6 @@ def weather_for_activity(filename: str):
     if not coords or not start_time_utc:
         return jsonify(available=False)
 
-    # WGS-84 start point for API request
     lat, lon = coords[0]
     if is_gcj02:
         lat, lon = gcj02_to_wgs84(lat, lon)
@@ -1397,12 +1469,15 @@ def weather_for_activity(filename: str):
 
 # ── 活动列表（PMC 数据源） ────────────────────────────────────────────────────
 @app.route("/api/activities")
+@_auth.login_required
 def get_activities():
-    """返回 input/ 中所有 FIT 文件的轻量摘要，供 PMC 页面计算使用。"""
-    if not INPUT_DIR.exists():
+    """返回用户 input/<username>/ 中所有 FIT 文件的轻量摘要，供 PMC 页面计算使用。"""
+    input_dir = _user_input_dir()
+    db_path   = _user_db_path()
+    if not input_dir.exists():
         return jsonify(activities=[])
 
-    paths = list(INPUT_DIR.glob("*.fit"))
+    paths = list(input_dir.glob("*.fit"))
 
     def _load_one(path):
         path_str = str(path)
@@ -1435,7 +1510,7 @@ def get_activities():
     with ThreadPoolExecutor(max_workers=workers) as pool:
         items = pool.map(_load_one, paths)
 
-    all_tags = _db.get_all_activity_tags()
+    all_tags = _db.get_all_activity_tags(db_path=db_path)
     result = sorted(
         (x for x in items if x is not None),
         key=lambda a: a["start_time"],
@@ -1531,8 +1606,9 @@ def _build_pmc_prompt(data: dict) -> str:
 
 
 @app.route("/api/ai/pmc", methods=["POST"])
+@_auth.login_required
 def ai_pmc():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if not cfg:
         return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
@@ -1609,8 +1685,9 @@ def _build_calendar_prompt(data: dict) -> str:
 
 
 @app.route("/api/ai/calendar", methods=["POST"])
+@_auth.login_required
 def ai_calendar():
-    cfg = _load_ai_config()
+    cfg = _get_ai_config()
     if not cfg:
         return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
@@ -1620,33 +1697,45 @@ def ai_calendar():
 
 # ── Strava ───────────────────────────────────────────────────────────────────
 
-_strava_upload: dict = {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}
+_strava_upload: dict[str, dict] = {}   # {username: state_dict}
 _strava_lock = threading.Lock()
 
 
-def _run_strava_upload(filenames: list[str], force: bool):
-    global _strava_upload
+def _run_strava_upload(username: str, input_dir: Path, config_file: Path,
+                       filenames: list[str], force: bool):
     with _strava_lock:
-        _strava_upload = {"state": "uploading", "current": "", "done": 0,
-                          "total": len(filenames), "results": []}
+        _strava_upload[username] = {"state": "uploading", "current": "", "done": 0,
+                                    "total": len(filenames), "results": []}
 
     def on_progress(filename, done, total):
         with _strava_lock:
-            _strava_upload["current"] = filename
-            _strava_upload["done"] = done
+            if username in _strava_upload:
+                _strava_upload[username]["current"] = filename
+                _strava_upload[username]["done"] = done
 
     try:
-        summary = _strava.upload_files(filenames, force=force, progress_cb=on_progress)
+        summary = _strava.upload_files(filenames, force=force, progress_cb=on_progress,
+                                       input_dir=input_dir, config_file=config_file)
         with _strava_lock:
-            _strava_upload.update({"state": "done", "done": len(filenames), **summary})
+            _strava_upload[username] = {
+                **_strava_upload.get(username, {}),
+                "state": "done",
+                "done": len(filenames),
+                **summary,
+            }
     except Exception as e:
         kind, _ = _strava.classify_error(str(e))
         with _strava_lock:
-            _strava_upload.update({"state": "error", "error": str(e),
-                                   "auth_error": kind == "auth"})
+            _strava_upload[username] = {
+                **_strava_upload.get(username, {}),
+                "state": "error",
+                "error": str(e),
+                "auth_error": kind == "auth",
+            }
 
 
 @app.route("/strava/callback")
+@_auth.login_required
 def strava_callback():
     code = request.args.get("code", "")
     error = request.args.get("error", "")
@@ -1655,7 +1744,7 @@ def strava_callback():
     if not code:
         return "<html><body><p>未收到授权码</p></body></html>", 400
     try:
-        info = _strava.exchange_code(code)
+        info = _strava.exchange_code(code, config_file=_user_config_file())
         name = _html_escape(info.get("athlete_name") or "未知")
         return (
             f"<html><body><p>Strava 授权成功！账号: {name}</p>"
@@ -1668,8 +1757,9 @@ def strava_callback():
 
 
 @app.route("/api/strava/status")
+@_auth.login_required
 def strava_status():
-    cfg = _strava.load_config()
+    cfg = _strava.load_config(config_file=_user_config_file())
     if not cfg:
         return jsonify(configured=False, has_tokens=False)
     return jsonify(
@@ -1681,13 +1771,16 @@ def strava_status():
 
 
 @app.route("/api/strava/diff")
+@_auth.login_required
 def strava_diff():
     """Compare local FIT files against Strava activities by start time (±60 s).
 
     Returns {to_upload, local_count, strava_count, match_count}.
     """
+    input_dir   = _user_input_dir()
+    config_file = _user_config_file()
     try:
-        token = _strava.get_access_token()
+        token = _strava.get_access_token(config_file=config_file)
     except Exception as e:
         kind, _ = _strava.classify_error(str(e))
         return jsonify(error=str(e), auth_error=kind == "auth"), 400
@@ -1699,22 +1792,19 @@ def strava_diff():
         return jsonify(error=f"获取 Strava 活动列表失败：{e}",
                        auth_error=kind == "auth"), 502
 
-    # Build two lookup structures: exact filename set + sorted start times fallback.
     strava_external_ids = {a["external_id"] for a in strava_acts if a["external_id"]}
     strava_times = sorted(a["start_unix"] for a in strava_acts)
 
-    paths = list(INPUT_DIR.glob("*.fit"))
+    paths = list(input_dir.glob("*.fit"))
     to_upload: list[str] = []
     match_count = 0
 
     for path in paths:
         try:
-            # Primary match: external_id == filename (set when we uploaded via this app).
             if path.name in strava_external_ids:
                 match_count += 1
                 continue
 
-            # Fallback: start time ±60 s (covers activities uploaded elsewhere).
             mtime = path.stat().st_mtime
             cached = _cache_get(str(path), mtime) or _disk_cache_load(str(path), mtime)
             ts_utc = (cached or {}).get("start_time_utc")
@@ -1744,18 +1834,21 @@ def strava_diff():
 
 
 @app.route("/api/strava/auth_url")
+@_auth.login_required
 def strava_auth_url():
     try:
-        url = _strava.build_auth_url(port=5173)
+        url = _strava.build_auth_url(port=5173, config_file=_user_config_file())
         return jsonify(url=url)
     except Exception as e:
         return jsonify(error=str(e)), 400
 
 
 @app.route("/api/strava/upload", methods=["POST"])
+@_auth.login_required
 def strava_upload():
+    username = g.username
     with _strava_lock:
-        if _strava_upload["state"] == "uploading":
+        if _strava_upload.get(username, {}).get("state") == "uploading":
             return jsonify(error="上传正在进行中"), 409
 
     body = request.get_json(silent=True) or {}
@@ -1764,37 +1857,45 @@ def strava_upload():
     if not filenames:
         return jsonify(error="未指定文件"), 400
 
-    t = threading.Thread(target=_run_strava_upload, args=(filenames, force), daemon=True)
+    input_dir   = _user_input_dir()
+    config_file = _user_config_file()
+    t = threading.Thread(target=_run_strava_upload,
+                         args=(username, input_dir, config_file, filenames, force),
+                         daemon=True)
     t.start()
     return jsonify(ok=True)
 
 
 @app.route("/api/strava/upload/status")
+@_auth.login_required
 def strava_upload_status():
     with _strava_lock:
-        return jsonify(**_strava_upload)
+        return jsonify(**_strava_upload.get(g.username, {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}))
 
 
 # ── 活动元数据（备注 + 标签） ─────────────────────────────────────────────────
 
 @app.route("/api/meta/<path:filename>")
+@_auth.login_required
 def get_meta(filename):
     if not filename.lower().endswith(".fit"):
         return jsonify(error="invalid filename"), 400
-    return jsonify(**_db.get_activity_meta(filename))
+    return jsonify(**_db.get_activity_meta(filename, db_path=_user_db_path()))
 
 
 @app.route("/api/meta/<path:filename>/note", methods=["POST"])
+@_auth.login_required
 def save_note(filename):
     if not filename.lower().endswith(".fit"):
         return jsonify(error="invalid filename"), 400
     body = request.get_json(silent=True) or {}
     note = body.get("note", "")
-    _db.save_note(filename, note)
+    _db.save_note(filename, note, db_path=_user_db_path())
     return jsonify(ok=True)
 
 
 @app.route("/api/meta/<path:filename>/tags", methods=["POST"])
+@_auth.login_required
 def save_tags(filename):
     if not filename.lower().endswith(".fit"):
         return jsonify(error="invalid filename"), 400
@@ -1804,12 +1905,14 @@ def save_tags(filename):
         return jsonify(error="tag_ids must be a list"), 400
     if not all(isinstance(t, int) for t in tag_ids):
         return jsonify(error="tag_ids must be integers"), 400
-    _db.save_tags(filename, tag_ids)
+    _db.save_tags(filename, tag_ids, db_path=_user_db_path())
     return jsonify(ok=True)
 
 
 @app.route("/api/meta/batch/tags", methods=["POST"])
+@_auth.login_required
 def batch_save_tags():
+    db_path = _user_db_path()
     body = request.get_json(silent=True) or {}
     filenames    = body.get("filenames", [])
     add_ids      = body.get("add_tag_ids", [])
@@ -1826,20 +1929,22 @@ def batch_save_tags():
     for filename in filenames:
         if not isinstance(filename, str) or not filename.lower().endswith(".fit"):
             continue
-        meta     = _db.get_activity_meta(filename)
+        meta     = _db.get_activity_meta(filename, db_path=db_path)
         cur_ids  = {t["id"] for t in meta["tags"]}
         new_ids  = list((cur_ids | set(add_ids)) - set(remove_ids))
-        _db.save_tags(filename, new_ids)
+        _db.save_tags(filename, new_ids, db_path=db_path)
         updated += 1
     return jsonify(ok=True, updated=updated)
 
 
 @app.route("/api/tags")
+@_auth.login_required
 def list_tags():
-    return jsonify(tags=_db.get_all_tags())
+    return jsonify(tags=_db.get_all_tags(db_path=_user_db_path()))
 
 
 @app.route("/api/tags", methods=["POST"])
+@_auth.login_required
 def create_tag():
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
@@ -1847,15 +1952,16 @@ def create_tag():
     if not name:
         return jsonify(error="name required"), 400
     try:
-        tag = _db.create_tag(name, color)
+        tag = _db.create_tag(name, color, db_path=_user_db_path())
         return jsonify(tag=tag), 201
     except ValueError as e:
         return jsonify(error=str(e)), 409
 
 
 @app.route("/api/tags/<int:tag_id>", methods=["DELETE"])
+@_auth.login_required
 def delete_tag(tag_id):
-    ok = _db.delete_tag(tag_id)
+    ok = _db.delete_tag(tag_id, db_path=_user_db_path())
     if not ok:
         return jsonify(error="preset tags cannot be deleted"), 403
     return jsonify(ok=True)

@@ -16,10 +16,16 @@ _PRESET_TAGS = [
 ]
 
 
-def init_db(input_dir: Path) -> None:
-    global _DB_PATH
-    _DB_PATH = input_dir / "fafa.db"
-    with _connect() as conn:
+def _connect(db_path: Path | None = None) -> sqlite3.Connection:
+    path = db_path or _DB_PATH
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _ensure_schema(db_path: Path) -> None:
+    """Create tables and seed preset tags if not present. Idempotent."""
+    with _connect(db_path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS activity_meta (
                 filename   TEXT PRIMARY KEY,
@@ -46,14 +52,14 @@ def init_db(input_dir: Path) -> None:
             )
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+def init_db(input_dir: Path) -> None:
+    global _DB_PATH
+    _DB_PATH = input_dir / "fafa.db"
+    _ensure_schema(_DB_PATH)
 
 
-def get_activity_meta(filename: str) -> dict:
-    with _db_lock, _connect() as conn:
+def get_activity_meta(filename: str, db_path: Path | None = None) -> dict:
+    with _db_lock, _connect(db_path) as conn:
         row = conn.execute(
             "SELECT note FROM activity_meta WHERE filename = ?", (filename,)
         ).fetchone()
@@ -70,8 +76,8 @@ def get_activity_meta(filename: str) -> dict:
         }
 
 
-def save_note(filename: str, note: str) -> None:
-    with _db_lock, _connect() as conn:
+def save_note(filename: str, note: str, db_path: Path | None = None) -> None:
+    with _db_lock, _connect(db_path) as conn:
         conn.execute(
             """INSERT INTO activity_meta (filename, note, updated_at)
                VALUES (?, ?, datetime('now'))
@@ -81,8 +87,8 @@ def save_note(filename: str, note: str) -> None:
         )
 
 
-def save_tags(filename: str, tag_ids: list) -> None:
-    with _db_lock, _connect() as conn:
+def save_tags(filename: str, tag_ids: list, db_path: Path | None = None) -> None:
+    with _db_lock, _connect(db_path) as conn:
         conn.execute("DELETE FROM activity_tags WHERE filename = ?", (filename,))
         for tid in tag_ids:
             conn.execute(
@@ -91,8 +97,8 @@ def save_tags(filename: str, tag_ids: list) -> None:
             )
 
 
-def get_all_tags() -> list:
-    with _db_lock, _connect() as conn:
+def get_all_tags(db_path: Path | None = None) -> list:
+    with _db_lock, _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, name, color, is_preset FROM tags ORDER BY is_preset DESC, id"
         ).fetchall()
@@ -102,8 +108,8 @@ def get_all_tags() -> list:
         ]
 
 
-def create_tag(name: str, color: str) -> dict:
-    with _db_lock, _connect() as conn:
+def create_tag(name: str, color: str, db_path: Path | None = None) -> dict:
+    with _db_lock, _connect(db_path) as conn:
         try:
             cur = conn.execute(
                 "INSERT INTO tags (name, color, is_preset) VALUES (?, ?, 0)", (name, color)
@@ -113,8 +119,8 @@ def create_tag(name: str, color: str) -> dict:
         return {"id": cur.lastrowid, "name": name, "color": color, "is_preset": False}
 
 
-def delete_tag(tag_id: int) -> bool:
-    with _db_lock, _connect() as conn:
+def delete_tag(tag_id: int, db_path: Path | None = None) -> bool:
+    with _db_lock, _connect(db_path) as conn:
         row = conn.execute("SELECT is_preset FROM tags WHERE id = ?", (tag_id,)).fetchone()
         if not row or row["is_preset"]:
             return False
@@ -123,9 +129,9 @@ def delete_tag(tag_id: int) -> bool:
         return True
 
 
-def get_all_activity_tags() -> dict:
+def get_all_activity_tags(db_path: Path | None = None) -> dict:
     """Return {filename: [tag dicts]} for all activities that have tags."""
-    with _db_lock, _connect() as conn:
+    with _db_lock, _connect(db_path) as conn:
         rows = conn.execute(
             """SELECT at.filename, t.id, t.name, t.color
                FROM activity_tags at JOIN tags t ON t.id = at.tag_id"""

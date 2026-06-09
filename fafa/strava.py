@@ -28,12 +28,13 @@ DATA_TYPE_MAP = {".fit": "fit", ".gpx": "gpx", ".tcx": "tcx"}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-def load_config() -> dict | None:
+def load_config(config_file: Path | None = None) -> dict | None:
     """Return Strava config dict, or None if client_id/secret not set."""
-    if not _AI_CONFIG_FILE.exists():
+    cfg_path = config_file or _AI_CONFIG_FILE
+    if not cfg_path.exists():
         return None
     try:
-        with open(_AI_CONFIG_FILE, encoding="utf-8") as f:
+        with open(cfg_path, encoding="utf-8") as f:
             cfg = json.load(f)
         client_id = (cfg.get("strava_client_id") or "").strip()
         client_secret = (cfg.get("strava_client_secret") or "").strip()
@@ -54,8 +55,9 @@ def load_config() -> dict | None:
 
 
 def _save_tokens(access_token, refresh_token, expires_at,
-                 athlete_id="", athlete_name=""):
-    with open(_AI_CONFIG_FILE, encoding="utf-8") as f:
+                 athlete_id="", athlete_name="", config_file: Path | None = None):
+    cfg_path = config_file or _AI_CONFIG_FILE
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
     cfg["strava_access_token"] = access_token
     cfg["strava_refresh_token"] = refresh_token
@@ -64,14 +66,14 @@ def _save_tokens(access_token, refresh_token, expires_at,
         cfg["strava_athlete_id"] = str(athlete_id)
     if athlete_name:
         cfg["strava_athlete_name"] = athlete_name
-    with open(_AI_CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 # ── Token management ──────────────────────────────────────────────────────────
 
-def get_access_token() -> str:
-    cfg = load_config()
+def get_access_token(config_file: Path | None = None) -> str:
+    cfg = load_config(config_file)
     if not cfg:
         raise Exception("Strava 未配置 client_id / client_secret")
     if not cfg["refresh_token"]:
@@ -104,6 +106,7 @@ def get_access_token() -> str:
         expires_at=data.get("expires_at", 0),
         athlete_id=athlete.get("id", ""),
         athlete_name=athlete.get("username") or athlete.get("firstname") or "",
+        config_file=config_file,
     )
     logger.info("[strava] token 刷新成功")
     return data.get("access_token", "")
@@ -111,8 +114,8 @@ def get_access_token() -> str:
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def build_auth_url(port: int = 5173) -> str:
-    cfg = load_config()
+def build_auth_url(port: int = 5173, config_file: Path | None = None) -> str:
+    cfg = load_config(config_file)
     if not cfg:
         raise Exception("Strava 未配置 client_id")
     redirect_uri = f"http://localhost:{port}/strava/callback"
@@ -128,9 +131,9 @@ def build_auth_url(port: int = 5173) -> str:
     )
 
 
-def exchange_code(code: str) -> dict:
+def exchange_code(code: str, config_file: Path | None = None) -> dict:
     """Exchange OAuth code for tokens. Saves to config.json."""
-    cfg = load_config()
+    cfg = load_config(config_file)
     if not cfg:
         raise Exception("Strava 未配置")
     resp = requests.post(
@@ -157,25 +160,28 @@ def exchange_code(code: str) -> dict:
         expires_at=data.get("expires_at", 0),
         athlete_id=athlete.get("id", ""),
         athlete_name=name,
+        config_file=config_file,
     )
     return {"athlete_id": str(athlete.get("id", "")), "athlete_name": name}
 
 
 # ── Dedup state ───────────────────────────────────────────────────────────────
 
-def _load_state() -> dict:
+def _load_state(input_dir: Path | None = None) -> dict:
+    state_file = (input_dir / ".strava_state.json") if input_dir else _STATE_FILE
     try:
-        if _STATE_FILE.exists():
-            with open(_STATE_FILE, encoding="utf-8") as f:
+        if state_file.exists():
+            with open(state_file, encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
     return {}
 
 
-def _save_state(state: dict):
+def _save_state(state: dict, input_dir: Path | None = None):
+    state_file = (input_dir / ".strava_state.json") if input_dir else _STATE_FILE
     try:
-        with open(_STATE_FILE, "w", encoding="utf-8") as f:
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"[strava] 保存状态失败: {e}")
@@ -186,12 +192,13 @@ def _file_sig(file_path: str) -> str:
     return f"{os.path.basename(file_path)}|{st.st_size}|{int(st.st_mtime)}"
 
 
-def is_uploaded(filename: str) -> bool:
-    path = str(_INPUT_DIR / filename)
+def is_uploaded(filename: str, input_dir: Path | None = None) -> bool:
+    idir = input_dir or _INPUT_DIR
+    path = str(idir / filename)
     if not os.path.isfile(path):
         return False
     sig = _file_sig(path)
-    return bool(_load_state().get(sig, {}).get("uploaded"))
+    return bool(_load_state(input_dir).get(sig, {}).get("uploaded"))
 
 
 # ── Activity list ─────────────────────────────────────────────────────────────
@@ -294,14 +301,17 @@ def _poll_status(upload_id, access_token: str, timeout: int = 90) -> dict:
 
 
 def upload_files(filenames: list[str], force: bool = False,
-                 progress_cb=None) -> dict:
+                 progress_cb=None,
+                 input_dir: Path | None = None,
+                 config_file: Path | None = None) -> dict:
     """Upload named FIT files from input/ to Strava.
 
     progress_cb(filename, done, total) called before each file.
     Returns {results, success, skipped, failed}.
     """
-    access_token = get_access_token()
-    state = _load_state()
+    idir = input_dir or _INPUT_DIR
+    access_token = get_access_token(config_file)
+    state = _load_state(input_dir)
     results = []
     total = len(filenames)
 
@@ -312,7 +322,7 @@ def upload_files(filenames: list[str], force: bool = False,
         if progress_cb:
             progress_cb(filename, i, total)
 
-        path = str(_INPUT_DIR / filename)
+        path = str(idir / filename)
         if not os.path.isfile(path):
             results.append({"filename": filename, "status": "error", "msg": "文件不存在"})
             continue
@@ -339,7 +349,7 @@ def upload_files(filenames: list[str], force: bool = False,
                 "activity_id": activity_id,
                 "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            _save_state(state)
+            _save_state(state, input_dir)
             results.append({"filename": filename, "status": "ok", "activity_id": activity_id})
 
         except Exception as e:
@@ -357,7 +367,7 @@ def upload_files(filenames: list[str], force: bool = False,
                     "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "note": "duplicate",
                 }
-                _save_state(state)
+                _save_state(state, input_dir)
                 results.append({
                     "filename": filename,
                     "status": "skipped",
