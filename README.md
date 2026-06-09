@@ -18,6 +18,7 @@ FAFA/
 │   ├── stats.py        # 分段统计（KmStats / Summary）
 │   ├── reporter.py     # 表格 / JSON / CSV 输出
 │   ├── onelap.py       # 顽鹿 API 客户端（登录 / 列表 / 下载）
+│   ├── igpsport.py     # iGPSport API 客户端（登录 / 列表 / 下载）
 │   ├── strava.py       # Strava 上传集成（OAuth / token 刷新 / 去重状态）
 │   ├── db.py           # SQLite 活动元数据（标签 / 备注，存于 input/fafa.db）
 │   └── tools/
@@ -73,7 +74,8 @@ venv\Scripts\python app.py
 |---|---|
 | 月份分组 | 活动按年月分组，每组显示当月总里程 |
 | 筛选 | 年份 / 月份下拉 + 距离预设按钮，实时过滤 |
-| 多选模式 | 长按或点击「选择」进入多选，支持批量加载轨迹、批量修改标签、批量上传到 Strava、批量删除 |
+| 多选模式 | 长按或点击「选择」进入多选，支持批量加载轨迹、批量修改标签、批量上传到 Strava、批量删除、AI 对比分析 |
+| AI 对比分析 | 多选模式下选中 2 条以上活动，点击「AI 对比」弹窗流式展示骑行横向对比分析 |
 | 汇总栏 | 显示当前筛选集的总骑行次数、总里程、总时长 |
 | 点击卡片 | 打开骑行详情视图（全屏覆盖层） |
 | AI 分析 | 每条活动卡片附带 AI 按钮，点击弹窗流式显示本次骑行 AI 评估 |
@@ -110,6 +112,7 @@ venv\Scripts\python app.py
 | 画面比例 | 16:9 / 4:3 |
 | 分辨率 | 4K / 2K / 1080P |
 | 水印 | 可选；右下角显示骑行总里程 / 平均 / 最大单程 / 次数（2×2），左下角显示用户名 |
+| 分组距离阈值 | 路径中心点间距超过阈值时分组输出多张图（`_1`、`_2` 文件名后缀），默认 500 km |
 
 ### 文件视图
 
@@ -122,7 +125,7 @@ venv\Scripts\python app.py
 | 单文件加载 | 将单个文件加载到地图视图 |
 | 多选模式 | 点击「选择」进入多选，支持批量加载到地图、批量删除 |
 | 导入 FIT | 点击按钮上传本地 `.fit` 文件 |
-| 顽鹿同步 | 触发顽鹿增量下载 |
+| FIT 同步 | 触发顽鹿（OneLap）或 iGPSport 增量下载 |
 
 ### 骑行详情视图（全屏覆盖）
 
@@ -160,14 +163,21 @@ venv\Scripts\python app.py
 | AI 一周建议 | 弹窗流式显示基于近一周训练的 AI 建议 |
 | AI 月度建议 | 弹窗流式显示基于近一个月训练的 AI 建议 |
 
-### 顽鹿同步
+### FIT 同步
 
-从 Web 界面一键同步顽鹿（OneLap）平台的骑行记录到 `input/` 目录。
+从 Web 界面点击「FIT 同步」按钮，选择平台后一键同步骑行记录到 `input/` 目录。支持顽鹿（OneLap）和 iGPSport 两个平台。
 
+**顽鹿（OneLap）：**
 - 支持增量下载（只拉取本地尚未存在的新活动）或全量下载
-- 侧边栏「设置」面板或 `config.json` 中配置 `onelap_username` / `onelap_password` 后同步时自动登录，无需弹出浏览器
+- 侧边栏「设置」面板或 `config.json` 中配置 `onelap_username` / `onelap_password` 后自动登录，无需弹出浏览器
 - 未配置账密则弹出 Chromium 浏览器窗口完成登录（90 秒超时）
 - 新版 Magene 固件的 FIT 文件下载后自动进行火星解密：C506 版本 ≥ 19，C706 版本 ≥ 20
+
+**iGPSport：**
+- 支持增量下载（按 `ride_id` glob 匹配去重）或全量下载
+- 侧边栏「设置」面板或 `config.json` 中配置 `igpsport_username` / `igpsport_password` 后自动登录
+- 文件命名格式：`iGPSport_{ride_id}_{YYYYMMDD-HHMMSS}.fit`
+- iGPSport 文件为 WGS-84 坐标系，无需火星解密
 
 ### Strava 上传
 
@@ -321,6 +331,8 @@ cp config.template.json config.json
   "max_tokens": 2500,
   "onelap_username": "",
   "onelap_password": "",
+  "igpsport_username": "",
+  "igpsport_password": "",
   "strava_client_id": "",
   "strava_client_secret": "",
   "strava_access_token": "",
@@ -340,6 +352,8 @@ cp config.template.json config.json
 | `max_tokens` | ❌ | 单次回复最大 token 数，默认 `2500` |
 | `onelap_username` | ❌ | 顽鹿账号，填写后顽鹿同步自动登录，无需弹出浏览器 |
 | `onelap_password` | ❌ | 顽鹿密码 |
+| `igpsport_username` | ❌ | iGPSport 账号，填写后 iGPSport 同步自动登录 |
+| `igpsport_password` | ❌ | iGPSport 密码 |
 | `strava_client_id` | ❌ | Strava API App 的 Client ID，填写后可将活动上传到 Strava |
 | `strava_client_secret` | ❌ | Strava API App 的 Client Secret |
 | `strava_access_token` | ❌ | 由 OAuth 授权流程自动写入，无需手动填写 |

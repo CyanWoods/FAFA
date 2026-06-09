@@ -18,11 +18,11 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 **Six views:**
 
-- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk tag editing, bulk upload to Strava, and bulk delete. Bulk tag picker (`#bulk-tag-picker`, appended to `<body>`) shows tri-state chips (all/some/none) for each tag; right-aligned to the anchor button, repositions on window resize. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
+- **Activities view** (`#activities-view`, default boot view): Activity cards grouped by month. Year / month dropdowns + distance-range preset buttons filter the list. Multi-select mode (long-press or select button) enables bulk load-to-tracks, bulk tag editing, bulk upload to Strava, bulk delete, and bulk AI compare (`_actBulkAiCompare` — streams comparative analysis of 2+ selected rides via `/api/ai/compare`). Bulk tag picker (`#bulk-tag-picker`, appended to `<body>`) shows tri-state chips (all/some/none) for each tag; right-aligned to the anchor button, repositions on window resize. Summary bar shows totals for the filtered set. Each card has an "AI 分析" button and a "轨迹" button — clicking "轨迹" clears all current tracks, loads only that file into the map, and switches to map view. The header has a "加载全部轨迹" button that loads all visible activities. Cache: `_actActivities` (module-level) is invalidated on upload, sync, and any delete.
 
 - **Map view** (`#map`, `data-view="map"`): Dedicated sidebar nav entry (骑行轨迹). Multiple FIT files loaded via drag-and-drop or from activities/files view. Leaflet renders polylines. Bottom panel (`#track-panel`) shows per-track stats and JSON/CSV export; track list sorted reverse-chronologically. Hovering a panel row flashes the polyline. Header bar (`#map-header`) with tile selector and PNG export controls, consistent with other views. Right-side floating zoom slider (`#zoom-slider-wrap`). Bottom-left floating track panel (`#track-panel`). Map view is shown/hidden via `#map-view` active class toggle when switching sidebar views. Sidebar badge (`#track-badge`) shows loaded track count; panel count shown in `#panel-track-count`.
 
-- **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger OneLap sync. Upload via file input (导入 FIT button).
+- **Files view** (`#files-view`): File management for `input/`. Search by filename, Magene year/month filter chips, load individual file or load all to map, delete all, trigger FIT sync (顽鹿 / iGPSport). Upload via file input (导入 FIT button).
 
 - **Detail view** (`#detail-view`, z-index 950): Full-screen overlay shown when clicking an activity card or a track name in the map panel. Layout: left column (`#detail-chart-section`) — scrollable ECharts SVG line charts for all available metrics, with two side-by-side distribution bar charts below (功率分布 Coggan Z1-Z7 by %FTP, 心率分布 by %max-HR — same zoning as the PMC view, computed client-side from per-second records); right column (`#detail-route-section`) — Leaflet route heatmap always visible alongside charts, color-coded by the selected metric. A vertical drag handle (`#detail-split-handle`) between columns adjusts the width ratio (dblclick resets to 50/50). Hovering any chart syncs a position marker on the heatmap via ZRender mousemove → cumDist binary search → `L.circleMarker`; mouseout hides the marker with a 60 ms debounce to prevent flicker when moving between adjacent charts. A ⊡ button inside the map resets `fitBounds`. Bottom (`#detail-table-section`): per-km data table with a draggable resize handle. Below the header bar is `#detail-meta` — a tag & note bar where users can assign colour-coded tags and write Markdown notes per activity (persisted to `input/fafa.db`). Opened from either activities or map view; closing returns to the originating view.
 
@@ -48,12 +48,13 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 **Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses `ThreadPoolExecutor` (up to 8 workers) + the cache to parse the full library quickly on first load.
 
-**Onelap sync** (`/api/onelap/sync`, `/api/onelap/status`): Background thread logs into 顽鹿 via a Chromium browser, fetches the activity list, downloads new FIT files to `input/`, and auto-decrypts files when: C506 with software version ≥ 19, or C706 with software version ≥ 20 (new Magene firmware that stores GCJ-02).
+**FIT sync** (`/api/sync/start`, `/api/sync/status`): Unified sync endpoint supporting 顽鹿（OneLap）and iGPSport platforms. POST `{platform: "onelap"|"igpsport", full: bool, limit?: int}` to start; dispatches `_run_sync(full, limit)` or `_run_igpsport_sync(full)` in a background thread. Shared `_sync` state dict + `_sync_lock`. Old `/api/onelap/sync` and `/api/onelap/status` preserved as aliases. 顽鹿: Chromium-based auth, auto-decrypts GCJ-02 files (C506 ≥ v19, C706 ≥ v20). iGPSport: REST API login (`https://prod.zh.igpsport.com/service`), Bearer token, paginated activity list, dedup by `iGPSport_{ride_id}_*.fit` glob; files are WGS-84, no decrypt needed. Credentials for both platforms loaded via `_load_onelap_credentials()` / `_load_igpsport_credentials()` from `config.json`.
 
-**AI features** (`config.json`): Template at `config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, and `strava_*` credentials (see Strava section). Three AI endpoints:
+**AI features** (`config.json`): Template at `config.template.json`. Fields: `api_base`, `api_key`, `model`, `max_tokens`, `onelap_username`, `onelap_password`, `igpsport_username`, `igpsport_password`, and `strava_*` credentials (see Strava section). Four AI endpoints:
 - `/api/ai/evaluate` (POST `{filename}`) — streams per-activity evaluation.
 - `/api/ai/pmc` (POST `{current, trend, recent_rides, settings}`) — streams PMC training-state commentary.
 - `/api/ai/calendar` (POST `{period, current_date, activities}`) — streams weekly or monthly training suggestions.
+- `/api/ai/compare` (POST `{activities, settings}`) — streams comparative analysis of 2+ selected rides. Uses `_wind_normalize_speed()` and `_build_compare_prompt()` helpers; `max_tokens` overridden to 4000 for longer output.
 
 **Config API** (`/api/config/raw`): GET returns current `config.json` (or template defaults if file absent); POST merges editable fields into `config.json` (read-only Strava OAuth tokens are filtered out). Used by the settings modal and PMC parameter persistence (`pmc_ftp`, `pmc_max_hr`, etc.).
 
@@ -71,6 +72,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.
 - `reporter.py` — `to_json(stats, summary)` and `to_csv(stats)` for CLI output.
 - `onelap.py` — 顽鹿（OneLap）API client. `browser_login()` → Chromium-based auth; `fetch_activity_list()`, `download_activity()` → download pipeline. Also contains `rename_magene()` and `latest_local_time()` helpers.
+- `igpsport.py` — iGPSport REST API client. `IGPSportClient.login()` → Bearer token (3 retries); `get_all_activities()` → paginated list; `download_file(ride_id, dst_path)` → `.part`→rename, 3 retries. Pure helpers: `_parse_start_time(item)` → `datetime|None` (handles `%Y-%m-%d %H:%M:%S`, `%H:%M`, `%Y-%m-%d` formats); `make_filename(ride_id, start_time)` → `iGPSport_{ride_id}_{YYYYMMDD-HHMMSS}.fit`; `ride_id_exists(ride_id, input_dir)` → glob dedup check.
 - `strava.py` — Strava upload integration. `load_config()` / `_save_tokens()` read/write `strava_*` fields in `config.json`. `get_access_token()` auto-refreshes (raises a re-auth message if the `refresh_token` is rejected). `classify_error(text)` tags Strava errors (`auth`/`duplicate`/`permission`/`rate_limit`); `auth` errors abort `upload_files` and surface an `auth_error` flag through `/api/strava/diff` and the upload status so the frontend can re-prompt OAuth. `build_auth_url()` / `exchange_code()` handle OAuth. `upload_files(filenames, force, progress_cb)` uploads named FIT files from `input/` with dedup state at `input/.strava_state.json`. `fetch_all_activities(access_token)` paginates `GET /api/v3/athlete/activities` and returns `[{id, external_id, start_unix}]` — used by `/api/strava/diff`.
 - `db.py` — SQLite persistence for activity metadata (`input/fafa.db`). Tables: `activity_meta` (note per filename), `tags` (id/name/color/is_preset), `activity_tags` (filename↔tag_id). `init_db(input_dir)` creates tables and seeds five preset tags on first run. Thread-safe via `_db_lock`.
 
@@ -93,6 +95,9 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 - New Magene firmware stores GCJ-02 in raw FIT files; `_run_sync` auto-decrypts after download: C506 with version ≥ 19, C706 with version ≥ 20.
 - The `/api/fix_coords` endpoint and the `_run_sync` auto-decrypt both import from `fafa.tools.fix_coords`, not from any top-level script.
 - Files view year/month filter (`_MAGENE_DATE_RE`) only matches Magene filename format — Garmin files get no filter chip and show raw filename as label.
+- Wind arrow bearing uses `_bearingByTimeWindow(elapsedS)`: ±180 s window around current elapsed time, converted to distance range via uniform-pace assumption (`d = (t/totalDur) * totalDist`), binary search for start/end GPS indices, bearing from window-start to window-end point. Falls back to `_bearingAtIndex(lo)` (adjacent-point) when window collapses to a single GPS point.
+- iGPSport files use WGS-84 (same as Garmin) — `needs_wgs84_conversion()` returns `True` for them, meaning no GCJ-02 decryption needed.
+- `/api/sync/start` dispatches by `platform` field: `"onelap"` → `_run_sync`, `"igpsport"` → `_run_igpsport_sync`. Both update shared `_sync` dict; old `/api/onelap/*` routes are aliases.
 
 ## Frontend structure (`static/app.js`)
 
@@ -104,7 +109,7 @@ Key sections in order:
 | GCJ-02 | `wgs84ToGcj02`, `gcj02ToWgs84`, `encryptCoords`, `decryptCoords` |
 | State | `map`, `tracks` (Map), `exportState`, sidebar/panel/detail/analytics state |
 | Sidebar nav | `switchSidebarView` — switches between `activities`, `map`, `files`, `pmc`, `calendar` |
-| Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers (`_toggleSelectMode`, `_enterSelectMode`, `_exitSelectMode`, `_updateSelectBar`, `_actSelectAll`), `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, `openActAiModal`, bulk actions |
+| Activities view | `_actFilter`, `_actFilteredList`, `_actFilterChanged`, `_actDistPreset`, select mode helpers (`_toggleSelectMode`, `_enterSelectMode`, `_exitSelectMode`, `_updateSelectBar`, `_actSelectAll`), `openActivitiesView`, `_renderActivityList`, `_buildActivityCard`, `_activityCardClick`, `openActAiModal`, `_actBulkAiCompare`, bulk actions |
 | Bulk tag picker | `_positionBulkTagPicker`, `_openBulkTagPicker`, `_onBulkTagPickerResize`, `_closeBulkTagPicker`, `_bulkPickerOutsideClick`, `_renderBulkTagPickerList`, `_confirmBulkTags` — tri-state (all/some/none) bulk tag editor; picker appended to `<body>`, right-aligned to anchor, repositions on resize |
 | Map init | `initMap`, `setTiles` |
 | Track coords | `getCoords`, `renderTrack` |
@@ -117,15 +122,15 @@ Key sections in order:
 | Toast | `toast` |
 | Panel | `togglePanel`, `initPanelResize` |
 | Zoom slider | `initZoomSlider` |
-| PNG export | `openExportModal`, `doExport`, canvas tile/track drawing helpers |
+| PNG export | `openExportModal`, `doExport`, canvas tile/track drawing helpers; `_haversineKm`, `_trackBboxCenter`, `_groupTracksByDistance` (greedy centroid clustering by distance threshold); `_exportGroup` (single-group canvas render); multi-group output adds `_1`/`_2` suffixes |
 | Detail view | `openDetailView`, `closeDetailView`, chart/table rendering, distribution bars (`_renderDetailDistributions`, `_detailDistBlock`), `exportDetailData` |
 | Detail meta | `_loadAndRenderDetailMeta`, `_renderDetailTagsRow`, `_renderDetailNote`, `_initDetailNoteButtons`, `_openTagPicker`, `_closeTagPicker`, `_renderTagPickerList`, `_saveDetailTags`, `_syncActivityTagsInCache` |
 | File library | `refreshLibrary`, `_buildLibFilter`, `_renderLibrary`, `loadFromLibrary`, select mode helpers (`_enterLibSelectMode`, `_exitLibSelectMode`, `_libBulkDelete`) |
 | Global export | export-all modal, calls `/api/export/all` |
 | Analytics / PMC | `openAnalyticsView`, `closeAnalyticsView`, `_computePMC`, `_computeTSS`, `_renderPmcCards`, `_renderPmcChart`, `_renderPmcZones`, `_renderPmcDistOne`, `_renderPmcDist`, `_renderPmcDaily`, `_renderPmcCurve`, `_applyZonePeriod`, `_applyDistPeriod`, `_pmcChartTheme`, `_pmcLocalDateString`, `pmcRecalc` |
 | Training calendar | `_loadAndRenderCalendar`, `_renderCalGrid`, `_renderCalActModal` |
-| AI | `_initAiConfig`, `_llmStream`, `_renderMarkdown`, `_openAndStreamModal` (shared SSE modal helper), `openActAiModal`, `startPmcAi`, `startCalendarAi` |
-| Onelap sync | `openSyncModal`, `closeSyncModal`, `startSync`, `_pollSync` |
+| AI | `_initAiConfig`, `_llmStream`, `_renderMarkdown`, `_openAndStreamModal` (shared SSE modal helper), `openActAiModal`, `_actBulkAiCompare`, `startPmcAi`, `startCalendarAi` |
+| FIT sync | `openSyncModal`, `closeSyncModal`, `startSync` (reads `input[name="sync-platform"]:checked`, POSTs to `/api/sync/start`), `_pollSync` (polls `/api/sync/status`), `_SYNC_PLATFORM_DESC`, `_syncUpdatePlatformDesc` |
 | Strava upload | `_stravaCheckStatus`, `_stravaOpenUploadModal`, `_stravaStartUpload`, `_stravaFetchDiff`, `_stravaShowDiffView`, `_stravaConfirmDiff`, `_stravaUploadAllVisible`, `_stravaUploadSelected`, `stravaStartAuth`, `_onStravaAuthMessage` (popup → opener auto-close on auth success), `_stravaPromptReauth` (re-auth prompt when an `auth_error` is returned), `openStravaModal`, `closeStravaModal`, `_pollStravaUpload`, `_setStravaUI` |
 | Boot | `DOMContentLoaded` wires everything up |
 
