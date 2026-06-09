@@ -3228,10 +3228,26 @@ function exportAllJson() {
 /* ── 顽鹿同步 ────────────────────────────────────────────────────────────── */
 let _syncPollTimer = null;
 
+const _SYNC_PLATFORM_DESC = {
+  onelap: '点击开始后，程序会自动打开浏览器，请在其中完成顽鹿账号登录，登录后将自动下载新的骑行文件。',
+  igpsport: '将自动使用设置中配置的 iGPSport 账号密码登录，下载新的骑行文件。',
+};
+
+function _syncUpdatePlatformDesc() {
+  const el = document.querySelector('input[name="sync-platform"]:checked');
+  const platform = el ? el.value : 'onelap';
+  const desc = document.getElementById('sync-platform-desc');
+  if (desc) desc.textContent = _SYNC_PLATFORM_DESC[platform] || '';
+}
+
 function openSyncModal() {
   document.getElementById('sync-modal').style.display = 'flex';
   document.getElementById('sync-idle-view').style.display = '';
   document.getElementById('sync-progress-view').style.display = 'none';
+  document.querySelectorAll('input[name="sync-platform"]').forEach(r => {
+    r.addEventListener('change', _syncUpdatePlatformDesc);
+  });
+  _syncUpdatePlatformDesc();
 }
 
 function closeSyncModal() {
@@ -3241,16 +3257,18 @@ function closeSyncModal() {
 
 async function startSync() {
   const full = document.getElementById('sync-full').checked;
+  const platformEl = document.querySelector('input[name="sync-platform"]:checked');
+  const platform = platformEl ? platformEl.value : 'onelap';
   document.getElementById('sync-idle-view').style.display = 'none';
   document.getElementById('sync-progress-view').style.display = '';
   document.getElementById('sync-close-btn').disabled = true;
   _setSyncUI('正在启动…', 0, 0);
 
   try {
-    const res = await fetch('/api/onelap/sync', {
+    const res = await fetch('/api/sync/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full }),
+      body: JSON.stringify({ platform, full }),
     });
     if (!res.ok) {
       const d = await res.json();
@@ -3269,7 +3287,7 @@ async function startSync() {
 
 async function _pollSync() {
   try {
-    const res  = await fetch('/api/onelap/status');
+    const res  = await fetch('/api/sync/status');
     const data = await res.json();
     const pct  = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
     _setSyncUI(data.message, pct, data.total);
@@ -3796,6 +3814,8 @@ async function openSettingsModal() {
     document.getElementById('cfg-max-tokens').value    = cfg.max_tokens           ?? '';
     document.getElementById('cfg-onelap-user').value   = cfg.onelap_username      ?? '';
     document.getElementById('cfg-onelap-pass').value   = cfg.onelap_password      ?? '';
+    document.getElementById('cfg-igp-user').value      = cfg.igpsport_username    ?? '';
+    document.getElementById('cfg-igp-pass').value      = cfg.igpsport_password    ?? '';
     document.getElementById('cfg-strava-id').value     = cfg.strava_client_id     ?? '';
     document.getElementById('cfg-strava-secret').value = cfg.strava_client_secret ?? '';
     document.getElementById('cfg-strava-port').value   = cfg.strava_redirect_port ?? '';
@@ -3824,6 +3844,8 @@ async function saveSettingsModal() {
     max_tokens:           num('cfg-max-tokens'),
     onelap_username:      val('cfg-onelap-user')   || null,
     onelap_password:      val('cfg-onelap-pass')   || null,
+    igpsport_username:    val('cfg-igp-user')       || null,
+    igpsport_password:    val('cfg-igp-pass')       || null,
     strava_client_id:     val('cfg-strava-id')     || null,
     strava_client_secret: val('cfg-strava-secret') || null,
     strava_redirect_port: num('cfg-strava-port'),

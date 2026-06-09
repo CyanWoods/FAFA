@@ -183,7 +183,7 @@
           导入 FIT
           <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
         </label>
-        <button onclick="openSyncModal()">顽鹿同步</button>
+        <button onclick="openSyncModal()">FIT 同步</button>
         <button id="lib-select-btn" onclick="_toggleLibSelectMode()">选择</button>
       </div>
     </div>
@@ -203,10 +203,18 @@
   <div id="sync-modal">
     <div class="modal-overlay" onclick="closeSyncModal()"></div>
     <div class="modal-box sync-box">
-      <div class="modal-title">从顽鹿同步</div>
+      <div class="modal-title">FIT 同步</div>
 
       <div id="sync-idle-view">
-        <p class="sync-desc">点击开始后，程序会自动打开浏览器，请在其中完成顽鹿账号登录，登录后将自动下载新的骑行文件。</p>
+        <div class="sync-platform-row">
+          <label class="sync-platform-opt">
+            <input type="radio" name="sync-platform" value="onelap" checked> 顽鹿（OneLap）
+          </label>
+          <label class="sync-platform-opt">
+            <input type="radio" name="sync-platform" value="igpsport"> iGPSport
+          </label>
+        </div>
+        <p class="sync-desc" id="sync-platform-desc">点击开始后，程序会自动打开浏览器，请在其中完成顽鹿账号登录，登录后将自动下载新的骑行文件。</p>
         <div class="sync-opts">
           <label><input type="checkbox" id="sync-full"> 全量下载（忽略已下载记录）</label>
         </div>
@@ -723,6 +731,18 @@
         <div class="settings-row">
           <label class="settings-label">密码</label>
           <input id="cfg-onelap-pass" type="password" placeholder="">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">iGPSport 同步</div>
+        <div class="settings-row">
+          <label class="settings-label">用户名</label>
+          <input id="cfg-igp-user" type="text" placeholder="">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">密码</label>
+          <input id="cfg-igp-pass" type="password" placeholder="">
         </div>
       </div>
 

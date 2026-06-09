@@ -6,6 +6,8 @@
   "max_tokens": 2500,
   "onelap_username": "",
   "onelap_password": "",
+  "igpsport_username": "",
+  "igpsport_password": "",
   "strava_client_id": "",
   "strava_client_secret": "",
   "strava_access_token": "",

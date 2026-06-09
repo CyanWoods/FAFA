@@ -384,6 +384,72 @@ def _run_sync(full: bool, limit: int | None):
         _set_sync(state="error", message=f"同步出错：{e}")
 
 
+def _run_igpsport_sync(full: bool):
+    """后台线程：登录 iGPSport → 拉取列表 → 下载 FIT。"""
+    from fafa.igpsport import IGPSportClient, make_filename, ride_id_exists, _parse_start_time
+
+    try:
+        creds = _load_igpsport_credentials()
+        if not creds:
+            _set_sync(state="error", message="iGPSport 未配置账号密码，请在设置中填写")
+            return
+
+        _set_sync(state="login", message="正在登录 iGPSport…", total=0, done=0, new_files=[])
+        client = IGPSportClient(creds["username"], creds["password"])
+        try:
+            client.login()
+        except Exception as e:
+            _set_sync(state="error", message=f"iGPSport 登录失败：{e}")
+            return
+
+        _set_sync(state="fetching", message="正在获取 iGPSport 活动列表…")
+        try:
+            activities = client.get_all_activities()
+        except Exception as e:
+            _set_sync(state="error", message=f"获取活动列表失败：{e}")
+            return
+
+        if not full:
+            activities = [
+                act for act in activities
+                if not ride_id_exists(str(act.get("rideId", "")), INPUT_DIR)
+            ]
+
+        if not activities:
+            _set_sync(state="done", message="没有新活动需要下载", total=0, done=0)
+            return
+
+        total = len(activities)
+        _set_sync(state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
+
+        new_files: list[str] = []
+        failed = 0
+
+        for i, act in enumerate(activities, 1):
+            ride_id = str(act.get("rideId", ""))
+            start_time = _parse_start_time(act)
+            filename = make_filename(ride_id, start_time)
+            dst_path = INPUT_DIR / filename
+            ts_str = start_time.strftime("%Y-%m-%d %H:%M") if start_time else ride_id
+
+            try:
+                client.download_file(ride_id, dst_path)
+                new_files.append(filename)
+            except Exception as e:
+                failed += 1
+                logging.warning("iGPSport 下载 %s 失败: %s", ride_id, e)
+
+            _set_sync(message=f"[{i}/{total}] {ts_str}", done=i, new_files=list(new_files))
+
+        msg = f"同步完成，新增 {len(new_files)} 个文件"
+        if failed:
+            msg += f"，{failed} 个下载失败"
+        _set_sync(state="done", message=msg, done=total, new_files=new_files)
+
+    except Exception as e:
+        _set_sync(state="error", message=f"同步出错：{e}")
+
+
 # ── 路由：原有功能 ─────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -667,6 +733,36 @@ def onelap_status():
         return jsonify(**_sync)
 
 
+@app.route("/api/sync/start", methods=["POST"])
+def sync_start():
+    with _sync_lock:
+        if _sync["state"] in ("login", "fetching", "downloading"):
+            return jsonify(error="同步正在进行中"), 409
+
+    body     = request.get_json(silent=True) or {}
+    platform = body.get("platform", "onelap")
+    full     = bool(body.get("full", False))
+    limit    = body.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = None
+
+    if platform == "igpsport":
+        t = threading.Thread(target=_run_igpsport_sync, args=(full,), daemon=True)
+    else:
+        t = threading.Thread(target=_run_sync, args=(full, limit), daemon=True)
+    t.start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/sync/status")
+def sync_status():
+    with _sync_lock:
+        return jsonify(**_sync)
+
+
 # ── AI 骑行评估 ───────────────────────────────────────────────────────────────
 AI_CONFIG_FILE = PROJECT_ROOT / "config.json"
 
@@ -698,6 +794,21 @@ def _load_onelap_credentials() -> dict | None:
     except Exception:
         pass
     return None
+
+
+def _load_igpsport_credentials() -> dict | None:
+    if not AI_CONFIG_FILE.exists():
+        return None
+    try:
+        with open(AI_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        username = (cfg.get("igpsport_username") or "").strip()
+        password = (cfg.get("igpsport_password") or "").strip()
+        if not username or not password:
+            return None
+        return {"username": username, "password": password}
+    except Exception:
+        return None
 
 
 def _wind_dir_label(deg: float) -> str:
