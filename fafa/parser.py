@@ -57,6 +57,9 @@ def parse_fit(filepath: str) -> FitData:
         if dist is None:
             continue
         alt = r.get("enhanced_altitude") if r.get("enhanced_altitude") is not None else r.get("altitude")
+        # FIT uint16 invalid sentinel: 0xFFFF → 12607.0 m (÷5 − 500); also reject anything above Everest
+        if alt is not None and (alt > 8848 or alt < -500):
+            alt = None
         spd = r.get("enhanced_speed") if r.get("enhanced_speed") is not None else r.get("speed")
         records.append(Record(
             timestamp=r["timestamp"],

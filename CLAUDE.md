@@ -66,7 +66,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 ### Core library (`fafa/`)
 
-- `parser.py` — FIT decoder; produces `FitData` / `Record` dataclasses via `garmin_fit_sdk`. `apply_scale_and_offset=True` must be set on the Decoder.
+- `parser.py` — FIT decoder; produces `FitData` / `Record` dataclasses via `garmin_fit_sdk`. `apply_scale_and_offset=True` must be set on the Decoder. Altitude values outside `[-500, 8848]` m are set to `None` (FIT uint16 invalid sentinel `0xFFFF` → `12607.0` after scale/offset).
 - `gcj02.py` — WGS-84 ↔ GCJ-02 conversion; `needs_wgs84_conversion(manufacturer)` identifies device CRS.
 - `tiles.py` — Folium tile presets (amap/dark/light variants); used only by CLI map tools, not the web viewer.
 - `stats.py` — Three segmentation functions: `compute_km_stats(fit)` → per-km, `compute_dist_stats(fit, step_m=100)` → per-100 m, `compute_time_stats(fit, step_s=60)` → per-1 min with gap-filling. `compute_summary(fit, km_stats)` → `Summary`. All are dataclasses; serialise with `dataclasses.asdict`.

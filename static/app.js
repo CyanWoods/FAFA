@@ -2434,6 +2434,13 @@ function _renderDetailCharts(records, fallbackStats) {
     if (useRecords) {
       labels = records.map(r => r.t);
       data   = records.map(r => r[meta.rField] ?? null);
+      if (meta.key === 'altitude') {
+        const firstValid = data.findIndex(v => v != null);
+        if (firstValid > 0) {
+          labels = labels.slice(firstValid);
+          data   = data.slice(firstValid);
+        }
+      }
     } else {
       const t0 = track?.timeStatsStart ? new Date(track.timeStatsStart) : null;
       labels = (fallbackStats || []).map((_, i) => {
