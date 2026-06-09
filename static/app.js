@@ -407,7 +407,7 @@ async function _actBulkLoad() {
       if (!res.ok) continue;
       const data = await res.json();
       addTrack(data);
-    } catch {}
+    } catch (e) { console.warn('[loadFromLibrary] 加载失败:', e); }
   }
 }
 
@@ -496,7 +496,7 @@ async function _actLoadAllVisible() {
       if (!res.ok) continue;
       const data = await res.json();
       addTrack(data);
-    } catch {}
+    } catch (e) { console.warn('[loadAllTracks] 加载失败:', e); }
   }
 }
 
@@ -3395,12 +3395,17 @@ async function _pollSync() {
       // 刷新文件库数量
       refreshLibraryCount();
       refreshLibrary();
+      _actActivities = null;
+      _pmcAllData    = null;
+      _calActivities = null;
       if (_sidebarView === 'activities') {
-        _actActivities = null;
         openActivitiesView();
+      } else if (_analyticsOpen) {
+        if (_analyticsTab === 'pmc') _loadAndRenderPmc();
+        else if (_analyticsTab === 'calendar') _loadAndRenderCalendar();
       }
     }
-  } catch {}
+  } catch (e) { console.warn('[_pollSync] 轮询出错:', e); }
 }
 
 function _setSyncUI(msg, pct, total) {
@@ -4070,10 +4075,15 @@ async function _loadAndRenderPmc() {
     return;
   }
   try {
-    const res  = await fetch('/api/activities');
-    const data = await res.json();
+    let acts;
+    if (_actActivities) {
+      acts = _actActivities;
+    } else {
+      const res  = await fetch('/api/activities');
+      const data = await res.json();
+      acts = data.activities || [];
+    }
     if (seq !== _pmcLoadSeq || !_analyticsOpen || _analyticsTab !== 'pmc') return;
-    const acts = data.activities || [];
     const settings = _pmcSettings();
     _pmcAllData = _computePMC(acts, settings);
     _pmcAllData.activities = acts;
@@ -5225,9 +5235,13 @@ async function _loadAndRenderCalendar() {
     return;
   }
   try {
-    const res = await fetch('/api/activities');
-    const data = await res.json();
-    _calActivities = data.activities || [];
+    if (_actActivities) {
+      _calActivities = _actActivities;
+    } else {
+      const res = await fetch('/api/activities');
+      const data = await res.json();
+      _calActivities = data.activities || [];
+    }
   } catch (e) {
     console.error('Calendar load error:', e);
     _calActivities = [];
