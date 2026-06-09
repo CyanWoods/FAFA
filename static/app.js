@@ -378,6 +378,8 @@ function _updateSelectBar() {
     const allSelected = allCards.length > 0 && [...allCards].every(c => _actSelected.has(c.dataset.filename));
     btn.textContent = allSelected ? '取消全选' : '全选';
   }
+  const aiBtn = document.getElementById('act-bulk-ai-btn');
+  if (aiBtn) aiBtn.disabled = (_actSelected.size < 2 || !_aiModel);
 }
 
 function _actSelectAll() {
@@ -423,6 +425,57 @@ async function _actBulkDelete() {
   }
   _actActivities = null;
   openActivitiesView();
+}
+
+async function _actBulkAiCompare() {
+  if (_actSelected.size < 2) { toast('请至少选择 2 条记录'); return; }
+  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
+
+  const filenames = [..._actSelected];
+  const acts = filenames
+    .map(fn => (_actActivities || []).find(a => a.filename === fn))
+    .filter(Boolean);
+  if (acts.length < 2) { toast('获取记录信息失败'); return; }
+
+  toast('正在加载骑行数据…');
+
+  const results = await Promise.all(acts.map(async act => {
+    let kmStats = [], windData = null;
+    try {
+      const [lr, wr] = await Promise.all([
+        fetch('/api/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: act.filename }),
+        }),
+        fetch(`/api/weather/${encodeURIComponent(act.filename || '')}`),
+      ]);
+      if (lr.ok) { const ld = await lr.json(); kmStats = ld.km_stats || []; }
+      if (wr.ok) { const wd = await wr.json(); if (wd.available) windData = wd; }
+    } catch {}
+    return {
+      summary:    act.summary    || {},
+      km_stats:   kmStats,
+      filename:   act.filename   || '',
+      start_time: act.start_time || '',
+      wind_data:  windData,
+    };
+  }));
+
+  const summaryHtml = acts
+    .map(a => `<span class="stat-chip">${(a.filename || '').replace(/\.fit$/i, '')}</span>`)
+    .join('');
+  const payload = { activities: results };
+
+  await _openAndStreamModal(
+    `骑行对比 · AI 分析（${acts.length} 条）`,
+    summaryHtml,
+    () => fetch('/api/ai/compare', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    })
+  );
 }
 
 async function _actLoadAllVisible() {

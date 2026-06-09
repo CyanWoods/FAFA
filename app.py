@@ -940,6 +940,131 @@ def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time:
     return "\n".join(lines)
 
 
+def _wind_normalize_speed(v_avg: float | None, wind_data: dict | None) -> tuple:
+    """Returns (v_normalized, effective_headwind_kmh). Linear approximation:
+    v_norm = v_avg + eff_headwind × 0.25  (0.25 km/h per 1 km/h effective headwind)."""
+    if not wind_data or not wind_data.get("available") or not v_avg:
+        return v_avg, 0.0
+    wind_speed   = wind_data.get("wind_speed_avg_kmh", 0) or 0
+    headwind_pct = wind_data.get("headwind_pct", 0) or 0
+    tailwind_pct = wind_data.get("tailwind_pct", 0) or 0
+    eff_headwind = wind_speed * (headwind_pct - tailwind_pct) / 100
+    return round(v_avg + eff_headwind * 0.25, 1), round(eff_headwind, 1)
+
+
+def _build_compare_prompt(activities: list) -> str:
+    def fmt(v, unit="", digits=1):
+        return "无数据" if v is None else f"{round(v, digits)}{unit}"
+
+    def _v(seg, key, d=0):
+        val = seg.get(key)
+        return "—" if val is None else str(round(val, d))
+
+    lines = [
+        "你是一名专业公路自行车训练教练，请根据以下多次骑行数据进行横向对比分析，输出结构化中文对比报告。",
+        "",
+        "## 骑行对比汇总表",
+        "| 编号 | 日期 | 距离(km) | 均速(km/h) | 归一化均速(km/h) | 有效逆风(km/h) | 均功率(W) | NP(W) | 均心率(bpm) | 爬升(m) |",
+        "|------|------|---------|-----------|----------------|--------------|---------|-------|-----------|--------|",
+    ]
+
+    for i, act in enumerate(activities, 1):
+        s  = act.get("summary") or {}
+        wd = act.get("wind_data") or {}
+        v_avg = s.get("avg_speed_kmh")
+        v_norm, eff_hw = _wind_normalize_speed(v_avg, wd if wd.get("available") else None)
+        date_str = (act.get("start_time") or "")[:10] or "未知"
+        eff_str  = fmt(eff_hw if wd.get("available") else None, "", 1)
+        lines.append(
+            f"| {i} | {date_str} | {fmt(s.get('total_dist_km'), '', 1)} | "
+            f"{fmt(v_avg, '', 1)} | {fmt(v_norm, '', 1)} | {eff_str} | "
+            f"{fmt(s.get('avg_power'), '', 0)} | {fmt(s.get('normalized_power'), '', 0)} | "
+            f"{fmt(s.get('avg_hr'), '', 0)} | {fmt(s.get('total_elevation_gain_m'), '', 0)} |"
+        )
+
+    lines.append("")
+
+    for i, act in enumerate(activities, 1):
+        s   = act.get("summary") or {}
+        wd  = act.get("wind_data") or {}
+        kms = act.get("km_stats") or []
+        fn  = act.get("filename", f"骑行{i}")
+        st  = act.get("start_time", "")
+        v_avg = s.get("avg_speed_kmh")
+        v_norm, eff_hw = _wind_normalize_speed(v_avg, wd if wd.get("available") else None)
+
+        lines.append(f"## 骑行 {i} — {fn}" + (f"（{st[:16]}）" if st else ""))
+
+        if wd.get("available"):
+            lines.append(
+                f"**风况**：均风速 {wd.get('wind_speed_avg_kmh')} km/h，"
+                f"逆风 {wd.get('headwind_pct')}%，顺风 {wd.get('tailwind_pct')}%，"
+                f"侧风 {wd.get('crosswind_pct')}%"
+            )
+            lines.append(
+                f"**有效逆风**：{eff_hw} km/h → **归一化均速**：{v_norm} km/h"
+                f"（原 {fmt(v_avg, '', 1)} km/h）"
+            )
+        else:
+            lines.append("**风况**：无数据（均速未作风力归一化）")
+
+        lines += [
+            "",
+            f"**汇总**：距离 {fmt(s.get('total_dist_km'), ' km')}，"
+            f"移动时长 {fmt((s.get('moving_time_s') or 0) / 60, ' 分钟', 0)}，"
+            f"爬升 {fmt(s.get('total_elevation_gain_m'), ' m', 0)}，"
+            f"均踏频 {fmt(s.get('avg_cadence'), ' rpm', 0)}，"
+            f"均功率 {fmt(s.get('avg_power'), ' W', 0)}，"
+            f"NP {fmt(s.get('normalized_power'), ' W', 0)}，"
+            f"均心率 {fmt(s.get('avg_hr'), ' bpm', 0)}",
+            "",
+        ]
+
+        if kms:
+            lines.append(f"**逐公里分段（共 {len(kms)} 段）**")
+            lines.append("公里段 | 时长(s) | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm) | 爬升(m)")
+            lines.append("------|--------|-----------|------------|---------|-----------|-------")
+            for seg in kms:
+                lines.append(
+                    f"第{seg.get('km','?')}km | {_v(seg,'duration_s',0)}s | "
+                    f"{_v(seg,'avg_speed_kmh',1)} | {_v(seg,'avg_hr',0)} | "
+                    f"{_v(seg,'avg_power',0)} | {_v(seg,'avg_cadence',0)} | "
+                    f"{_v(seg,'elevation_gain_m',0)}"
+                )
+        else:
+            lines.append("**逐公里数据**：无")
+
+        lines.append("")
+
+    lines += [
+        "## 对比分析要求",
+        "",
+        "请依次输出以下章节（无充分数据的章节可跳过）：",
+        "",
+        "### 1. 速度效率对比",
+        "以**归一化均速**为主要指标，说明风力调整是否合理，哪次骑行速度效率最高。",
+        "",
+        "### 2. 配速策略对比",
+        "分析各骑行逐公里速度/功率节奏的稳定性（变异幅度），谁的配速更均匀。",
+        "",
+        "### 3. 有氧效率对比（如有心率 + 功率数据）",
+        "对比各骑行的 EF（= NP / 均心率），数值越高说明有氧效率越好。",
+        "",
+        "### 4. 爬坡表现对比（如爬升 > 50 m）",
+        "对比各骑行在爬升段的速度/功率/心率响应及整体爬升效率。",
+        "",
+        "### 5. 综合评定",
+        "明确指出哪次骑行综合表现最优，给出具体理由（引用关键数值）。",
+        "",
+        "### 6. 训练建议",
+        "基于对比结果，给出 1–3 条针对性的训练建议。",
+        "",
+        "格式：Markdown，## 做章节标题，**加粗**关键对比数值，重要对比用表格呈现。语言简洁专业。",
+    ]
+
+    return "\n".join(lines)
+
+
 @app.route("/api/ai/config")
 def ai_config_status():
     cfg = _load_ai_config()
@@ -985,7 +1110,7 @@ def save_config_raw():
     return jsonify(ok=True)
 
 
-def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = None):
+def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = None, max_tokens_override: int | None = None):
     """共享 SSE 流式响应助手，所有 AI 端点都通过此函数返回。"""
     from flask import Response as _Resp, stream_with_context
     import requests as _req
@@ -995,7 +1120,7 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
     payload  = {
         "model":      cfg.get("model", "gpt-4o-mini"),
         "messages":   messages if messages is not None else [{"role": "user", "content": prompt}],
-        "max_tokens": cfg.get("max_tokens", 2500),
+        "max_tokens": max_tokens_override if max_tokens_override is not None else cfg.get("max_tokens", 2500),
         "stream":     True,
     }
 
@@ -1061,6 +1186,20 @@ def ai_chat():
     if not messages:
         return jsonify(error="消息为空"), 400
     return _llm_stream(cfg, messages=messages)
+
+
+@app.route("/api/ai/compare", methods=["POST"])
+def ai_compare():
+    cfg = _load_ai_config()
+    if not cfg:
+        return jsonify(error="AI 未配置，请编辑项目根目录下的 config.json"), 503
+    body       = request.get_json(silent=True) or {}
+    activities = body.get("activities") or []
+    if len(activities) < 2:
+        return jsonify(error="至少需要 2 条骑行记录"), 400
+    prompt   = _build_compare_prompt(activities)
+    override = max(cfg.get("max_tokens", 2500) * 2, 5000)
+    return _llm_stream(cfg, prompt, max_tokens_override=override)
 
 
 @app.route("/api/weather/<path:filename>")
