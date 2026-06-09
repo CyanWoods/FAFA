@@ -326,6 +326,13 @@
           <input type="text" id="ex-username-input" placeholder="用户名（左下角，可留空）" maxlength="30">
         </div>
       </div>
+      <div class="modal-section">
+        <div class="modal-label">分组距离阈值</div>
+        <div class="ex-group-row">
+          <input type="number" id="ex-group-threshold" value="500" min="1" max="99999"> km
+          <span class="ex-group-hint">路径中心点间距超过此值时分组导出</span>
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="modal-cancel" onclick="closeExportModal()">取消</button>
         <button class="modal-export" id="ex-do-btn" onclick="doExport()">导出</button>

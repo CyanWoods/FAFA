@@ -150,7 +150,7 @@ function decryptCoords(raw) { return raw.map(([a, b]) => gcj02ToWgs84(a, b)); }
 let map, tileLayer, currentTile = 'dark-nolabels';
 const tracks = new Map();
 let trackCounter = 0;
-const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K', watermark: false, username: '' };
+const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K', watermark: false, username: '', groupThreshold: 500 };
 let panelExpanded = false;
 let panelExpandedHeight = 320;
 let detailTrackId = null;
@@ -1438,8 +1438,51 @@ function _hexToRgb(hex) {
   return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
 }
 
-function _drawTracks(ctx, zoom, originX, originY, colorMode, uniformColor) {
-  const allTracks = [...tracks.values()];
+function _haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function _trackBboxCenter(t) {
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const [lat, lon] of getCoords(t)) {
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+  }
+  return [(minLat + maxLat) / 2, (minLon + maxLon) / 2];
+}
+
+// Groups trackList into sub-arrays where all tracks within a group have
+// centers within thresholdKm of each other (greedy single-pass).
+function _groupTracksByDistance(trackList, thresholdKm) {
+  const groups = []; // [{tracks, cLat, cLon}]
+  for (const t of trackList) {
+    const [lat, lon] = _trackBboxCenter(t);
+    let matched = null;
+    for (const g of groups) {
+      if (_haversineKm(lat, lon, g.cLat, g.cLon) <= thresholdKm) { matched = g; break; }
+    }
+    if (matched) {
+      matched.tracks.push(t);
+      // recompute group centroid
+      const n = matched.tracks.length;
+      matched.cLat = matched.tracks.reduce((s, x) => s + _trackBboxCenter(x)[0], 0) / n;
+      matched.cLon = matched.tracks.reduce((s, x) => s + _trackBboxCenter(x)[1], 0) / n;
+    } else {
+      groups.push({ tracks: [t], cLat: lat, cLon: lon });
+    }
+  }
+  return groups.map(g => g.tracks);
+}
+
+function _drawTracks(ctx, zoom, originX, originY, colorMode, uniformColor, trackList = null) {
+  const allTracks = trackList ?? [...tracks.values()];
 
   ctx.save();
   ctx.lineJoin = 'round';
@@ -1581,66 +1624,73 @@ function _drawWatermark(ctx, W, H) {
   ctx.restore();
 }
 
+async function _exportGroup(groupTracks, W, H, tileTemplate, suffix, btn) {
+  const allCoords = [];
+  for (const t of groupTracks) for (const pt of getCoords(t)) allCoords.push(pt);
+
+  const { zoom: zoomExact, minLat, maxLat, minLon, maxLon } = _calcZoom(allCoords, W, H);
+  const zoomInt = Math.floor(zoomExact);
+  const scaleFactor = Math.pow(2, zoomExact - zoomInt);
+  const [_ox, _oy] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoomExact, W, H);
+  const originX = Math.round(_ox);
+  const originY = Math.round(_oy);
+
+  const TILE = 256;
+  const SCALED = TILE * scaleFactor;
+  const col0 = Math.floor(originX / SCALED), col1 = Math.floor((originX + W - 1) / SCALED);
+  const row0 = Math.floor(originY / SCALED), row1 = Math.floor((originY + H - 1) / SCALED);
+  const tileCount = (col1 - col0 + 1) * (row1 - row0 + 1);
+  console.log(`[export${suffix}] zoom=${zoomExact.toFixed(3)}, tiles=${tileCount}`);
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  btn.textContent = `${suffix} 加载地图 0/${tileCount}…`;
+  await _drawTiles(ctx, zoomInt, scaleFactor, originX, originY, W, H, tileTemplate, n => {
+    btn.textContent = `${suffix} 加载地图 ${n}/${tileCount}…`;
+  });
+
+  _drawTracks(ctx, zoomExact, originX, originY, exportState.colorMode, exportState.uniformColor, groupTracks);
+  _drawWatermark(ctx, W, H);
+
+  btn.textContent = `${suffix} PNG 编码中…`;
+  const baseName = `fafa_${exportState.resolution}_${exportState.ratio.replace(':', '-')}`;
+  await new Promise(resolve => canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = suffix ? `${baseName}_${suffix}.png` : `${baseName}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    resolve();
+  }, 'image/png'));
+}
+
 async function doExport() {
   const btn = document.getElementById('ex-do-btn');
   btn.disabled = true;
   btn.textContent = '生成中…';
 
-  const T = label => { console.timeEnd('[export] ' + label); console.time('[export] ' + label); };
   console.group('[export] PNG 导出诊断');
   console.time('[export] 总耗时');
-  console.time('[export] 计算 zoom/origin');
 
   try {
     const [W, H] = EXPORT_RESOLUTIONS[exportState.resolution][exportState.ratio];
     const tileTemplate = EXPORT_TILE_URLS[exportState.tile];
+    const allTracks = [...tracks.values()];
 
-    const allCoords = [];
-    for (const t of tracks.values()) for (const pt of getCoords(t)) allCoords.push(pt);
+    const thresholdKm = Math.max(1, exportState.groupThreshold || 500);
+    const groups = _groupTracksByDistance(allTracks, thresholdKm);
+    console.log(`[export] ${allTracks.length} 条路径分为 ${groups.length} 组（阈值 ${thresholdKm} km）`);
 
-    const { zoom: zoomExact, minLat, maxLat, minLon, maxLon } = _calcZoom(allCoords, W, H);
-    const zoomInt = Math.floor(zoomExact);
-    const scaleFactor = Math.pow(2, zoomExact - zoomInt);
-    const [_ox, _oy] = _calcOrigin(minLat, maxLat, minLon, maxLon, zoomExact, W, H);
-    const originX = Math.round(_ox);
-    const originY = Math.round(_oy);
-
-    const TILE = 256;
-    const SCALED = TILE * scaleFactor;
-    const col0 = Math.floor(originX / SCALED), col1 = Math.floor((originX + W - 1) / SCALED);
-    const row0 = Math.floor(originY / SCALED), row1 = Math.floor((originY + H - 1) / SCALED);
-    const tileCount = (col1 - col0 + 1) * (row1 - row0 + 1);
-    T('计算 zoom/origin');
-    console.log(`[export] 分辨率 ${W}×${H}，zoom=${zoomExact.toFixed(3)}（tile z=${zoomInt} ×${scaleFactor.toFixed(3)}），tiles=${tileCount}（${col1-col0+1}列×${row1-row0+1}行）`);
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = W;
-    canvas.height = H;
-    const ctx = canvas.getContext('2d');
-
-    console.time('[export] 加载 tiles');
-    btn.textContent = `加载地图 0/${tileCount}…`;
-    await _drawTiles(ctx, zoomInt, scaleFactor, originX, originY, W, H, tileTemplate, n => {
-      btn.textContent = `加载地图 ${n}/${tileCount}…`;
-    });
-    T('加载 tiles');
-
-    console.time('[export] 绘制路径');
-    _drawTracks(ctx, zoomExact, originX, originY, exportState.colorMode, exportState.uniformColor);
-    _drawWatermark(ctx, W, H);
-    T('绘制路径');
-
-    console.time('[export] PNG 编码 (toBlob)');
-    btn.textContent = 'PNG 编码中…';
-    await new Promise(resolve => canvas.toBlob(blob => {
-      T('PNG 编码 (toBlob)');
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `fafa_${exportState.resolution}_${exportState.ratio.replace(':', '-')}.png`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      resolve();
-    }, 'image/png'));
+    if (groups.length === 1) {
+      await _exportGroup(groups[0], W, H, tileTemplate, '', btn);
+    } else {
+      for (let i = 0; i < groups.length; i++) {
+        await _exportGroup(groups[i], W, H, tileTemplate, String(i + 1), btn);
+      }
+    }
 
     console.timeEnd('[export] 总耗时');
     console.groupEnd();
@@ -2867,6 +2917,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('ex-username-input').addEventListener('input', e => {
     exportState.username = e.target.value;
+  });
+  document.getElementById('ex-group-threshold').addEventListener('input', e => {
+    const v = parseFloat(e.target.value);
+    exportState.groupThreshold = isNaN(v) || v < 1 ? 500 : v;
   });
 
   document.addEventListener('keydown', e => {

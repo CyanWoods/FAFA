@@ -795,6 +795,38 @@ body {
 .light-theme #ex-username-input::placeholder { color: #aaa; }
 .light-theme .ex-toggle { color: #666; }
 
+.ex-group-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #888;
+}
+.ex-group-row input[type="number"] {
+  width: 68px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #ccc;
+  outline: none;
+  text-align: right;
+}
+.ex-group-row input[type="number"]:focus { border-color: rgba(46,134,222,0.6); }
+.ex-group-hint {
+  font-size: 12px;
+  color: #888;
+}
+.light-theme .ex-group-row input[type="number"] {
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.15);
+  color: #333;
+}
+.light-theme .ex-group-row { color: #999; }
+.light-theme .ex-group-hint { color: #999; }
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
