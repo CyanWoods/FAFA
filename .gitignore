@@ -7,3 +7,6 @@
 input/
 output/
 .playwright-mcp/
+# runtime secrets & user data
+users.db
+.env
