@@ -2533,7 +2533,7 @@ function _updateDetailRouteMarker(dataIdx) {
     const elapsedS  = (targetDist / Math.max(totalDist, 1)) * _detailTotalDurationS;
     const wind = _getHourlyWind(_detailWindData.hourly, _detailWindData.start_epoch, elapsedS);
     if (wind) {
-      const bearing = _bearingAtIndex(lo);
+      const bearing = _bearingByTimeWindow(elapsedS);
       const effect  = _windEffect(bearing, wind.dir);
       const color   = effect === 'headwind' ? '#e74c3c' : effect === 'tailwind' ? '#27ae60' : '#f39c12';
       const icon = L.divIcon({
@@ -2598,6 +2598,35 @@ function _bearingAtIndex(idx) {
   const dlat = coords[i1][0] - coords[idx][0];
   const dlon = coords[i1][1] - coords[idx][1];
   const latM = Math.PI / 180 * ((coords[idx][0] + coords[i1][0]) / 2);
+  return (Math.atan2(dlon * Math.cos(latM), dlat) * 180 / Math.PI + 360) % 360;
+}
+
+// Bearing computed over a ±3-minute sliding window centred on elapsedS.
+// Converts the time window to a distance range via uniform-pace assumption,
+// then takes the bearing from the window-start GPS point to the window-end point.
+function _bearingByTimeWindow(elapsedS) {
+  const coords  = _detailRouteCoords;
+  const cumDist = _detailRouteCumDist;
+  if (!coords || !cumDist || _detailTotalDurationS <= 0) return 0;
+  const totalDist = cumDist[cumDist.length - 1];
+  const HALF_WIN  = 180; // seconds
+
+  const d0 = (Math.max(0,                      elapsedS - HALF_WIN) / _detailTotalDurationS) * totalDist;
+  const d1 = (Math.min(_detailTotalDurationS,   elapsedS + HALF_WIN) / _detailTotalDurationS) * totalDist;
+
+  // Binary search: first index where cumDist >= d0
+  let lo0 = 0, hi0 = cumDist.length - 1;
+  while (lo0 < hi0) { const m = (lo0 + hi0) >> 1; if (cumDist[m] < d0) lo0 = m + 1; else hi0 = m; }
+  // Binary search: first index where cumDist >= d1
+  let lo1 = 0, hi1 = cumDist.length - 1;
+  while (lo1 < hi1) { const m = (lo1 + hi1) >> 1; if (cumDist[m] < d1) lo1 = m + 1; else hi1 = m; }
+
+  // If window collapses to a single point, fall back to adjacent-point bearing
+  if (lo0 >= lo1) return _bearingAtIndex(lo0);
+
+  const dlat = coords[lo1][0] - coords[lo0][0];
+  const dlon = coords[lo1][1] - coords[lo0][1];
+  const latM = Math.PI / 180 * ((coords[lo0][0] + coords[lo1][0]) / 2);
   return (Math.atan2(dlon * Math.cos(latM), dlat) * 180 / Math.PI + 360) % 360;
 }
 
