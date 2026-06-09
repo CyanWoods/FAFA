@@ -731,6 +731,7 @@ function addTrack(data) {
   const decrypted = decryptCoords(raw);
   const encrypted = encryptCoords(raw);
   const polyline  = L.polyline(raw, { color, weight: 3, opacity: 0.82 }).addTo(map);
+  polyline.on('click', () => _focusTrackRow(id));
   const track = { id, name: data.filename, filename: data.filename, raw, decrypted, encrypted, polyline, color, mode: 'raw',
                   source: data.source || 'upload',
                   summary: data.summary || null, kmStats: data.km_stats || [],
@@ -986,6 +987,24 @@ function syncBadge() {
 
 function syncEmptyHint() {
   document.getElementById('empty-hint').style.display = tracks.size === 0 ? '' : 'none';
+}
+
+/* ── Track panel focus (polyline click → scroll + highlight row) ─────────── */
+function _focusTrackRow(id) {
+  // Expand panel if collapsed
+  if (!panelExpanded) togglePanel();
+
+  const row = document.getElementById(`ti-${id}`);
+  if (!row) return;
+
+  // Scroll row into view within the panel list
+  row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+  // Highlight animation (restart if already running)
+  row.classList.remove('track-item--highlight');
+  void row.offsetWidth; // force reflow to restart animation
+  row.classList.add('track-item--highlight');
+  row.addEventListener('animationend', () => row.classList.remove('track-item--highlight'), { once: true });
 }
 
 /* ── Flash effect ────────────────────────────────────────────────────────── */
