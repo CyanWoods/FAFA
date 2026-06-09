@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import urllib.request
 import urllib.parse
@@ -32,13 +33,18 @@ def _parse_start_time(item: dict) -> datetime | None:
     return None
 
 
+def _safe_ride_id(ride_id: str) -> str:
+    """Strip any characters that could cause path traversal."""
+    return re.sub(r'[^A-Za-z0-9_-]', '_', str(ride_id))
+
+
 def make_filename(ride_id: str, start_time: datetime | None) -> str:
     ts = start_time.strftime("%Y%m%d-%H%M%S") if start_time else "00000000-000000"
-    return f"iGPSport_{ride_id}_{ts}.fit"
+    return f"iGPSport_{_safe_ride_id(ride_id)}_{ts}.fit"
 
 
 def ride_id_exists(ride_id: str, input_dir: Path) -> bool:
-    return bool(list(input_dir.glob(f"iGPSport_{ride_id}_*.fit")))
+    return bool(list(input_dir.glob(f"iGPSport_{_safe_ride_id(ride_id)}_*.fit")))
 
 
 class IGPSportClient:

@@ -286,6 +286,8 @@ def download_activity(
         filename = re.sub(r'[<>:"/\\|?*]+', "_", str(name)).strip(".")
     if not filename.lower().endswith(".fit"):
         filename += ".fit"
+    # Strip any directory components to prevent path traversal
+    filename = Path(filename).name
 
     out_dir.mkdir(parents=True, exist_ok=True)
     final = out_dir / filename
