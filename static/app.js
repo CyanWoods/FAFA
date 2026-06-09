@@ -1641,7 +1641,21 @@ async function openDetailView(id) {
   if (_windBtn) _windBtn.classList.add('active');
   fetch(`/api/weather/${encodeURIComponent(t.name)}`)
     .then(r => r.ok ? r.json() : null)
-    .then(d => { if (d?.available && d.hourly) _detailWindData = d; })
+    .then(d => {
+      if (d?.available && d.hourly) _detailWindData = d;
+      if (d?.available) {
+        const summaryRow = document.getElementById('detail-summary-row');
+        if (summaryRow) {
+          const arrow = _windDirArrow(d.wind_dir_deg);
+          summaryRow.insertAdjacentHTML('beforeend',
+            `<span class="stat-chip">🌬 ${d.wind_speed_avg_kmh} km/h</span>` +
+            `<span class="stat-chip">${arrow} ${d.wind_dir_label}</span>` +
+            `<span class="stat-chip">逆风 ${d.headwind_pct}% / 顺风 ${d.tailwind_pct}%</span>` +
+            (d.gust_max_kmh ? `<span class="stat-chip">阵风 ${d.gust_max_kmh} km/h</span>` : '')
+          );
+        }
+      }
+    })
     .catch(() => {});
 }
 
@@ -4876,10 +4890,9 @@ async function _sendAiChat() {
 }
 
 function _windDirArrow(deg) {
-  // Arrow points toward direction wind comes FROM (matches compass label)
-  // 0=N→↑, 45=NE→↗, 90=E→→, 135=SE→↘, 180=S→↓, 225=SW→↙, 270=W→←, 315=NW→↖
+  // Arrow points in direction wind blows TO (deg = from-direction, +180 = to-direction)
   const arrows = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
-  return arrows[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+  return arrows[Math.round(((deg + 180) % 360) / 45) % 8];
 }
 
 /* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
