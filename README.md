@@ -58,11 +58,13 @@ venv\Scripts\pip install -r requirements.txt
 
 **macOS / Linux：**
 ```bash
-venv/bin/python app.py
+venv/bin/python app.py           # 本地单用户模式（默认）
+venv/bin/python app.py --server  # 服务器多用户模式（启用登录验证）
 ```
 **Windows：**
 ```bat
 venv\Scripts\python app.py
+venv\Scripts\python app.py --server
 ```
 然后访问 http://localhost:5173
 
@@ -184,7 +186,7 @@ venv\Scripts\python app.py
 将 `input/` 中的骑行活动上传到 Strava，支持差分上传和多选批量上传。
 
 **配置步骤：**
-1. 在 [Strava 开发者控制台](https://www.strava.com/settings/api) 创建 App，将回调域名设为 `localhost`
+1. 在 [Strava 开发者控制台](https://www.strava.com/settings/api) 创建 App，将回调域名设为部署时的域名（本地运行填 `localhost`，服务器部署填实际域名）
 2. 在侧边栏「设置」面板或 `config.json` 中填写 `strava_client_id` / `strava_client_secret`
 3. 在活动视图点击「全部上传 Strava」→ 首次需在弹窗中点击「授权 Strava」完成 OAuth（token 自动保存到 `config.json`）
 4. 授权后点击「全部上传 Strava」会先查询 Strava 已有活动列表，弹窗显示「本地 M 个，Strava 已有 K 个，待上传 N 个」，确认后仅上传差集
@@ -338,7 +340,6 @@ cp config.template.json config.json
   "strava_access_token": "",
   "strava_refresh_token": "",
   "strava_expires_at": 0,
-  "strava_redirect_port": 5173,
   "strava_athlete_id": "",
   "strava_athlete_name": ""
 }
@@ -358,7 +359,6 @@ cp config.template.json config.json
 | `strava_client_secret` | ❌ | Strava API App 的 Client Secret |
 | `strava_access_token` | ❌ | 由 OAuth 授权流程自动写入，无需手动填写 |
 | `strava_refresh_token` | ❌ | 同上，OAuth 授权后自动写入 |
-| `strava_redirect_port` | ❌ | OAuth 回调端口，默认 `5173`（与 Flask 服务端口一致） |
 
 ### 常见 API 服务示例
 

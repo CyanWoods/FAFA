@@ -13,6 +13,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 USERS_DB = Path(__file__).parent.parent / 'users.db'
 _db_lock = threading.Lock()
 
+_server_mode: bool = True
+
+
+def set_server_mode(enabled: bool) -> None:
+    global _server_mode
+    _server_mode = enabled
+
 
 def init_db() -> None:
     with _db_lock:
@@ -103,6 +110,8 @@ def change_password(username: str, new_password: str) -> bool:
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        if not _server_mode:
+            return f(*args, **kwargs)
         if 'user_id' not in session:
             if request.is_json or request.path.startswith('/api/'):
                 return {'error': 'unauthorized'}, 401

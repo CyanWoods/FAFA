@@ -48,7 +48,6 @@ def load_config(config_file: Path | None = None) -> dict | None:
             "expires_at": int(cfg.get("strava_expires_at") or 0),
             "athlete_id": (cfg.get("strava_athlete_id") or "").strip(),
             "athlete_name": (cfg.get("strava_athlete_name") or "").strip(),
-            "redirect_port": int(cfg.get("strava_redirect_port") or 5173),
         }
     except Exception:
         return None
@@ -114,11 +113,10 @@ def get_access_token(config_file: Path | None = None) -> str:
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def build_auth_url(port: int = 5173, config_file: Path | None = None) -> str:
+def build_auth_url(redirect_uri: str, config_file: Path | None = None) -> str:
     cfg = load_config(config_file)
     if not cfg:
         raise Exception("Strava 未配置 client_id")
-    redirect_uri = f"http://localhost:{port}/strava/callback"
     state_tok = hashlib.md5(f"{cfg['client_id']}-{time.time()}".encode()).hexdigest()[:12]
     return (
         f"https://www.strava.com/oauth/authorize"

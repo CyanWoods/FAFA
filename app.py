@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -32,24 +33,31 @@ import fafa.strava as _strava
 import fafa.db as _db
 import fafa.auth as _auth
 
+SERVER_MODE = "--server" in sys.argv or os.environ.get("FAFA_SERVER") == "1"
+_auth.set_server_mode(SERVER_MODE)
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.secret_key = os.environ.get('FAFA_SECRET', 'dev-secret-change-in-prod')
 
-if not os.environ.get('FAFA_SECRET'):
+if SERVER_MODE and not os.environ.get('FAFA_SECRET'):
     logging.warning('FAFA_SECRET not set — using insecure dev secret. Set it for production!')
 
 PROJECT_ROOT      = Path(__file__).parent
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
 
-# Initialise the users database once at startup.
-_auth.init_db()
+if SERVER_MODE:
+    _auth.init_db()
+else:
+    _local_input = PROJECT_ROOT / 'input'
+    _local_input.mkdir(parents=True, exist_ok=True)
+    _db.init_db(_local_input)
 
 # ── Per-request user helpers ───────────────────────────────────────────────────
 
 def _user_input_dir() -> Path:
-    d = PROJECT_ROOT / 'input' / g.username
+    d = (PROJECT_ROOT / 'input') if not SERVER_MODE else (PROJECT_ROOT / 'input' / g.username)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -64,6 +72,10 @@ def _user_db_path() -> Path:
 
 @app.before_request
 def _load_user():
+    if not SERVER_MODE:
+        g.user_id  = 0
+        g.username = "local"
+        return
     user_id = session.get('user_id')
     if user_id:
         user = _auth.get_user_by_id(user_id)
@@ -1838,7 +1850,8 @@ def strava_diff():
 @_auth.login_required
 def strava_auth_url():
     try:
-        url = _strava.build_auth_url(port=5173, config_file=_user_config_file())
+        redirect_uri = url_for("strava_callback", _external=True)
+        url = _strava.build_auth_url(redirect_uri=redirect_uri, config_file=_user_config_file())
         return jsonify(url=url)
     except Exception as e:
         return jsonify(error=str(e)), 400
@@ -1970,6 +1983,8 @@ def delete_tag(tag_id):
 
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    if debug:
-        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
+    mode_label = "server (multi-user)" if SERVER_MODE else "local (single-user)"
+    logging.info("Starting FAFA in %s mode", mode_label)
     app.run(debug=debug, port=5173)
