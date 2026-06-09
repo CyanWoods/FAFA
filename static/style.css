@@ -1,6 +1,35 @@
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* ── Global form element normalization ──────────────────────────────────────── */
+
+/* Hide native number spinners — users can still type or use keyboard */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* Shared color-picker base — appearance:none strips browser chrome */
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  background: none;
+  overflow: hidden;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; margin: 0; }
+input[type="color"]::-webkit-color-swatch { border: none; }
+
+/* Shared select base — appearance:none + custom SVG chevron */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  cursor: pointer;
+  outline: none;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
                'Helvetica Neue', sans-serif;
@@ -161,15 +190,12 @@ body {
 #map-actions button:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
 #tile-select {
-  appearance: none;
-  background: rgba(255, 255, 255, 0.07) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E") no-repeat right 8px center;
+  background-color: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   color: #ccc;
   font-size: 12px;
   padding: 6px 26px 6px 14px;
-  cursor: pointer;
-  outline: none;
 }
 
 #tile-select option { background: #1a1a28; }
@@ -1121,21 +1147,15 @@ body {
 }
 #tag-new-name:focus { outline: none; border-color: rgba(99,153,255,0.5); }
 #tag-new-color {
-  -webkit-appearance: none;
-  appearance: none;
   box-sizing: border-box;
   width: 28px;
   height: 24px;
   padding: 0;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 5px;
-  cursor: pointer;
-  overflow: hidden;
   flex-shrink: 0;
-  background: none;
 }
-#tag-new-color::-webkit-color-swatch-wrapper { padding: 0; margin: 0; }
-#tag-new-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+#tag-new-color::-webkit-color-swatch { border-radius: 4px; }
 #tag-new-btn {
   box-sizing: border-box;
   height: 24px;
@@ -1510,11 +1530,9 @@ body {
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 8px;
-  color: #aaa;
+  color: #ccc;
   font-size: 12px;
-  padding: 4px 8px;
-  cursor: pointer;
-  outline: none;
+  padding: 4px 24px 4px 8px;
   flex-shrink: 0;
   width: auto;
 }
@@ -1880,12 +1898,27 @@ body {
 
 .sync-box { width: 400px; }
 
+.sync-platform-row {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+.sync-platform-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: #ccc;
+  cursor: pointer;
+}
+.sync-platform-opt input[type=radio] { accent-color: #3498db; }
+
 .sync-desc {
   font-size: 13px; color: #888; line-height: 1.6;
   margin: 0 0 16px;
 }
 .sync-opts {
-  font-size: 13px; color: #aaa; margin-bottom: 20px;
+  font-size: 13px; color: #ccc; margin-bottom: 20px;
 }
 .sync-opts label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .sync-opts input[type=checkbox] { accent-color: #3498db; }
@@ -3846,6 +3879,9 @@ body {
 .light-theme .modal-label { color: #666; }
 .light-theme .modal-cancel { border-color: rgba(0,0,0,0.20); color: #444; }
 .light-theme .modal-cancel:hover { background: rgba(0,0,0,0.07); color: #111; }
+.light-theme .sync-platform-opt { color: #444; }
+.light-theme .sync-opts { color: #444; }
+.light-theme .sync-desc { color: #666; }
 .light-theme .opt-btn { border-color: rgba(0,0,0,0.20); color: #444; background: transparent; }
 .light-theme .opt-btn:not(.active):hover { background: rgba(0,0,0,0.07); color: #111; }
 
