@@ -763,6 +763,13 @@ function removeTrack(id) {
   syncEmptyHint();
 }
 
+function mapFitAll() {
+  if (!tracks.size) return;
+  const allBounds = L.latLngBounds([]);
+  for (const t of tracks.values()) allBounds.extend(t.polyline.getBounds());
+  map.fitBounds(allBounds, { padding: [32, 32], maxZoom: 16 });
+}
+
 function clearAllTracks() {
   for (const id of [...tracks.keys()]) removeTrack(id);
 }

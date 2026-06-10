@@ -2099,12 +2099,19 @@ body {
   position: relative;
 }
 
-#detail-route-fit-btn {
+#detail-route-map-controls {
   position: absolute;
   left: 8px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#detail-route-fit-btn,
+#detail-route-wind-btn {
   width: 30px;
   height: 30px;
   border-radius: var(--radius-sm);
@@ -2112,6 +2119,31 @@ body {
   background: rgba(15,15,20,0.82);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+#detail-route-fit-btn { color: #aaa; font-size: 16px; transition: var(--transition-base); }
+#detail-route-wind-btn { color: #aaa; transition: var(--transition-full); }
+#detail-route-fit-btn:hover,
+#detail-route-wind-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
+#detail-route-wind-btn.active { color: var(--color-primary); border-color: rgba(46,134,222,0.6); }
+
+#map-fit-btn {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 900;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(15,15,20,0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: #aaa;
   font-size: 16px;
   cursor: pointer;
@@ -2119,33 +2151,10 @@ body {
   align-items: center;
   justify-content: center;
   line-height: 1;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.55);
   transition: var(--transition-base);
 }
-#detail-route-fit-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
-
-#detail-route-wind-btn {
-  position: absolute;
-  left: 8px;
-  top: calc(50% + 38px);
-  transform: translateY(-50%);
-  z-index: 1000;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--surface-raised);
-  background: rgba(15,15,20,0.82);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  color: #555;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  transition: var(--transition-full);
-}
-#detail-route-wind-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
-#detail-route-wind-btn.active { color: var(--color-primary); border-color: rgba(46,134,222,0.6); }
+#map-fit-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
 
 #detail-route-tooltip {
   position: fixed;
@@ -3943,8 +3952,13 @@ body {
 .light-theme .detail-table td:first-child { color: #666; }
 .light-theme .detail-table tr:hover td { background: rgba(0,0,0,0.04); }
 .light-theme #detail-route-metric-bar { background: rgba(242,242,246,0.98); border-bottom-color: rgba(0,0,0,0.12); }
-.light-theme #detail-route-fit-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: #555; }
-.light-theme #detail-route-fit-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
+.light-theme #detail-route-fit-btn,
+.light-theme #detail-route-wind-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: #555; }
+.light-theme #detail-route-fit-btn:hover,
+.light-theme #detail-route-wind-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
+.light-theme #detail-route-wind-btn.active { color: var(--color-primary); border-color: var(--color-primary); background: rgba(46,134,222,0.12); }
+.light-theme #map-fit-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: #555; }
+.light-theme #map-fit-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
 .light-theme .det-route-metric-btn { border-color: rgba(0,0,0,0.20); color: #444; background: transparent; }
 .light-theme .det-route-metric-btn.active { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
 .light-theme .det-route-metric-btn:hover:not(.active) { background: rgba(0,0,0,0.07); color: #111; }
