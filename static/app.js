@@ -178,6 +178,7 @@ let aiTrackId = null;
 let _aiModel  = '';
 let _aiChatMessages  = [];
 let _aiChatStreaming  = false;
+const _AI_EVAL_SYS_MSG = '你是专业骑行教练 AI。以下是本次骑行的原始数据，请基于此回答后续问题。';
 let _analyticsOpen = false;
 let _analyticsTab  = 'pmc'; // 'pmc' | 'calendar'
 let _pmcChart = null;
@@ -3740,7 +3741,7 @@ async function openAiView() {
         wind_data:  windData,
       }),
     }),
-    '你是专业骑行教练 AI。以下是本次骑行的原始数据，请基于此回答后续问题。'
+    _AI_EVAL_SYS_MSG
   );
 }
 
@@ -4999,7 +5000,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn, systemMsg) {
       }
     }
     if (fullText) {
-      const sysMsg  = systemMsg || '你是专业骑行教练 AI，请基于原始数据和以上分析回答后续问题。';
+      const sysMsg  = systemMsg || '你是专业骑行教练 AI，请基于原始数据回答后续问题。';
       const userMsg = capturedPrompt || '请分析。';
       _aiChatMessages = [
         { role: 'system',    content: sysMsg },
@@ -5109,7 +5110,7 @@ async function openActAiModal(act) {
     (act.filename || '').replace(/\.fit$/i, ''),
     chips.map(c => `<span class="stat-chip">${c}</span>`).join('') + weatherHtml,
     () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '', wind_data: windData }) }),
-    '你是专业骑行教练 AI。以下是本次骑行的原始数据，请基于此回答后续问题。'
+    _AI_EVAL_SYS_MSG
   );
 }
 
