@@ -1314,6 +1314,8 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
     }
 
     def generate():
+        if prompt is not None:
+            yield f"data: {json.dumps({'type': 'prompt', 'content': prompt}, ensure_ascii=False)}\n\n"
         try:
             with _req.post(
                 f"{api_base}/chat/completions",

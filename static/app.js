@@ -479,7 +479,8 @@ async function _actBulkAiCompare() {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(payload),
-    })
+    }),
+    '你是专业骑行教练 AI。以下是多次骑行的原始数据，请基于此回答后续问题。'
   );
 }
 
@@ -3738,7 +3739,8 @@ async function openAiView() {
         start_time: t.timeStatsStart || '',
         wind_data:  windData,
       }),
-    })
+    }),
+    '你是专业骑行教练 AI。以下是本次骑行的原始数据，请基于此回答后续问题。'
   );
 }
 
@@ -4943,7 +4945,7 @@ function _renderPmcCurve(activities, settings) {
 }
 
 /* ── 共享 AI 弹窗 helper ───────────────────────────────────────────────────── */
-async function _openAndStreamModal(title, summaryHtml, fetchFn) {
+async function _openAndStreamModal(title, summaryHtml, fetchFn, systemMsg) {
   const summaryEl = document.getElementById('act-ai-modal-summary');
   document.getElementById('act-ai-modal-title').textContent = title;
   document.getElementById('act-ai-modal-result').innerHTML  = '';
@@ -4977,7 +4979,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '', fullText = '';
+    let buffer = '', fullText = '', capturedPrompt = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -4991,14 +4993,17 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn) {
         try {
           const chunk = JSON.parse(ds);
           if (chunk.error) { _setErrorHtml(resultEl, chunk.error); return; }
+          if (chunk.type === 'prompt') { capturedPrompt = chunk.content; continue; }
           if (chunk.text)  { fullText += chunk.text; resultEl.innerHTML = _renderMarkdown(fullText); }
         } catch {}
       }
     }
     if (fullText) {
+      const sysMsg  = systemMsg || '你是专业骑行教练 AI，请基于原始数据和以上分析回答后续问题。';
+      const userMsg = capturedPrompt || '请分析。';
       _aiChatMessages = [
-        { role: 'system',    content: '你是专业骑行教练 AI，以下是你对本次骑行的分析报告，请基于此内容回答后续问题。' },
-        { role: 'user',      content: '请分析这次骑行。' },
+        { role: 'system',    content: sysMsg },
+        { role: 'user',      content: userMsg },
         { role: 'assistant', content: fullText },
       ];
       if (sendBtn) sendBtn.disabled = false;
@@ -5103,7 +5108,8 @@ async function openActAiModal(act) {
   await _openAndStreamModal(
     (act.filename || '').replace(/\.fit$/i, ''),
     chips.map(c => `<span class="stat-chip">${c}</span>`).join('') + weatherHtml,
-    () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '', wind_data: windData }) })
+    () => fetch('/api/ai/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: act.summary || {}, km_stats: kmStats, filename: act.filename || '', start_time: act.start_time || '', wind_data: windData }) }),
+    '你是专业骑行教练 AI。以下是本次骑行的原始数据，请基于此回答后续问题。'
   );
 }
 
@@ -5132,7 +5138,7 @@ async function startCalendarAi(period) {
         elevation_m: a.summary?.total_elevation_gain_m,
       })),
     }),
-  }));
+  }), '你是专业骑行教练 AI。以下是训练日历的原始数据，请基于此回答后续问题。');
 }
 
 async function startPmcAi() {
@@ -5220,7 +5226,7 @@ async function startPmcAi() {
 
   await _openAndStreamModal('体能管理 · AI 评估', null, () => fetch('/api/ai/pmc', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  }));
+  }), '你是专业骑行教练 AI。以下是体能管理图的原始数据，请基于此回答后续问题。');
 }
 
 /* ── 训练日历 ────────────────────────────────────────────────────────────── */
