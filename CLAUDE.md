@@ -84,6 +84,17 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 - `fafa.tools.download_fit` — CLI wrapper for the OneLap download pipeline (same logic as the web sync, but terminal output).
 - `fafa.tools.ant_analysis` — Analyze ANT+ device connection duration per FIT file. Reports per-device connected time, percentage of ride, and disconnection windows derived from `record_mesgs`. Devices without a record-level metric field (Di2/eTap, lights, radar) are listed as registered. Di2/eTap additionally shows gear change events with direction arrows; events where both gears are 255 are tagged `[重连?]` (probable reconnect signal, validated across multiple files). All timestamps are shown in local time (derived from `activity_mesgs` UTC offset). BLE devices are excluded from output. Supports `--gap SECONDS` to merge short dropout windows and `--json` for machine-readable output.
 
+## Frontend Style Guide
+
+All frontend CSS must follow `docs/STYLE_GUIDE.md`. Key rules:
+
+- Reuse existing classes before writing new CSS (see Reusable Class Catalog in the guide)
+- All new CSS properties must use `var(--token)` from `:root` in `static/style.css`
+- No hardcoded colors (`#2e86de`), radii (`20px`), font sizes (`12px`), or transitions
+- Light theme support is automatic for token-based components — no per-selector overrides needed
+
+Token quick ref: `--color-primary`, `--surface-hover`, `--border-default`, `--text-muted`, `--radius-pill`, `--text-base`, `--transition-base`
+
 ## Key conventions
 
 - FIT GPS values are in **semicircles**: `degrees = semicircles × 180 / 2³¹`
