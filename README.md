@@ -68,6 +68,29 @@ venv\Scripts\python app.py --server
 ```
 然后访问 http://localhost:5173
 
+支持通过环境变量覆盖监听地址：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `FAFA_HOST` | 本地模式 `127.0.0.1`；服务模式 `0.0.0.0` | 监听 IP |
+| `FAFA_PORT` | `5173` | 监听端口 |
+| `FAFA_ALLOW_INSECURE_REMOTE` | `0` | 设为 `1` 时允许无鉴权的本地模式监听非回环地址；不推荐，远程访问应使用 `--server` |
+| `FAFA_SERVER` | — | 设为 `1` 启用多用户服务模式 |
+| `FAFA_SECRET` | — | 服务模式必填，Flask session 签名密钥 |
+| `FAFA_PROXY_HOPS` | `0` | 可信反向代理层数；仅在应用端口不对外暴露时设置，`start.sh` 默认为 `1` |
+
+**Docker 部署：**
+```bash
+docker build -t fafa .
+docker run -d \
+  -p 5173:5173 \
+  -e FAFA_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))") \
+  -v /data/fafa/input:/app/input \
+  -v /data/fafa/users.db:/app/users.db \
+  -v /data/fafa/config.json:/app/config.json \
+  fafa
+```
+
 ### 活动视图（默认启动视图）
 
 按月分组展示所有骑行活动卡片，支持年份 / 月份下拉筛选和距离预设按钮。底部汇总栏显示当前筛选集的总里程、时长等统计。
@@ -368,7 +391,9 @@ cp config.template.json config.json
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
 | Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
 | 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| Ollama（本地） | `http://localhost:11434/v1` | `qwen2.5:7b` |
+| 自建兼容服务 | `https://your-api.example/v1` | 服务支持的模型名 |
+
+服务模式仅接受解析到公网地址的 HTTPS AI API，防止用户配置被用于访问内网服务。本地 Ollama 需要通过受信任的 HTTPS 反向代理接入。
 
 > **注意：** `config.json` 已被 `.gitignore` 排除，不会提交到版本库，请勿将含有真实 API Key 的文件公开。
 
@@ -402,3 +427,31 @@ Web 查看器在前端实时进行坐标转换，无需预处理文件；`fafa.t
 | `folium` | CLI 工具 HTML 地图生成 |
 | `requests` | 顽鹿 API 请求 |
 | `DrissionPage` | 顽鹿浏览器登录（Chromium 自动化） |
+
+---
+
+## 持续检查与自动修复
+
+执行完整质量门禁：
+
+```bash
+venv/bin/python scripts/quality.py check
+```
+
+执行低风险自动修复（尾随空格、末尾换行、生成缓存）后重新检查：
+
+```bash
+venv/bin/python scripts/quality.py fix
+```
+
+持续监听源码变化并自动修复、复检：
+
+```bash
+venv/bin/python scripts/quality.py watch
+```
+
+也可以使用对应的 `make check`、`make fix` 和 `make watch` 快捷命令。
+
+GitHub Actions 会在每次 push 和 pull request 上运行同一质量门禁。
+
+服务模式默认信任一层本机反向代理的 `X-Forwarded-For`、`X-Forwarded-Proto` 和 `X-Forwarded-Host`。代理层数不同时通过 `FAFA_PROXY_HOPS` 调整；直接暴露 Gunicorn 时应设置为 `0`。

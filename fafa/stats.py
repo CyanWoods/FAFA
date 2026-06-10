@@ -4,6 +4,20 @@ from typing import Optional, List
 
 from .parser import Record, FitData, decode_lr_balance
 
+# 解析前安全上限：超出则抛 ValueError，由调用方捕获
+_MAX_RECORDS     = 200_000
+_MAX_DURATION_S  = 24 * 3600  # 24 小时
+
+
+def _check_fit_limits(fit: FitData) -> None:
+    """在执行任何统计计算前，校验 FIT 数据规模。"""
+    if len(fit.records) > _MAX_RECORDS:
+        raise ValueError(f"FIT 记录数超限 ({len(fit.records)} > {_MAX_RECORDS})")
+    if fit.records:
+        span = (fit.records[-1].timestamp - fit.records[0].timestamp).total_seconds()
+        if span > _MAX_DURATION_S:
+            raise ValueError(f"FIT 时间跨度超限 ({span:.0f}s > {_MAX_DURATION_S}s)")
+
 
 @dataclass
 class KmStats:
@@ -98,11 +112,14 @@ def _normalized_power(recs: List[Record]) -> Optional[float]:
     window = 30
     if len(power_1s) < window:
         return None
-    rolling = [
-        sum(power_1s[i : i + window]) / window
-        for i in range(len(power_1s) - window + 1)
-    ]
-    mean_4th = sum(x**4 for x in rolling) / len(rolling)
+    rolling_sum = sum(power_1s[:window])
+    fourth_sum = (rolling_sum / window) ** 4
+    count = 1
+    for i in range(window, len(power_1s)):
+        rolling_sum += power_1s[i] - power_1s[i - window]
+        fourth_sum += (rolling_sum / window) ** 4
+        count += 1
+    mean_4th = fourth_sum / count
     return round(mean_4th**0.25, 1)
 
 

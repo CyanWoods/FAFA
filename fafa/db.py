@@ -18,14 +18,20 @@ _PRESET_TAGS = [
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or _DB_PATH
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    if path is None:
+        raise RuntimeError("database path is not initialized")
+    conn = sqlite3.connect(str(path), timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
 def _ensure_schema(db_path: Path) -> None:
     """Create tables and seed preset tags if not present. Idempotent."""
     with _connect(db_path) as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS activity_meta (
                 filename   TEXT PRIMARY KEY,
@@ -54,8 +60,12 @@ def _ensure_schema(db_path: Path) -> None:
 
 def init_db(input_dir: Path) -> None:
     global _DB_PATH
-    _DB_PATH = input_dir / "fafa.db"
-    _ensure_schema(_DB_PATH)
+    path = input_dir / "fafa.db"
+    with _db_lock:
+        _ensure_schema(path)
+        path.chmod(0o600)
+        if _DB_PATH is None:
+            _DB_PATH = path
 
 
 def get_activity_meta(filename: str, db_path: Path | None = None) -> dict:
@@ -89,12 +99,55 @@ def save_note(filename: str, note: str, db_path: Path | None = None) -> None:
 
 def save_tags(filename: str, tag_ids: list, db_path: Path | None = None) -> None:
     with _db_lock, _connect(db_path) as conn:
+        _validate_tag_ids_conn(conn, set(tag_ids))
         conn.execute("DELETE FROM activity_tags WHERE filename = ?", (filename,))
         for tid in tag_ids:
             conn.execute(
                 "INSERT OR IGNORE INTO activity_tags (filename, tag_id) VALUES (?, ?)",
                 (filename, int(tid)),
             )
+
+
+def _validate_tag_ids_conn(conn: sqlite3.Connection, tag_ids: set[int]) -> None:
+    if not tag_ids:
+        return
+    placeholders = ','.join('?' for _ in tag_ids)
+    rows = conn.execute(
+        f"SELECT id FROM tags WHERE id IN ({placeholders})", tuple(tag_ids)
+    ).fetchall()
+    existing = {int(row["id"]) for row in rows}
+    missing = sorted(tag_ids - existing)
+    if missing:
+        raise ValueError(f"unknown tag id: {missing[0]}")
+
+
+def validate_tag_ids(tag_ids: set[int], db_path: Path | None = None) -> None:
+    with _db_lock, _connect(db_path) as conn:
+        _validate_tag_ids_conn(conn, tag_ids)
+
+
+def batch_update_tags(
+    filenames: list[str], add_ids: set[int], remove_ids: set[int],
+    db_path: Path | None = None,
+) -> int:
+    unique_filenames = list(dict.fromkeys(filenames))
+    if not unique_filenames:
+        return 0
+    with _db_lock, _connect(db_path) as conn:
+        _validate_tag_ids_conn(conn, add_ids | remove_ids)
+        if remove_ids:
+            placeholders = ','.join('?' for _ in remove_ids)
+            for filename in unique_filenames:
+                conn.execute(
+                    f"DELETE FROM activity_tags WHERE filename = ? AND tag_id IN ({placeholders})",
+                    (filename, *remove_ids),
+                )
+        if add_ids:
+            conn.executemany(
+                "INSERT OR IGNORE INTO activity_tags (filename, tag_id) VALUES (?, ?)",
+                ((filename, tag_id) for filename in unique_filenames for tag_id in add_ids),
+            )
+    return len(unique_filenames)
 
 
 def get_all_tags(db_path: Path | None = None) -> list:

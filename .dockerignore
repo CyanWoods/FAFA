@@ -1,0 +1,23 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data — mount as volumes, don't bake into image
+input/
+output/
+users.db
+config.json
+download_state.json
+result.json
+*.log
+
+# Dev artifacts
+docs/
+tests/
+scripts/
+*.md
+.git/
+.gitignore

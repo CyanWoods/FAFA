@@ -10,3 +10,5 @@ output/
 # runtime secrets & user data
 users.db
 .env
+.runtime_locks/
+.quality-watch.pid

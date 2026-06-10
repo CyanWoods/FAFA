@@ -187,13 +187,21 @@ body {
 #logout-btn {
   font-size: 16px;
   color: #555;
-  text-decoration: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
   line-height: 1;
   flex-shrink: 0;
   transition: color 0.15s;
 }
 
 #logout-btn:hover { color: #ff6b6b; }
+
+.logout-form {
+  display: flex;
+  margin: 0;
+}
 
 .sb-bottom-btn {
   flex: 1;
@@ -1659,6 +1667,9 @@ body {
   font-size: var(--text-lg);
   padding: 60px 0;
 }
+#act-parse-label { color: #555; font-size: var(--text-lg); margin-bottom: 4px; }
+#act-parse-progress-wrap { width: 220px; margin: 0 auto; }
+#act-parse-count { font-size: var(--text-base); color: #888; margin-top: 6px; }
 
 #act-summary-bar {
   display: flex;

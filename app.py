@@ -7,12 +7,16 @@
 """
 
 import bisect
-import io
+from collections import OrderedDict
+import fcntl
+import ipaddress
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
+import secrets
 import sys
 import tempfile
 import threading
@@ -21,10 +25,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from html import escape as _html_escape
 
 from flask import Flask, render_template, request, jsonify, send_file, session, g, redirect, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from fafa.parser import parse_fit
 from fafa.gcj02 import needs_wgs84_conversion
@@ -37,15 +43,214 @@ SERVER_MODE = "--server" in sys.argv or os.environ.get("FAFA_SERVER") == "1"
 _auth.set_server_mode(SERVER_MODE)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+_PROXY_HOPS = max(0, int(os.environ.get('FAFA_PROXY_HOPS', '0')))
+if _PROXY_HOPS:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=_PROXY_HOPS,
+        x_proto=_PROXY_HOPS,
+        x_host=_PROXY_HOPS,
+    )
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # FIT/JSON request hard limit
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
-app.secret_key = os.environ.get('FAFA_SECRET', 'dev-secret-change-in-prod')
+_fafa_secret = os.environ.get('FAFA_SECRET')
+if SERVER_MODE and not _fafa_secret:
+    sys.exit('FATAL: FAFA_SECRET 环境变量未设置。服务模式必须配置强随机密钥，拒绝启动。')
+app.secret_key = _fafa_secret or 'dev-secret-local-only'
 
-if SERVER_MODE and not os.environ.get('FAFA_SECRET'):
-    logging.warning('FAFA_SECRET not set — using insecure dev secret. Set it for production!')
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+if SERVER_MODE:
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
+
+def _bind_host() -> str:
+    """Keep unauthenticated local mode on loopback unless explicitly overridden."""
+    host = os.environ.get('FAFA_HOST') or ('0.0.0.0' if SERVER_MODE else '127.0.0.1')
+    if SERVER_MODE or os.environ.get('FAFA_ALLOW_INSECURE_REMOTE') == '1':
+        return host
+    try:
+        is_loopback = host.lower() == 'localhost' or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise RuntimeError(
+            '本地模式未启用登录验证，只允许监听回环地址。'
+            '如确需暴露到局域网，请使用 --server；'
+            '或显式设置 FAFA_ALLOW_INSECURE_REMOTE=1 承担风险。'
+        )
+    return host
+
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    resp.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    script_policy = "script-src 'self' 'unsafe-inline'" if request.path == '/strava/callback' else "script-src 'self'; script-src-attr 'unsafe-inline'"
+    resp.headers['Content-Security-Policy'] = (
+        f"default-src 'self'; {script_policy}; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob: https:; connect-src 'self' https:; "
+        "font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+    )
+    if SERVER_MODE:
+        resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    if request.path.startswith('/api/') or request.path in ('/login', '/strava/callback'):
+        resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@app.before_request
+def _check_same_origin():
+    if not SERVER_MODE or request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return None
+    origin = request.headers.get('Origin')
+    referer = request.headers.get('Referer')
+    source = origin or referer
+    if source:
+        parsed = urlparse(source)
+        if parsed.netloc != request.host:
+            return jsonify(error='cross-origin request rejected'), 403
+    elif request.headers.get('Sec-Fetch-Site') != 'same-origin':
+        return jsonify(error='cross-origin request rejected'), 403
+    return None
 
 PROJECT_ROOT      = Path(__file__).parent
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
+_SECRET_MASK      = '••••••••'
+_MAX_NOTE_CHARS   = 20_000
+_MAX_TAG_NAME     = 64
+_MAX_BATCH_FILES  = 1_000
+_MAX_TAG_IDS      = 100
+_MAX_AI_MESSAGES  = 100
+_MAX_AI_TEXT      = 200_000
+_MAX_LOGIN_PASSWORD_CHARS = 1024
+_MAX_AI_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_AI_STREAM_SECONDS = 5 * 60
+_MAX_AI_SSE_LINE_BYTES = 256 * 1024
+_MAX_SYNC_ACTIVITIES = 2_000
+_MAX_SYNC_FILE_BYTES = 32 * 1024 * 1024
+_USER_STORAGE_MAX_BYTES = max(32 * 1024 * 1024, int(os.environ.get('FAFA_USER_STORAGE_MB', '10240')) * 1024 * 1024)
+_TASK_STALE_S     = 15 * 60
+_PARSE_TIMEOUT_S  = 30
+_PARSE_SLOTS      = max(1, int(os.environ.get('FAFA_PARSE_SLOTS', '4')))
+_AI_SLOTS         = max(1, int(os.environ.get('FAFA_AI_SLOTS', '8')))
+_SYNC_SLOTS       = max(1, int(os.environ.get('FAFA_SYNC_SLOTS', '2')))
+_RUNTIME_LOCK_DIR = PROJECT_ROOT / '.runtime_locks'
+
+
+def _atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
+    """Write JSON atomically with private permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp_name).replace(path)
+        os.chmod(path, mode)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
+def _locked_file(path: Path):
+    """Return an exclusively locked sidecar file handle. Caller closes it."""
+    lock_path = path.with_name(path.name + '.lock')
+    fh = open(lock_path, 'a+')
+    os.chmod(lock_path, 0o600)
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
+def _try_acquire_slot(kind: str, count: int):
+    """Acquire one process-wide slot using flock; caller closes the handle."""
+    _RUNTIME_LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
+    for index in range(count):
+        path = _RUNTIME_LOCK_DIR / f'{kind}.{index}.lock'
+        fh = open(path, 'a+')
+        os.chmod(path, 0o600)
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except (IOError, OSError):
+            fh.close()
+    return None
+
+
+def _validate_filename_in_input(filename: str, input_dir: Path) -> Path | None:
+    if not isinstance(filename, str) or not filename.lower().endswith('.fit'):
+        return None
+    candidate = input_dir / filename
+    if candidate.is_symlink():
+        return None
+    path = candidate.resolve()
+    return path if path.parent == input_dir.resolve() else None
+
+
+def _library_fit_paths(input_dir: Path) -> list[Path]:
+    """Return regular FIT files physically contained in the library directory."""
+    root = input_dir.resolve()
+    paths = []
+    for candidate in sorted(input_dir.glob('*.fit')):
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            path = candidate.resolve()
+            if path.parent == root:
+                paths.append(path)
+        except OSError:
+            continue
+    return paths
+
+
+def _validate_string_list(value, *, max_items: int, field: str):
+    if not isinstance(value, list) or len(value) > max_items or not all(isinstance(x, str) for x in value):
+        raise ValueError(f'{field} must be a string list with at most {max_items} items')
+    return value
+
+
+def _json_bool(data: dict, field: str, default: bool = False) -> bool:
+    value = data.get(field, default)
+    if not isinstance(value, bool):
+        raise ValueError(f'{field} 必须是布尔值')
+    return value
+
+
+def _input_storage_bytes(input_dir: Path) -> int:
+    total = 0
+    for path in _library_fit_paths(input_dir):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _cache_size_estimate(data: dict) -> int:
+    size = 4096
+    size += len(data.get('coords') or []) * 48
+    size += len(data.get('km_stats') or []) * 512
+    size += len(data.get('dist_stats') or []) * 512
+    size += len(data.get('time_stats') or []) * 512
+    return size
+
+
+def _reject_large_json(data, limit: int = _MAX_AI_TEXT):
+    try:
+        if len(json.dumps(data, ensure_ascii=False)) > limit:
+            return jsonify(error='request payload too large'), 413
+    except (TypeError, ValueError):
+        return jsonify(error='invalid JSON payload'), 400
+    return None
 
 if SERVER_MODE:
     _auth.init_db()
@@ -59,11 +264,22 @@ else:
 def _user_input_dir() -> Path:
     d = (PROJECT_ROOT / 'input') if not SERVER_MODE else (PROJECT_ROOT / 'input' / g.username)
     d.mkdir(parents=True, exist_ok=True)
+    if SERVER_MODE:
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
     return d
 
 
 def _user_config_file() -> Path:
-    return _user_input_dir() / 'config.json'
+    path = _user_input_dir() / 'config.json'
+    if path.exists():
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return path
 
 
 def _user_db_path() -> Path:
@@ -84,12 +300,34 @@ def _load_user():
             g.username = user['username']
             udir = PROJECT_ROOT / 'input' / g.username
             udir.mkdir(parents=True, exist_ok=True)
-            _db.init_db(udir)   # idempotent: CREATE TABLE IF NOT EXISTS
+            udir_str = str(udir)
+            with _db_init_lock:
+                if udir_str not in _db_init_done:
+                    _db.init_db(udir)
+                    _db_init_done.add(udir_str)
         else:
             session.clear()
 
 
 # ── Auth routes ────────────────────────────────────────────────────────────────
+
+_LOGIN_MAX_FAILS = 5
+_LOGIN_LOCKOUT_S = 30
+
+
+def _check_login_rate(ip: str) -> bool:
+    return _auth.login_allowed(ip) if SERVER_MODE else True
+
+
+def _record_login_fail(rate_key: str, max_fails: int = _LOGIN_MAX_FAILS) -> None:
+    if SERVER_MODE:
+        _auth.record_login_failure(rate_key, max_fails, _LOGIN_LOCKOUT_S)
+
+
+def _reset_login_fail(ip: str) -> None:
+    if SERVER_MODE:
+        _auth.clear_login_failures(ip)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
@@ -98,83 +336,178 @@ def login_page():
     error = None
     if request.method == 'POST':
         username = (request.form.get('username') or '').strip()
-        password = request.form.get('password') or ''
-        user = _auth.verify_user(username, password)
-        if user:
-            session.clear()          # prevent session fixation
-            session['user_id']  = user['id']
-            session['username'] = user['username']
-            return redirect(url_for('index'))
-        error = '用户名或密码错误'
+        valid_username = bool(re.fullmatch(r'[A-Za-z0-9_-]{1,32}', username))
+        user_rk = f'u:{username.lower()}' if valid_username else None
+        ip_rk = f'ip:{request.remote_addr or "0.0.0.0"}'
+        rate_keys = [key for key in (user_rk, ip_rk) if key]
+        if not all(_check_login_rate(key) for key in rate_keys):
+            error = '登录尝试过于频繁，请稍后再试'
+        else:
+            password = request.form.get('password') or ''
+            valid_password = len(password) <= _MAX_LOGIN_PASSWORD_CHARS
+            user = _auth.verify_user(username, password) if valid_username and valid_password else None
+            if user:
+                if user_rk:
+                    _reset_login_fail(user_rk)
+                session.clear()          # prevent session fixation
+                session.permanent = True
+                session['user_id']  = user['id']
+                session['username'] = user['username']
+                return redirect(url_for('index'))
+            if user_rk:
+                _record_login_fail(user_rk)
+            _record_login_fail(ip_rk, max_fails=50)
+            error = '用户名或密码错误'
     return render_template('login.html', error=error)
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
+@_auth.login_required
 def logout():
     session.clear()
     return redirect(url_for('login_page'))
 
 
-# ── 解析结果缓存（按文件路径+mtime） ───────────────────────────────────────────
-_parse_cache: dict[str, dict] = {}  # path_str -> {'mtime': float, 'data': dict}
+# ── 解析结果缓存（按文件路径+完整文件签名） ────────────────────────────────────
+_parse_cache: OrderedDict[str, dict] = OrderedDict()
 _cache_lock  = threading.Lock()
-_CACHE_MAX   = 300
-_weather_cache: dict = {}
+_cache_bytes = 0
+_CACHE_MAX_BYTES = 256 * 1024 * 1024
+_weather_cache: dict = {}       # key → (result, expire_epoch)
+_weather_lock = threading.Lock()
+_WEATHER_TTL_S = 3600
+_WEATHER_MAX   = 500
+_db_init_done: set[str] = set()  # 已初始化的 input_dir 路径（进程级缓存）
+_db_init_lock = threading.Lock()
+
+# ── 逐秒记录缓存（details 视图用） ─────────────────────────────────────────────
+_records_cache: dict[str, dict] = {}  # path_str -> {'sig': str, 'records': list}
+_records_cache_lock = threading.Lock()
+_records_cache_bytes = 0
+_RECORDS_CACHE_MAX_BYTES = 128 * 1024 * 1024
+_activity_executor = ThreadPoolExecutor(max_workers=4)
+
+# ── 解析进度状态（按 input_dir 字符串键） ────────────────────────────────────
+_parse_states: dict[str, dict] = {}   # key = str(input_dir)
+_parse_state_lock = threading.Lock()
 
 
-def _cache_get(path_str: str, mtime: float) -> dict | None:
+def _file_signature(path: Path) -> str:
+    stat = path.stat()
+    return f'{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}'
+
+
+def _cache_get(path_str: str, signature) -> dict | None:
     with _cache_lock:
         entry = _parse_cache.get(path_str)
-        if entry and entry["mtime"] == mtime:
+        if entry and entry["sig"] == signature:
+            _parse_cache.move_to_end(path_str)
             return entry["data"]
     return None
 
 
-def _disk_cache_load(path_str: str, mtime: float) -> dict | None:
+def _disk_cache_load(path_str: str, signature) -> dict | None:
     cache_dir = Path(path_str).parent / '.cache'
     cache_file = cache_dir / (Path(path_str).name + ".json")
     try:
         with cache_file.open(encoding="utf-8") as f:
             entry = json.load(f)
-        if entry.get("mtime") == mtime:
+        if entry.get("sig") == signature:
             return entry["data"]
     except Exception:
         pass
     return None
 
 
-def _disk_cache_save(path_str: str, mtime: float, data: dict) -> None:
+def _disk_cache_save(path_str: str, signature, data: dict) -> None:
     try:
         cache_dir = Path(path_str).parent / '.cache'
-        cache_dir.mkdir(exist_ok=True)
+        cache_dir.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(cache_dir, 0o700)
         cache_file = cache_dir / (Path(path_str).name + ".json")
-        tmp_file   = cache_file.with_suffix(".tmp")
-        with tmp_file.open("w", encoding="utf-8") as f:
-            json.dump({"mtime": mtime, "data": data}, f)
-        tmp_file.replace(cache_file)
+        _atomic_write_json(cache_file, {"sig": signature, "data": data})
     except Exception as e:
         logging.warning("disk cache write failed (%s): %s", Path(path_str).name, e)
 
 
-def _cache_put(path_str: str, mtime: float, data: dict) -> None:
+def _cache_put(path_str: str, signature, data: dict) -> None:
+    global _cache_bytes
+    size = _cache_size_estimate(data)
     with _cache_lock:
-        if len(_parse_cache) >= _CACHE_MAX:
-            # 淘汰最旧的 50 条
-            old_keys = list(_parse_cache.keys())[:50]
-            for k in old_keys:
-                _parse_cache.pop(k, None)
-        _parse_cache[path_str] = {"mtime": mtime, "data": data}
+        previous = _parse_cache.pop(path_str, None)
+        if previous:
+            _cache_bytes -= previous.get('size', 0)
+        while _parse_cache and _cache_bytes + size > _CACHE_MAX_BYTES:
+            _, evicted = _parse_cache.popitem(last=False)
+            _cache_bytes -= evicted.get('size', 0)
+        if size <= _CACHE_MAX_BYTES:
+            _parse_cache[path_str] = {"sig": signature, "data": data, "size": size}
+            _cache_bytes += size
+
+
+def _cache_remove(path_str: str) -> None:
+    global _cache_bytes
+    with _cache_lock:
+        previous = _parse_cache.pop(path_str, None)
+        if previous:
+            _cache_bytes -= previous.get('size', 0)
+
+
+def _records_cache_remove(path_str: str) -> None:
+    global _records_cache_bytes
+    with _records_cache_lock:
+        previous = _records_cache.pop(path_str, None)
+        if previous:
+            _records_cache_bytes -= previous.get('size', 0)
+
+
+def _parse_lock_file(path: Path):
+    cache_dir = path.parent / '.cache'
+    cache_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(cache_dir, 0o700)
+    lock_path = cache_dir / (path.name + '.parse.lock')
+    fh = open(lock_path, 'a+')
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh, lock_path
+
+
+def _remove_file_caches(path: Path, *, remove_lock: bool = True) -> None:
+    path_str = str(path)
+    _cache_remove(path_str)
+    _records_cache_remove(path_str)
+    cache_dir = path.parent / '.cache'
+    suffixes = ('.json', '.parse.lock') if remove_lock else ('.json',)
+    for suffix in suffixes:
+        try:
+            (cache_dir / (path.name + suffix)).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _delete_library_file(path: Path) -> None:
+    lock_fh, _ = _parse_lock_file(path)
+    try:
+        path.unlink(missing_ok=True)
+        _remove_file_caches(path, remove_lock=False)
+    finally:
+        lock_fh.close()
 
 
 _PEAK_DURATIONS = (5, 60, 300, 1200, 3600)
+
+
+_MAX_ACTIVITY_SECONDS = 24 * 3600  # 24h — 超出则为伪造数据
+_MAX_RECORDS = 200_000
 
 
 def _peak_powers(records) -> dict:
     """Max mean power (W) at key durations. Keys are strings like '5', '60', etc."""
     if not records or len(records) < 2:
         return {}
+    if len(records) > _MAX_RECORDS:
+        return {}
     total_s = int((records[-1].timestamp - records[0].timestamp).total_seconds())
-    if total_s < 5:
+    if total_s < 5 or total_s > _MAX_ACTIVITY_SECONDS:
         return {}
     t0 = records[0].timestamp
     ri = 0
@@ -204,7 +537,11 @@ def _zone_time_s(records, ftp) -> dict | None:
     """Seconds in each power zone: key 0=rest, 1-7=Z1-Z7 (Coggan 7-zone, matches heatmap thresholds)."""
     if not ftp or ftp <= 0 or not records or len(records) < 2:
         return None
+    if len(records) > _MAX_RECORDS:
+        return None
     total_s = int((records[-1].timestamp - records[0].timestamp).total_seconds())
+    if total_s > _MAX_ACTIVITY_SECONDS:
+        return None
     t0 = records[0].timestamp
     ri = 0
     zones = [0] * 8  # index 0=rest, 1-7=Z1-Z7
@@ -229,24 +566,114 @@ def _zone_time_s(records, ftp) -> dict | None:
 
 
 # ── 通用 FIT 解析 ──────────────────────────────────────────────────────────────
+def _apply_worker_limits() -> None:
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CPU, (20, 20))
+        if sys.platform.startswith('linux'):
+            resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024 * 1024, 64 * 1024 * 1024))
+    except Exception:
+        pass
+
+
+def _parse_worker(conn, fit_path: str, filename: str, build: bool) -> None:
+    _apply_worker_limits()
+    try:
+        value = _parse_and_build_direct(fit_path, filename) if build else parse_fit(fit_path)
+        conn.send(('ok', value))
+    except BaseException as e:
+        conn.send(('error', f'{type(e).__name__}: {e}'))
+    finally:
+        conn.close()
+
+
+def _run_parse_worker(fit_path: str, filename: str, *, build: bool):
+    if not SERVER_MODE:
+        return _parse_and_build_direct(fit_path, filename) if build else parse_fit(fit_path)
+    slot_fh = _try_acquire_slot('parse', _PARSE_SLOTS)
+    if slot_fh is None:
+        raise ValueError('服务器解析任务繁忙，请稍后重试')
+    ctx = multiprocessing.get_context('spawn')
+    parent, child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_parse_worker, args=(child, fit_path, filename, build), daemon=False)
+    try:
+        proc.start()
+    except Exception:
+        parent.close()
+        child.close()
+        slot_fh.close()
+        raise
+    child.close()
+    try:
+        if not parent.poll(_PARSE_TIMEOUT_S):
+            proc.kill()
+            proc.join(2)
+            raise ValueError('FIT 解析超时')
+        status, value = parent.recv()
+        proc.join(2)
+        if status != 'ok':
+            raise ValueError(value)
+        return value
+    finally:
+        parent.close()
+        if proc.is_alive():
+            proc.kill()
+            proc.join(2)
+        slot_fh.close()
+
+
+def _parse_fit_safe(fit_path: str):
+    return _run_parse_worker(fit_path, Path(fit_path).name, build=False)
+
+
 def _parse_and_build(fit_path: str, filename: str) -> dict:
     p = Path(fit_path)
     if p.exists():
         try:
-            mtime = p.stat().st_mtime
+            signature = _file_signature(p)
+            cached = _cache_get(fit_path, signature) or _disk_cache_load(fit_path, signature)
+            if cached is not None:
+                _cache_put(fit_path, signature, cached)
+                return cached
+        except OSError:
+            pass
+    lock_fh, _ = _parse_lock_file(p)
+    with lock_fh:
+        if p.exists():
+            signature = _file_signature(p)
+            cached = _cache_get(fit_path, signature) or _disk_cache_load(fit_path, signature)
+            if cached is not None:
+                _cache_put(fit_path, signature, cached)
+                return cached
+        result = _run_parse_worker(fit_path, filename, build=True)
+        try:
+            _cache_put(fit_path, _file_signature(p), result)
+        except OSError:
+            pass
+        return result
+
+
+def _parse_and_build_direct(fit_path: str, filename: str) -> dict:
+    p = Path(fit_path)
+    if p.exists():
+        try:
+            signature = _file_signature(p)
             # L1: memory cache
-            cached = _cache_get(fit_path, mtime)
+            cached = _cache_get(fit_path, signature)
             if cached is not None:
                 return cached
             # L2: disk cache (survives restarts)
-            cached = _disk_cache_load(fit_path, mtime)
+            cached = _disk_cache_load(fit_path, signature)
             if cached is not None:
-                _cache_put(fit_path, mtime, cached)
+                _cache_put(fit_path, signature, cached)
                 return cached
         except OSError:
             pass
 
     fit      = parse_fit(fit_path)
+    from fafa.stats import _check_fit_limits
+    _check_fit_limits(fit)
     coords   = [
         [r.position_lat * SEMICIRCLE_TO_DEG, r.position_long * SEMICIRCLE_TO_DEG]
         for r in fit.records
@@ -317,29 +744,73 @@ def _parse_and_build(fit_path: str, filename: str) -> dict:
 
     if p.exists():
         try:
-            mtime = p.stat().st_mtime
-            _cache_put(fit_path, mtime, result)
-            _disk_cache_save(fit_path, mtime, result)
+            signature = _file_signature(p)
+            _cache_put(fit_path, signature, result)
+            _disk_cache_save(fit_path, signature, result)
         except OSError:
             pass
 
     return result
 
 
-# ── 同步状态（按用户，被后台线程写、前端轮询读） ────────────────────────────────
-_sync_lock = threading.Lock()
-_sync: dict[str, dict] = {}   # {username: state_dict}
+# ── 同步状态（文件化，支持多进程 Gunicorn） ────────────────────────────────────
+_sync_lock = threading.Lock()  # 进程内线程锁（写文件前取锁防并发写）
 
 
 def _default_sync_state() -> dict:
     return {'state': 'idle', 'message': '', 'total': 0, 'done': 0, 'new_files': []}
 
 
-def _set_sync(username: str, **kw) -> None:
+def _sync_state_path(input_dir: Path) -> Path:
+    return input_dir / '.sync_state.json'
+
+
+def _sync_lock_path(input_dir: Path) -> Path:
+    return input_dir / '.sync.lock'
+
+
+def _read_sync_state(input_dir: Path) -> dict:
+    f = _sync_state_path(input_dir)
+    try:
+        if f.exists():
+            return json.loads(f.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return _default_sync_state()
+
+
+def _write_sync_state(input_dir: Path, state: dict) -> None:
+    try:
+        state['updated_at'] = int(time.time())
+        _atomic_write_json(_sync_state_path(input_dir), state)
+    except Exception as e:
+        logging.warning('sync state write failed: %s', e)
+
+
+def _set_sync(username: str, input_dir: Path | None = None, **kw) -> None:
+    if input_dir is None:
+        # 回退：仅记录日志（不应发生）
+        logging.warning('_set_sync called without input_dir for %s', username)
+        return
     with _sync_lock:
-        if username not in _sync:
-            _sync[username] = _default_sync_state()
-        _sync[username].update(kw)
+        state = _read_sync_state(input_dir)
+        state.update(kw)
+        _write_sync_state(input_dir, state)
+
+
+def _try_acquire_sync_flock(input_dir: Path):
+    """尝试获取进程级文件锁，成功返回文件句柄，已被占用返回 None。"""
+    lock_path = _sync_lock_path(input_dir)
+    try:
+        fh = open(lock_path, 'w')
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except (IOError, OSError):
+        try:
+            fh.close()
+        except Exception:
+            pass
+        return None
 
 
 _MAX_DL_WORKERS = 6
@@ -381,65 +852,85 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
         return {}
 
     def save_state(st):
-        state_file.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_json(state_file, st)
 
     try:
         creds = _load_platform_credentials("onelap", config_file)
         if creds:
-            _set_sync(username, state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
+            _set_sync(username, input_dir=input_dir, state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
             try:
                 auth = api_login(creds["username"], creds["password"])
             except Exception as e:
-                _set_sync(username, state="error", message=f"自动登录失败：{e}")
+                _set_sync(username, input_dir=input_dir, state="error", message=f"自动登录失败：{e}")
                 return
         else:
-            _set_sync(username, state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
+            _set_sync(username, input_dir=input_dir, state="login", message="请在弹出的浏览器窗口中登录顽鹿账号…", total=0, done=0, new_files=[])
             try:
                 auth = browser_login()
             except Exception as e:
-                _set_sync(username, state="error", message=f"登录失败：{e}")
+                _set_sync(username, input_dir=input_dir, state="error", message=f"登录失败：{e}")
                 return
 
         state = {} if full else load_state()
-        if state and not any(input_dir.glob("*.fit")):
+        if state and not _library_fit_paths(input_dir):
             state = {}
         skip_ids = set(state.keys())
         sess     = build_session(auth["token"], auth["cookies"])
 
-        _set_sync(username, state="fetching", message="正在获取活动列表…")
+        _set_sync(username, input_dir=input_dir, state="fetching", message="正在获取活动列表…")
 
         def on_page(pg, col, tot):
-            _set_sync(username, message=f"获取列表：第 {pg} 页，已找到 {col} 条新活动")
+            _set_sync(username, input_dir=input_dir, message=f"获取列表：第 {pg} 页，已找到 {col} 条新活动")
 
         activities = fetch_activity_list(sess, skip_ids, limit, on_page=on_page)
 
         if not activities:
-            _set_sync(username, state="done", message="没有新活动需要下载", total=0, done=0)
+            _set_sync(username, input_dir=input_dir, state="done", message="没有新活动需要下载", total=0, done=0)
             return
 
         total = len(activities)
-        _set_sync(username, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
+        _set_sync(username, input_dir=input_dir, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
 
         new_files: list[str] = []
         done_count = 0
         dl_lock    = threading.Lock()
+        storage_used = _input_storage_bytes(input_dir)
+        storage_reserved = 0
 
         def _download_one(act: dict) -> tuple[Path | None, str]:
+            nonlocal storage_used, storage_reserved
+            download_sess = build_session(auth["token"], auth["cookies"])
             rid  = activity_id(act)
             t    = parse_activity_time(act)
             tstr = t.strftime("%Y-%m-%d %H:%M") if t else rid
-            already_done = bool(state.get(rid, {}).get("downloaded"))
+            with dl_lock:
+                already_done = bool(state.get(rid, {}).get("downloaded"))
+                if not already_done:
+                    if storage_used + storage_reserved + _MAX_SYNC_FILE_BYTES > _USER_STORAGE_MAX_BYTES:
+                        return None, f"{tstr} — 用户 FIT 存储空间不足"
+                    storage_reserved += _MAX_SYNC_FILE_BYTES
             try:
-                path = download_activity(sess, act, state, input_dir,
-                                         skip_rename=not already_done)
+                path = download_activity(
+                    download_sess, act, state, input_dir,
+                    skip_rename=not already_done, state_lock=dl_lock,
+                )
                 if path and not already_done:
-                    is_fresh = state.get(rid, {}).get("downloaded_at") is not None
+                    try:
+                        downloaded_size = path.stat().st_size
+                    except OSError:
+                        downloaded_size = 0
+                    with dl_lock:
+                        storage_used += downloaded_size
+                if path and not already_done:
+                    with dl_lock:
+                        is_fresh = state.get(rid, {}).get("downloaded_at") is not None
                     if is_fresh:
                         try:
                             ver, model, decrypted = auto_decrypt_if_gcj02(path)
                             new_path   = rename_magene(path, model=model)
                             if new_path != path:
-                                state[rid]["filename"] = new_path.name
+                                with dl_lock:
+                                    state[rid]["filename"] = new_path.name
                             path = new_path
                             if decrypted:
                                 tstr = f"{tstr} — 已自动火星解密（版本 {ver:.0f}）"
@@ -449,6 +940,10 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
             except Exception as e:
                 logging.warning("下载 %s 失败: %s", tstr, e)
                 return None, tstr
+            finally:
+                if not already_done:
+                    with dl_lock:
+                        storage_reserved -= _MAX_SYNC_FILE_BYTES
 
         with ThreadPoolExecutor(max_workers=_MAX_DL_WORKERS) as pool:
             futures = {pool.submit(_download_one, act): act for act in activities}
@@ -459,11 +954,12 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
                     dc = done_count
                     if path:
                         new_files.append(path.name)
-                _set_sync(username, message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
+                _set_sync(username, input_dir=input_dir, message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
 
         save_state(state)
         _set_sync(
             username,
+            input_dir=input_dir,
             state="done",
             message=f"同步完成，新增 {len(new_files)} 个文件",
             done=total,
@@ -471,7 +967,7 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
         )
 
     except Exception as e:
-        _set_sync(username, state="error", message=f"同步出错：{e}")
+        _set_sync(username, input_dir=input_dir, state="error", message=f"同步出错：{e}")
 
 
 def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: bool):
@@ -481,22 +977,22 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
     try:
         creds = _load_platform_credentials("igpsport", config_file)
         if not creds:
-            _set_sync(username, state="error", message="iGPSport 未配置账号密码，请在设置中填写")
+            _set_sync(username, input_dir=input_dir, state="error", message="iGPSport 未配置账号密码，请在设置中填写")
             return
 
-        _set_sync(username, state="login", message="正在登录 iGPSport…", total=0, done=0, new_files=[])
+        _set_sync(username, input_dir=input_dir, state="login", message="正在登录 iGPSport…", total=0, done=0, new_files=[])
         client = IGPSportClient(creds["username"], creds["password"])
         try:
             client.login()
         except Exception as e:
-            _set_sync(username, state="error", message=f"iGPSport 登录失败：{e}")
+            _set_sync(username, input_dir=input_dir, state="error", message=f"iGPSport 登录失败：{e}")
             return
 
-        _set_sync(username, state="fetching", message="正在获取 iGPSport 活动列表…")
+        _set_sync(username, input_dir=input_dir, state="fetching", message="正在获取 iGPSport 活动列表…")
         try:
-            activities = client.get_all_activities()
+            activities = client.get_all_activities(max_activities=_MAX_SYNC_ACTIVITIES)
         except Exception as e:
-            _set_sync(username, state="error", message=f"获取活动列表失败：{e}")
+            _set_sync(username, input_dir=input_dir, state="error", message=f"获取活动列表失败：{e}")
             return
 
         if not full:
@@ -506,14 +1002,15 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
             ]
 
         if not activities:
-            _set_sync(username, state="done", message="没有新活动需要下载", total=0, done=0)
+            _set_sync(username, input_dir=input_dir, state="done", message="没有新活动需要下载", total=0, done=0)
             return
 
         total = len(activities)
-        _set_sync(username, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
+        _set_sync(username, input_dir=input_dir, state="downloading", message=f"共 {total} 个活动，开始下载…", total=total, done=0)
 
         new_files: list[str] = []
         failed = 0
+        storage_used = _input_storage_bytes(input_dir)
 
         for i, act in enumerate(activities, 1):
             ride_id = str(act.get("rideId", ""))
@@ -523,21 +1020,24 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
             ts_str = start_time.strftime("%Y-%m-%d %H:%M") if start_time else ride_id
 
             try:
+                if storage_used + _MAX_SYNC_FILE_BYTES > _USER_STORAGE_MAX_BYTES:
+                    raise RuntimeError('用户 FIT 存储空间已达到上限')
                 client.download_file(ride_id, dst_path)
+                storage_used += dst_path.stat().st_size
                 new_files.append(filename)
             except Exception as e:
                 failed += 1
                 logging.warning("iGPSport 下载 %s 失败: %s", ride_id, e)
 
-            _set_sync(username, message=f"[{i}/{total}] {ts_str}", done=i, new_files=list(new_files))
+            _set_sync(username, input_dir=input_dir, message=f"[{i}/{total}] {ts_str}", done=i, new_files=list(new_files))
 
         msg = f"同步完成，新增 {len(new_files)} 个文件"
         if failed:
             msg += f"，{failed} 个下载失败"
-        _set_sync(username, state="done", message=msg, done=total, new_files=new_files)
+        _set_sync(username, input_dir=input_dir, state="done", message=msg, done=total, new_files=new_files)
 
     except Exception as e:
-        _set_sync(username, state="error", message=f"同步出错：{e}")
+        _set_sync(username, input_dir=input_dir, state="error", message=f"同步出错：{e}")
 
 
 # ── 路由：主页 ─────────────────────────────────────────────────────────────────
@@ -568,6 +1068,7 @@ def upload():
         return jsonify(error=f"解析失败: {e}"), 422
     finally:
         os.unlink(tmp_path)
+        _remove_file_caches(Path(tmp_path))
 
     return jsonify(**data, source="upload")
 
@@ -582,13 +1083,17 @@ def list_files():
         return jsonify(files=[])
 
     files = []
-    for p in sorted(input_dir.glob("*.fit"), key=lambda x: x.stat().st_mtime, reverse=True):
-        st = p.stat()
+    for p in _library_fit_paths(input_dir):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
         files.append({
             "filename": p.name,
-            "size_kb":  round(st.st_size / 1024, 1),
-            "mtime":    st.st_mtime,
+            "size_kb": round(st.st_size / 1024, 1),
+            "mtime": st.st_mtime,
         })
+    files.sort(key=lambda item: item["mtime"], reverse=True)
     return jsonify(files=files)
 
 
@@ -599,16 +1104,13 @@ def delete_file():
     input_dir = _user_input_dir()
     body     = request.get_json(silent=True) or {}
     filename = body.get("filename", "")
-    if not filename or not filename.endswith(".fit"):
+    if not filename or not filename.lower().endswith(".fit"):
         return jsonify(error="invalid filename"), 400
     path = (input_dir / filename).resolve()
     if path.parent != input_dir.resolve():
         return jsonify(error="invalid path"), 403
     try:
-        path.unlink(missing_ok=True)
-        with _cache_lock:
-            _parse_cache.pop(str(path), None)
-        (input_dir / ".cache" / (filename + ".json")).unlink(missing_ok=True)
+        _delete_library_file(path)
     except Exception as e:
         return jsonify(error=str(e)), 500
     return jsonify(deleted=1)
@@ -622,9 +1124,9 @@ def delete_all_files():
     if not input_dir.exists():
         return jsonify(deleted=0)
     deleted = 0
-    for p in input_dir.glob("*.fit"):
+    for p in _library_fit_paths(input_dir):
         try:
-            p.unlink()
+            _delete_library_file(p)
             deleted += 1
         except Exception:
             pass
@@ -671,8 +1173,15 @@ def get_records(filename):
     if not path.exists():
         return jsonify(error="not found"), 404
 
+    path_str = str(path)
+    signature = _file_signature(path)
+    with _records_cache_lock:
+        entry = _records_cache.get(path_str)
+        if entry and entry["sig"] == signature:
+            return jsonify(records=entry["records"])
+
     try:
-        fit = parse_fit(str(path))
+        fit = _parse_fit_safe(path_str)
     except Exception as e:
         return jsonify(error=f"解析失败: {e}"), 422
 
@@ -691,6 +1200,20 @@ def get_records(filename):
             "altitude":  round(r.altitude, 1) if r.altitude is not None else None,
             "grade":     round(r.grade, 2) if r.grade is not None else None,
         })
+
+    encoded_size = 1024 + len(out) * 192
+    global _records_cache_bytes
+    with _records_cache_lock:
+        previous = _records_cache.pop(path_str, None)
+        if previous:
+            _records_cache_bytes -= previous.get('size', 0)
+        while _records_cache and _records_cache_bytes + encoded_size > _RECORDS_CACHE_MAX_BYTES:
+            oldest = next(iter(_records_cache))
+            evicted = _records_cache.pop(oldest)
+            _records_cache_bytes -= evicted.get('size', 0)
+        if encoded_size <= _RECORDS_CACHE_MAX_BYTES:
+            _records_cache[path_str] = {"sig": signature, "records": out, "size": encoded_size}
+            _records_cache_bytes += encoded_size
 
     return jsonify(records=out)
 
@@ -717,11 +1240,12 @@ def fix_coords_api():
 
     try:
         from fafa.tools.fix_coords import fix_file
-        original_mtime = path.stat().st_mtime
-        fix_file(path, path, method)
-        os.utime(path, (original_mtime, original_mtime))
-        with _cache_lock:
-            _parse_cache.pop(str(path), None)
+        lock_fh, _ = _parse_lock_file(path)
+        with lock_fh:
+            original_mtime = path.stat().st_mtime
+            fix_file(path, path, method)
+            os.utime(path, (original_mtime, original_mtime))
+            _remove_file_caches(path, remove_lock=False)
         return jsonify(ok=True)
     except Exception as e:
         return jsonify(error=f"坐标转换失败: {e}"), 500
@@ -749,133 +1273,160 @@ def export_all():
             return [_strip_nulls(i) for i in obj]
         return obj
 
-    fit_files = sorted(input_dir.glob("*.fit"))
-    activities = []
-
-    for path in fit_files:
+    ordered_paths = []
+    for path in _library_fit_paths(input_dir):
         try:
-            fit      = parse_fit(str(path))
-            km_stats = compute_km_stats(fit)
-            summary  = compute_summary(fit, km_stats)
+            cached = _parse_and_build(str(path), path.name)
         except Exception as e:
             logging.warning("export_all 解析失败 (%s): %s", path.name, e)
             continue
-
-        if not fit.records:
-            continue
-
-        summary_d = asdict(summary)
+        summary_d = cached.get("summary") or {}
         if min_km > 0 and (summary_d.get("total_dist_km") or 0) < min_km:
             continue
+        date_str = cached.get("time_stats_start") or cached.get("date")
+        ordered_paths.append((date_str or '', path))
+    ordered_paths.sort(key=lambda item: item[0])
 
-        m = re.search(r"Magene_[A-Z]\d+_(?:(\d{8}-\d{6})_|\d+_(\d{8}-\d{6}))", path.name)
-        if m:
-            date_str = datetime.strptime(m.group(1) or m.group(2), "%Y%m%d-%H%M%S").strftime("%Y-%m-%dT%H:%M:%S")
-        else:
+    def generate():
+        total_km = 0.0
+        dates = []
+        count = 0
+        first = True
+        yield '{"activities":['
+        for _, path in ordered_paths:
             try:
-                date_str = fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+                cached = _parse_and_build(str(path), path.name)
             except Exception:
-                date_str = None
-
-        entry = {"filename": path.name, "date": date_str, "summary": summary_d}
-        if not no_km:
-            entry["km_stats"] = [asdict(s) for s in km_stats]
-
-        activities.append(_strip_nulls(entry))
-
-    activities.sort(key=lambda a: a.get("date") or "")
-
-    total_km = sum((a.get("summary", {}).get("total_dist_km") or 0) for a in activities)
-    dates    = [a["date"][:10] for a in activities if a.get("date")]
-
-    result = {
-        "meta": {
-            "exported_at":       datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            "total_activities":  len(activities),
-            "total_km":          round(total_km, 2),
-            "date_range":        [dates[0], dates[-1]] if dates else [],
+                continue
+            summary_d = cached.get("summary") or {}
+            date_str = cached.get("time_stats_start") or cached.get("date")
+            entry = {"filename": path.name, "date": date_str, "summary": summary_d}
+            if not no_km:
+                entry["km_stats"] = cached.get("km_stats", [])
+            if not first:
+                yield ','
+            yield json.dumps(_strip_nulls(entry), ensure_ascii=False, separators=(',', ':'), default=str)
+            first = False
+            count += 1
+            total_km += summary_d.get("total_dist_km") or 0
+            if date_str:
+                dates.append(date_str[:10])
+        meta = {
+            "exported_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "total_activities": count,
+            "total_km": round(total_km, 2),
+            "date_range": [dates[0], dates[-1]] if dates else [],
             "includes_km_stats": not no_km,
-        },
-        "activities": activities,
-    }
+        }
+        yield '],"meta":'
+        yield json.dumps(meta, ensure_ascii=False, separators=(',', ':'))
+        yield '}'
 
-    buf = io.BytesIO(json.dumps(result, ensure_ascii=False, indent=2, default=str).encode("utf-8"))
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/json",
-        as_attachment=True,
-        download_name="fafa_export.json",
+    from flask import Response, stream_with_context
+    return Response(
+        stream_with_context(generate()),
+        mimetype='application/json',
+        headers={'Content-Disposition': 'attachment; filename="fafa_export.json"'},
     )
 
 
 # ── 路由：顽鹿同步（alias） ───────────────────────────────────────────────────
+def _sync_start_handler(username, input_dir, config_file, platform, full, limit):
+    """共享逻辑：检查文件锁 → 启动后台线程。"""
+    flock_fh = _try_acquire_sync_flock(input_dir)
+    if flock_fh is None:
+        return jsonify(error='同步正在进行中'), 409
+    global_slot_fh = _try_acquire_slot('sync', _SYNC_SLOTS)
+    if global_slot_fh is None:
+        flock_fh.close()
+        return jsonify(error='服务器同步任务繁忙，请稍后重试'), 429
+
+    state = _read_sync_state(input_dir)
+    if state.get('state') in ('login', 'fetching', 'downloading'):
+        updated_at = int(state.get('updated_at') or 0)
+        if updated_at and time.time() - updated_at > _TASK_STALE_S:
+            _write_sync_state(input_dir, {**state, 'state': 'error', 'message': '上次任务已中断，请重新同步'})
+
+    def _run_and_release(target, args, fh, slot_fh):
+        try:
+            target(*args)
+        finally:
+            try:
+                fh.close()
+            except Exception:
+                pass
+            slot_fh.close()
+
+    if platform == 'igpsport':
+        target, args = _run_igpsport_sync, (username, input_dir, config_file, full)
+    else:
+        target, args = _run_sync, (username, input_dir, config_file, full, limit)
+
+    t = threading.Thread(target=_run_and_release, args=(target, args, flock_fh, global_slot_fh), daemon=False)
+    try:
+        t.start()
+    except Exception:
+        flock_fh.close()
+        global_slot_fh.close()
+        raise
+    return jsonify(ok=True)
+
+
 @app.route("/api/onelap/sync", methods=["POST"])
 @_auth.login_required
 def onelap_sync():
-    username  = g.username
-    input_dir = _user_input_dir()
-    with _sync_lock:
-        state = _sync.get(username, _default_sync_state())
-        if state["state"] in ("login", "fetching", "downloading"):
-            return jsonify(error="同步正在进行中"), 409
-
     body  = request.get_json(silent=True) or {}
-    full  = bool(body.get("full", False))
+    try:
+        full = _json_bool(body, 'full')
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     limit = body.get("limit")
     if limit is not None:
         try:
             limit = int(limit)
         except (TypeError, ValueError):
-            limit = None
-
-    config_file = _user_config_file()
-    t = threading.Thread(target=_run_sync, args=(username, input_dir, config_file, full, limit), daemon=True)
-    t.start()
-    return jsonify(ok=True)
+            return jsonify(error='limit 参数无效'), 400
+        if limit < 1 or limit > _MAX_SYNC_ACTIVITIES:
+            return jsonify(error=f'limit 必须在 1-{_MAX_SYNC_ACTIVITIES} 之间'), 400
+    else:
+        limit = _MAX_SYNC_ACTIVITIES
+    return _sync_start_handler(g.username, _user_input_dir(), _user_config_file(), 'onelap', full, limit)
 
 
 @app.route("/api/onelap/status")
 @_auth.login_required
 def onelap_status():
-    with _sync_lock:
-        return jsonify(**_sync.get(g.username, _default_sync_state()))
+    return jsonify(**_read_sync_state(_user_input_dir()))
 
 
 @app.route("/api/sync/start", methods=["POST"])
 @_auth.login_required
 def sync_start():
-    username  = g.username
-    input_dir = _user_input_dir()
-    with _sync_lock:
-        state = _sync.get(username, _default_sync_state())
-        if state["state"] in ("login", "fetching", "downloading"):
-            return jsonify(error="同步正在进行中"), 409
-
     body     = request.get_json(silent=True) or {}
     platform = body.get("platform", "onelap")
-    full     = bool(body.get("full", False))
+    if platform not in ('onelap', 'igpsport'):
+        return jsonify(error='不支持的同步平台'), 400
+    try:
+        full = _json_bool(body, 'full')
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     limit    = body.get("limit")
     if limit is not None:
         try:
             limit = int(limit)
         except (TypeError, ValueError):
-            limit = None
-
-    config_file = _user_config_file()
-    if platform == "igpsport":
-        t = threading.Thread(target=_run_igpsport_sync, args=(username, input_dir, config_file, full), daemon=True)
+            return jsonify(error='limit 参数无效'), 400
+        if limit < 1 or limit > _MAX_SYNC_ACTIVITIES:
+            return jsonify(error=f'limit 必须在 1-{_MAX_SYNC_ACTIVITIES} 之间'), 400
     else:
-        t = threading.Thread(target=_run_sync, args=(username, input_dir, config_file, full, limit), daemon=True)
-    t.start()
-    return jsonify(ok=True)
+        limit = _MAX_SYNC_ACTIVITIES
+    return _sync_start_handler(g.username, _user_input_dir(), _user_config_file(), platform, full, limit)
 
 
 @app.route("/api/sync/status")
 @_auth.login_required
 def sync_status():
-    with _sync_lock:
-        return jsonify(**_sync.get(g.username, _default_sync_state()))
+    return jsonify(**_read_sync_state(_user_input_dir()))
 
 
 # ── AI 骑行评估 ───────────────────────────────────────────────────────────────
@@ -893,6 +1444,13 @@ def _get_ai_config() -> dict | None:
         return cfg
     except Exception:
         return None
+
+
+def _config_max_tokens(cfg: dict) -> int:
+    try:
+        return max(256, min(16_000, int(cfg.get('max_tokens', 2500))))
+    except (TypeError, ValueError):
+        return 2500
 
 
 def _wind_dir_label(deg: float) -> str:
@@ -1258,6 +1816,64 @@ def ai_config_status():
     return jsonify(configured=False, model="")
 
 
+_SECRET_FIELDS = frozenset({
+    'api_key', 'onelap_password', 'igpsport_password',
+    'strava_client_secret', 'strava_access_token', 'strava_refresh_token',
+})
+_CONFIG_STRING_LIMITS = {
+    'api_base': 2048, 'api_key': 4096, 'model': 256,
+    'onelap_username': 256, 'onelap_password': 4096,
+    'igpsport_username': 256, 'igpsport_password': 4096,
+    'strava_client_id': 256, 'strava_client_secret': 4096,
+}
+_CONFIG_NUMBER_RANGES = {
+    'pmc_ftp': (50, 600), 'pmc_rest_hr': (30, 100), 'pmc_max_hr': (100, 220),
+    'pmc_weight': (30, 150), 'route_grade_min': (-30, 0),
+    'route_grade_max': (0, 30), 'route_speed_max': (10, 120),
+    'route_cadence_max': (60, 200), 'max_tokens': (256, 16_000),
+    'strava_redirect_port': (1024, 65_535),
+}
+_CONFIG_ALLOWED_KEYS = frozenset(_CONFIG_STRING_LIMITS) | frozenset(_CONFIG_NUMBER_RANGES)
+
+
+def _mask_secrets(data: dict) -> dict:
+    """把已配置的密钥字段替换为占位符，空值保持空。"""
+    out = {}
+    for k, v in data.items():
+        if k in _SECRET_FIELDS:
+            out[k] = _SECRET_MASK if v else ''
+        else:
+            out[k] = v
+    return out
+
+
+def _validate_config_update(data: dict) -> dict:
+    unknown = set(data) - _CONFIG_ALLOWED_KEYS
+    if unknown:
+        raise ValueError(f'不支持的配置项: {sorted(unknown)[0]}')
+    validated = {}
+    for key, value in data.items():
+        if key in _CONFIG_STRING_LIMITS:
+            if not isinstance(value, str) or len(value) > _CONFIG_STRING_LIMITS[key]:
+                raise ValueError(f'{key} 格式无效')
+            value = value.strip()
+            if key == 'api_base':
+                parsed = urlparse(value)
+                if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+                    raise ValueError('api_base 必须是无用户信息的 HTTPS 地址')
+            validated[key] = value
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f'{key} 必须是数字')
+        low, high = _CONFIG_NUMBER_RANGES[key]
+        if not math.isfinite(value) or not low <= value <= high:
+            raise ValueError(f'{key} 必须在 {low}-{high} 之间')
+        if key in ('max_tokens', 'strava_redirect_port') and int(value) != value:
+            raise ValueError(f'{key} 必须是整数')
+        validated[key] = int(value) if key in ('max_tokens', 'strava_redirect_port') else value
+    return validated
+
+
 @app.route("/api/config/raw", methods=["GET"])
 @_auth.login_required
 def get_config_raw():
@@ -1270,11 +1886,11 @@ def get_config_raw():
             data.pop("_comment", None)
         else:
             data = {}
-        return jsonify(data)
+        return jsonify(_mask_secrets(data))
     with open(config_file, encoding="utf-8") as f:
         data = json.load(f)
     data.pop("_comment", None)
-    return jsonify(data)
+    return jsonify(_mask_secrets(data))
 
 
 @app.route("/api/config/raw", methods=["POST"])
@@ -1284,19 +1900,123 @@ def save_config_raw():
     data = request.get_json(force=True, silent=True)
     if data is None:
         return jsonify(error="invalid JSON"), 400
-    existing: dict = {}
-    if config_file.exists():
-        try:
-            with open(config_file, encoding="utf-8") as f:
-                existing = json.load(f)
-        except Exception:
-            pass
-    _READONLY_KEYS = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
-    filtered = {k: v for k, v in data.items() if k not in _READONLY_KEYS}
-    existing.update(filtered)
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(existing, f, ensure_ascii=False, indent=2)
+    if not isinstance(data, dict):
+        return jsonify(error="config 必须是 JSON 对象"), 400
+    too_large = _reject_large_json(data, 100_000)
+    if too_large:
+        return too_large
+    try:
+        data = _validate_config_update(data)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    lock_fh = _locked_file(config_file)
+    try:
+        existing: dict = {}
+        if config_file.exists():
+            try:
+                with open(config_file, encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                pass
+        readonly_keys = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
+        filtered = {k: v for k, v in data.items() if k not in readonly_keys}
+        for k in _SECRET_FIELDS:
+            if filtered.get(k) in (_SECRET_MASK, ''):
+                filtered.pop(k, None)
+        existing.update(filtered)
+        _atomic_write_json(config_file, existing)
+    finally:
+        lock_fh.close()
     return jsonify(ok=True)
+
+
+def _resolve_public_api_base(url: str) -> tuple[str, str, list[str]]:
+    """Validate an HTTPS API base and return a pinned set of public addresses."""
+    import socket as _socket
+    parsed = urlparse(url)
+    if parsed.scheme != 'https' or parsed.username or parsed.password:
+        raise ValueError('api_base 必须使用 HTTPS')
+    host = parsed.hostname or ''
+    if not host:
+        raise ValueError('api_base 缺少主机名')
+    try:
+        infos = _socket.getaddrinfo(host, parsed.port or 443, type=_socket.SOCK_STREAM)
+    except _socket.gaierror as e:
+        raise ValueError(f'api_base 域名解析失败: {e}')
+    addresses = []
+    for info in infos:
+        raw_addr = info[4][0]
+        try:
+            addr = ipaddress.ip_address(raw_addr)
+        except ValueError:
+            raise ValueError('api_base 解析到无效地址')
+        checked = addr.ipv4_mapped or addr if isinstance(addr, ipaddress.IPv6Address) else addr
+        if not checked.is_global:
+            raise ValueError('api_base 禁止指向非公网地址')
+        if raw_addr not in addresses:
+            addresses.append(raw_addr)
+    if not addresses:
+        raise ValueError('api_base 未解析到可用公网地址')
+    return url, host, addresses
+
+
+def _validate_api_base(url: str) -> str:
+    _resolve_public_api_base(url)
+    return url
+
+
+def _pinned_https_session(hostname: str, address: str):
+    import requests as _req
+    from requests.adapters import HTTPAdapter
+
+    class PinnedHTTPSAdapter(HTTPAdapter):
+        def get_connection_with_tls_context(self, prepared, verify, proxies=None, cert=None):
+            host_params, pool_kwargs = self.build_connection_pool_key_attributes(prepared, verify, cert)
+            host_params['host'] = address
+            pool_kwargs['server_hostname'] = hostname
+            pool_kwargs['assert_hostname'] = hostname
+            return self.poolmanager.connection_from_host(**host_params, pool_kwargs=pool_kwargs)
+
+    sess = _req.Session()
+    sess.trust_env = False
+    sess.mount('https://', PinnedHTTPSAdapter())
+    return sess
+
+
+def _iter_sse_payloads(resp):
+    deadline = time.monotonic() + _MAX_AI_STREAM_SECONDS
+    total = 0
+    pending = b''
+    for chunk in resp.iter_content(chunk_size=8192):
+        if time.monotonic() > deadline:
+            raise RuntimeError('AI 响应超过最大持续时间')
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _MAX_AI_RESPONSE_BYTES:
+            raise RuntimeError('AI 响应超过大小限制')
+        pending += chunk
+        if len(pending) > _MAX_AI_SSE_LINE_BYTES and b'\n' not in pending:
+            raise RuntimeError('AI 响应单行过长')
+        while b'\n' in pending:
+            raw, pending = pending.split(b'\n', 1)
+            raw = raw.rstrip(b'\r')
+            if len(raw) > _MAX_AI_SSE_LINE_BYTES:
+                raise RuntimeError('AI 响应单行过长')
+            if raw.startswith(b'data: '):
+                yield raw[6:].strip().decode('utf-8', errors='replace')
+    if pending.startswith(b'data: '):
+        yield pending[6:].strip().decode('utf-8', errors='replace')
+
+
+def _limited_error_text(resp, limit: int = 4096) -> str:
+    data = bytearray()
+    for chunk in resp.iter_content(chunk_size=min(limit, 4096)):
+        if chunk:
+            data.extend(chunk)
+        if len(data) >= limit:
+            break
+    return bytes(data[:limit]).decode('utf-8', errors='replace')
 
 
 def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = None, max_tokens_override: int | None = None):
@@ -1305,33 +2025,53 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
     import requests as _req
 
     api_base = cfg.get("api_base", "https://api.openai.com/v1").rstrip("/")
+    try:
+        _, api_host, api_addresses = _resolve_public_api_base(api_base)
+    except ValueError as e:
+        def _err():
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        from flask import Response as _Resp, stream_with_context
+        return _Resp(stream_with_context(_err()), mimetype='text/event-stream')
     auth     = f"Bearer {cfg['api_key']}"
     payload  = {
         "model":      cfg.get("model", "gpt-4o-mini"),
         "messages":   messages if messages is not None else [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens_override if max_tokens_override is not None else cfg.get("max_tokens", 2500),
+        "max_tokens": max_tokens_override if max_tokens_override is not None else _config_max_tokens(cfg),
         "stream":     True,
     }
+
+    slot_fh = _try_acquire_slot('ai', _AI_SLOTS)
+    if slot_fh is None:
+        return jsonify(error='服务器 AI 请求繁忙，请稍后重试'), 429
 
     def generate():
         if prompt is not None:
             yield f"data: {json.dumps({'type': 'prompt', 'content': prompt}, ensure_ascii=False)}\n\n"
+        sess = None
         try:
-            with _req.post(
-                f"{api_base}/chat/completions",
-                headers={"Content-Type": "application/json", "Authorization": auth},
-                json=payload, stream=True, timeout=120,
-            ) as resp:
+            last_error = None
+            resp = None
+            for address in api_addresses:
+                sess = _pinned_https_session(api_host, address)
+                try:
+                    resp = sess.post(
+                        f"{api_base}/chat/completions",
+                        headers={"Content-Type": "application/json", "Authorization": auth},
+                        json=payload, stream=True, timeout=(10, 120), allow_redirects=False,
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    sess.close()
+                    sess = None
+            if resp is None:
+                raise last_error or RuntimeError('AI API 连接失败')
+            with resp:
                 if not resp.ok:
-                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {resp.text[:200]}'})}\n\n"
+                    detail = _limited_error_text(resp, 200)
+                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {detail}'})}\n\n"
                     return
-                for raw in resp.iter_lines():
-                    if not raw:
-                        continue
-                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    if not line.startswith("data: "):
-                        continue
-                    ds = line[6:].strip()
+                for ds in _iter_sse_payloads(resp):
                     if ds == "[DONE]":
                         break
                     try:
@@ -1344,12 +2084,18 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            if sess is not None:
+                sess.close()
+            slot_fh.close()
 
-    return _Resp(
+    response = _Resp(
         stream_with_context(generate()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+    response.call_on_close(slot_fh.close)
+    return response
 
 
 @app.route("/api/ai/evaluate", methods=["POST"])
@@ -1359,6 +2105,9 @@ def ai_evaluate():
     if not cfg:
         return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
     body = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(body)
+    if too_large:
+        return too_large
     prompt = _build_eval_prompt(
         body.get("summary") or {}, body.get("km_stats") or [],
         body.get("filename", ""), body.get("start_time", ""),
@@ -1378,6 +2127,18 @@ def ai_chat():
     messages = body.get("messages") or []
     if not messages:
         return jsonify(error="消息为空"), 400
+    if not isinstance(messages, list) or len(messages) > _MAX_AI_MESSAGES:
+        return jsonify(error="消息数量超限"), 400
+    total_chars = 0
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get('role') not in ('system', 'user', 'assistant'):
+            return jsonify(error="消息格式无效"), 400
+        content = msg.get('content')
+        if not isinstance(content, str):
+            return jsonify(error="消息内容必须是文本"), 400
+        total_chars += len(content)
+    if total_chars > _MAX_AI_TEXT:
+        return jsonify(error="消息内容过长"), 413
     return _llm_stream(cfg, messages=messages)
 
 
@@ -1388,11 +2149,16 @@ def ai_compare():
     if not cfg:
         return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
     body       = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(body)
+    if too_large:
+        return too_large
     activities = body.get("activities") or []
+    if not isinstance(activities, list) or len(activities) > 50:
+        return jsonify(error="活动数量超限"), 400
     if len(activities) < 2:
         return jsonify(error="至少需要 2 条骑行记录"), 400
     prompt   = _build_compare_prompt(activities)
-    override = max(cfg.get("max_tokens", 2500) * 2, 5000)
+    override = min(16_000, max(_config_max_tokens(cfg) * 2, 5000))
     return _llm_stream(cfg, prompt, max_tokens_override=override)
 
 
@@ -1410,15 +2176,19 @@ def weather_for_activity(filename: str):
     if path.parent != input_dir.resolve():
         return jsonify(error="非法路径"), 403
 
-    _wkey = (str(path), path.stat().st_mtime if path.exists() else 0)
-    if _wkey in _weather_cache:
-        return jsonify(_weather_cache[_wkey])
+    _wkey = (str(path), _file_signature(path) if path.exists() else '')
+    with _weather_lock:
+        if _wkey in _weather_cache:
+            entry, exp = _weather_cache[_wkey]
+            if time.time() < exp:
+                return jsonify(entry)
+            del _weather_cache[_wkey]
 
     try:
-        mtime  = path.stat().st_mtime if path.exists() else None
-        cached = _cache_get(str(path), mtime) if mtime else None
+        signature = _file_signature(path) if path.exists() else None
+        cached = _cache_get(str(path), signature) if signature else None
         if cached is None:
-            cached = _disk_cache_load(str(path), mtime) if mtime else None
+            cached = _disk_cache_load(str(path), signature) if signature else None
         if cached is None:
             cached = _parse_and_build(str(path), filename)
     except Exception as e:
@@ -1478,7 +2248,11 @@ def weather_for_activity(filename: str):
             for k in ("time", "windspeed_10m", "winddirection_10m")
             if k in hourly_raw
         }
-    _weather_cache[_wkey] = result
+    with _weather_lock:
+        if len(_weather_cache) >= _WEATHER_MAX:
+            oldest = next(iter(_weather_cache))
+            del _weather_cache[oldest]
+        _weather_cache[_wkey] = (result, time.time() + _WEATHER_TTL_S)
     return jsonify(result)
 
 
@@ -1492,17 +2266,22 @@ def get_activities():
     if not input_dir.exists():
         return jsonify(activities=[])
 
-    paths = list(input_dir.glob("*.fit"))
+    paths = _library_fit_paths(input_dir)
+    input_dir_key = str(input_dir)
+    total_count = len(paths)
+
+    with _parse_state_lock:
+        _parse_states[input_dir_key] = {"state": "parsing", "total": total_count, "done": 0}
 
     def _load_one(path):
         path_str = str(path)
         try:
-            mtime  = path.stat().st_mtime
-            cached = _cache_get(path_str, mtime)
+            signature = _file_signature(path)
+            cached = _cache_get(path_str, signature)
             if not cached:
-                cached = _disk_cache_load(path_str, mtime)
+                cached = _disk_cache_load(path_str, signature)
                 if cached:
-                    _cache_put(path_str, mtime, cached)
+                    _cache_put(path_str, signature, cached)
                 else:
                     cached = _parse_and_build(path_str, path.name)
             ts_start = cached.get("time_stats_start")
@@ -1520,10 +2299,16 @@ def get_activities():
         except Exception as e:
             logging.warning("activities: %s: %s", path.name, e)
             return None
+        finally:
+            with _parse_state_lock:
+                st = _parse_states.get(input_dir_key)
+                if st and st["state"] == "parsing":
+                    st["done"] += 1
 
-    workers = min(8, len(paths)) if paths else 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        items = pool.map(_load_one, paths)
+    items = list(_activity_executor.map(_load_one, paths))
+
+    with _parse_state_lock:
+        _parse_states[input_dir_key] = {"state": "idle", "total": total_count, "done": total_count}
 
     all_tags = _db.get_all_activity_tags(db_path=db_path)
     result = sorted(
@@ -1534,6 +2319,16 @@ def get_activities():
     for a in result:
         a["tags"] = all_tags.get(a["filename"], [])
     return jsonify(activities=result)
+
+
+@app.route("/api/parse/status")
+@_auth.login_required
+def parse_status():
+    """返回当前用户 FIT 文件解析进度（供活动列表加载时前端轮询）。"""
+    key = str(_user_input_dir())
+    with _parse_state_lock:
+        st = _parse_states.get(key, {"state": "idle", "total": 0, "done": 0})
+        return jsonify(**st)
 
 
 # ── AI PMC 体能分析 ───────────────────────────────────────────────────────────
@@ -1627,6 +2422,9 @@ def ai_pmc():
     if not cfg:
         return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(data)
+    if too_large:
+        return too_large
     prompt = _build_pmc_prompt(data)
     return _llm_stream(cfg, prompt)
 
@@ -1706,69 +2504,110 @@ def ai_calendar():
     if not cfg:
         return jsonify(error="AI 未配置，请编辑 config.json"), 503
     data   = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(data)
+    if too_large:
+        return too_large
     prompt = _build_calendar_prompt(data)
     return _llm_stream(cfg, prompt)
 
 
 # ── Strava ───────────────────────────────────────────────────────────────────
 
-_strava_upload: dict[str, dict] = {}   # {username: state_dict}
-_strava_lock = threading.Lock()
+_strava_lock = threading.Lock()  # 进程内写锁
+
+
+def _strava_state_path(input_dir: Path) -> Path:
+    return input_dir / '.strava_upload_state.json'
+
+
+def _strava_lock_path(input_dir: Path) -> Path:
+    return input_dir / '.strava_upload.lock'
+
+
+def _try_acquire_strava_flock(input_dir: Path):
+    """尝试获取 Strava 上传文件锁，成功返回句柄，已被占用返回 None。"""
+    lock_path = _strava_lock_path(input_dir)
+    try:
+        fh = open(lock_path, 'w')
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except (IOError, OSError):
+        try:
+            fh.close()
+        except Exception:
+            pass
+        return None
+
+
+def _read_strava_state(input_dir: Path) -> dict:
+    f = _strava_state_path(input_dir)
+    try:
+        if f.exists():
+            return json.loads(f.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}
+
+
+def _write_strava_state(input_dir: Path, state: dict) -> None:
+    try:
+        state['updated_at'] = int(time.time())
+        _atomic_write_json(_strava_state_path(input_dir), state)
+    except Exception as e:
+        logging.warning('strava state write failed: %s', e)
 
 
 def _run_strava_upload(username: str, input_dir: Path, config_file: Path,
                        filenames: list[str], force: bool):
     with _strava_lock:
-        _strava_upload[username] = {"state": "uploading", "current": "", "done": 0,
-                                    "total": len(filenames), "results": []}
+        _write_strava_state(input_dir, {"state": "uploading", "current": "", "done": 0,
+                                        "total": len(filenames), "results": []})
 
     def on_progress(filename, done, total):
         with _strava_lock:
-            if username in _strava_upload:
-                _strava_upload[username]["current"] = filename
-                _strava_upload[username]["done"] = done
+            st = _read_strava_state(input_dir)
+            st["current"] = filename
+            st["done"] = done
+            _write_strava_state(input_dir, st)
 
     try:
         summary = _strava.upload_files(filenames, force=force, progress_cb=on_progress,
                                        input_dir=input_dir, config_file=config_file)
         with _strava_lock:
-            _strava_upload[username] = {
-                **_strava_upload.get(username, {}),
-                "state": "done",
-                "done": len(filenames),
-                **summary,
-            }
+            st = _read_strava_state(input_dir)
+            _write_strava_state(input_dir, {**st, "state": "done", "done": len(filenames), **summary})
     except Exception as e:
         kind, _ = _strava.classify_error(str(e))
         with _strava_lock:
-            _strava_upload[username] = {
-                **_strava_upload.get(username, {}),
-                "state": "error",
-                "error": str(e),
-                "auth_error": kind == "auth",
-            }
+            st = _read_strava_state(input_dir)
+            _write_strava_state(input_dir, {**st, "state": "error", "error": str(e), "auth_error": kind == "auth"})
 
 
 @app.route("/strava/callback")
 @_auth.login_required
 def strava_callback():
-    code = request.args.get("code", "")
+    code  = request.args.get("code", "")
+    state = request.args.get("state", "")
     error = request.args.get("error", "")
     if error:
         return f"<html><body><p>授权被拒绝: {_html_escape(error)}</p><script>setTimeout(()=>window.close(),3000)</script></body></html>", 400
     if not code:
         return "<html><body><p>未收到授权码</p></body></html>", 400
+    expected = session.pop('strava_oauth_state', None)
+    if not expected or not secrets.compare_digest(expected, state):
+        return "<html><body><p>无效的 OAuth state，请重新授权</p></body></html>", 400
     try:
         info = _strava.exchange_code(code, config_file=_user_config_file())
         name = _html_escape(info.get("athlete_name") or "未知")
         return (
             f"<html><body><p>Strava 授权成功！账号: {name}</p>"
             f"<p>此页面将自动关闭...</p>"
-            f"<script>try{{if(window.opener)window.opener.postMessage('fafa-strava-auth-ok','*')}}catch(e){{}}"
+            f"<script>try{{if(window.opener)window.opener.postMessage('fafa-strava-auth-ok',window.location.origin)}}catch(e){{}}"
             f"setTimeout(()=>window.close(),2000)</script></body></html>"
         )
     except Exception as e:
-        return f"<html><body><p>授权失败: {e}</p></body></html>", 500
+        logging.warning('Strava OAuth callback failed: %s', e)
+        return "<html><body><p>授权失败，请重新授权</p></body></html>", 500
 
 
 @app.route("/api/strava/status")
@@ -1810,7 +2649,7 @@ def strava_diff():
     strava_external_ids = {a["external_id"] for a in strava_acts if a["external_id"]}
     strava_times = sorted(a["start_unix"] for a in strava_acts)
 
-    paths = list(input_dir.glob("*.fit"))
+    paths = _library_fit_paths(input_dir)
     to_upload: list[str] = []
     match_count = 0
 
@@ -1820,11 +2659,11 @@ def strava_diff():
                 match_count += 1
                 continue
 
-            mtime = path.stat().st_mtime
-            cached = _cache_get(str(path), mtime) or _disk_cache_load(str(path), mtime)
+            signature = _file_signature(path)
+            cached = _cache_get(str(path), signature) or _disk_cache_load(str(path), signature)
             ts_utc = (cached or {}).get("start_time_utc")
             if not ts_utc:
-                fit = parse_fit(str(path))
+                fit = _parse_fit_safe(str(path))
                 if fit.records and fit.records[0].timestamp:
                     ts_utc = fit.records[0].timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
             if not ts_utc:
@@ -1848,12 +2687,18 @@ def strava_diff():
     )
 
 
-@app.route("/api/strava/auth_url")
+@app.route("/api/strava/auth_url", methods=["POST"])
 @_auth.login_required
 def strava_auth_url():
     try:
         redirect_uri = url_for("strava_callback", _external=True)
-        url = _strava.build_auth_url(redirect_uri=redirect_uri, config_file=_user_config_file())
+        state_val = secrets.token_urlsafe(32)
+        url = _strava.build_auth_url(
+            redirect_uri=redirect_uri,
+            config_file=_user_config_file(),
+            state_token=state_val,
+        )
+        session['strava_oauth_state'] = state_val
         return jsonify(url=url)
     except Exception as e:
         return jsonify(error=str(e)), 400
@@ -1862,31 +2707,73 @@ def strava_auth_url():
 @app.route("/api/strava/upload", methods=["POST"])
 @_auth.login_required
 def strava_upload():
-    username = g.username
-    with _strava_lock:
-        if _strava_upload.get(username, {}).get("state") == "uploading":
-            return jsonify(error="上传正在进行中"), 409
+    input_dir = _user_input_dir()
+    flock_fh = _try_acquire_strava_flock(input_dir)
+    if flock_fh is None:
+        return jsonify(error="上传正在进行中"), 409
+    global_slot_fh = _try_acquire_slot('sync', _SYNC_SLOTS)
+    if global_slot_fh is None:
+        flock_fh.close()
+        return jsonify(error='服务器后台任务繁忙，请稍后重试'), 429
 
     body = request.get_json(silent=True) or {}
     filenames = body.get("filenames", [])
-    force = bool(body.get("force", False))
+    try:
+        force = _json_bool(body, 'force')
+    except ValueError as e:
+        flock_fh.close()
+        global_slot_fh.close()
+        return jsonify(error=str(e)), 400
+    try:
+        _validate_string_list(filenames, max_items=_MAX_BATCH_FILES, field='filenames')
+    except ValueError as e:
+        flock_fh.close()
+        global_slot_fh.close()
+        return jsonify(error=str(e)), 400
     if not filenames:
+        flock_fh.close()
+        global_slot_fh.close()
         return jsonify(error="未指定文件"), 400
+    validated_filenames = []
+    seen = set()
+    for filename in filenames:
+        path = _validate_filename_in_input(filename, input_dir)
+        if path is None or not path.is_file():
+            flock_fh.close()
+            global_slot_fh.close()
+            return jsonify(error=f"无效或不存在的文件: {filename}"), 400
+        if filename not in seen:
+            validated_filenames.append(filename)
+            seen.add(filename)
+    filenames = validated_filenames
 
-    input_dir   = _user_input_dir()
     config_file = _user_config_file()
-    t = threading.Thread(target=_run_strava_upload,
-                         args=(username, input_dir, config_file, filenames, force),
-                         daemon=True)
-    t.start()
+    username = g.username
+
+    def _run_and_release_strava(fh, slot_fh):
+        try:
+            _run_strava_upload(username, input_dir, config_file, filenames, force)
+        finally:
+            try:
+                fh.close()
+            except Exception:
+                pass
+            slot_fh.close()
+
+    t = threading.Thread(target=_run_and_release_strava, args=(flock_fh, global_slot_fh), daemon=False)
+    try:
+        t.start()
+    except Exception:
+        flock_fh.close()
+        global_slot_fh.close()
+        raise
     return jsonify(ok=True)
 
 
 @app.route("/api/strava/upload/status")
 @_auth.login_required
 def strava_upload_status():
-    with _strava_lock:
-        return jsonify(**_strava_upload.get(g.username, {"state": "idle", "current": "", "done": 0, "total": 0, "results": []}))
+    return jsonify(**_read_strava_state(_user_input_dir()))
 
 
 # ── 活动元数据（备注 + 标签） ─────────────────────────────────────────────────
@@ -1894,7 +2781,8 @@ def strava_upload_status():
 @app.route("/api/meta/<path:filename>")
 @_auth.login_required
 def get_meta(filename):
-    if not filename.lower().endswith(".fit"):
+    path = _validate_filename_in_input(filename, _user_input_dir())
+    if path is None or not path.is_file():
         return jsonify(error="invalid filename"), 400
     return jsonify(**_db.get_activity_meta(filename, db_path=_user_db_path()))
 
@@ -1902,10 +2790,14 @@ def get_meta(filename):
 @app.route("/api/meta/<path:filename>/note", methods=["POST"])
 @_auth.login_required
 def save_note(filename):
-    if not filename.lower().endswith(".fit"):
+    input_dir = _user_input_dir()
+    path = _validate_filename_in_input(filename, input_dir)
+    if path is None or not path.is_file():
         return jsonify(error="invalid filename"), 400
     body = request.get_json(silent=True) or {}
     note = body.get("note", "")
+    if not isinstance(note, str) or len(note) > _MAX_NOTE_CHARS:
+        return jsonify(error="note too long"), 413
     _db.save_note(filename, note, db_path=_user_db_path())
     return jsonify(ok=True)
 
@@ -1913,15 +2805,20 @@ def save_note(filename):
 @app.route("/api/meta/<path:filename>/tags", methods=["POST"])
 @_auth.login_required
 def save_tags(filename):
-    if not filename.lower().endswith(".fit"):
+    input_dir = _user_input_dir()
+    path = _validate_filename_in_input(filename, input_dir)
+    if path is None or not path.is_file():
         return jsonify(error="invalid filename"), 400
     body = request.get_json(silent=True) or {}
     tag_ids = body.get("tag_ids", [])
-    if not isinstance(tag_ids, list):
+    if not isinstance(tag_ids, list) or len(tag_ids) > _MAX_TAG_IDS:
         return jsonify(error="tag_ids must be a list"), 400
-    if not all(isinstance(t, int) for t in tag_ids):
+    if not all(isinstance(t, int) and not isinstance(t, bool) for t in tag_ids):
         return jsonify(error="tag_ids must be integers"), 400
-    _db.save_tags(filename, tag_ids, db_path=_user_db_path())
+    try:
+        _db.save_tags(filename, tag_ids, db_path=_user_db_path())
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     return jsonify(ok=True)
 
 
@@ -1935,21 +2832,32 @@ def batch_save_tags():
     remove_ids   = body.get("remove_tag_ids", [])
     if not isinstance(filenames, list) or not isinstance(add_ids, list) or not isinstance(remove_ids, list):
         return jsonify(error="filenames, add_tag_ids, remove_tag_ids must be lists"), 400
-    if not all(isinstance(t, int) for t in add_ids + remove_ids):
+    if len(filenames) > _MAX_BATCH_FILES or len(add_ids) > _MAX_TAG_IDS or len(remove_ids) > _MAX_TAG_IDS:
+        return jsonify(error="batch too large"), 413
+    if not all(isinstance(t, int) and not isinstance(t, bool) for t in add_ids + remove_ids):
         return jsonify(error="tag ids must be integers"), 400
     if set(add_ids) & set(remove_ids):
         return jsonify(error="add_tag_ids and remove_tag_ids must not overlap"), 400
     if not add_ids and not remove_ids:
         return jsonify(ok=True, updated=0)
-    updated = 0
+    try:
+        _db.validate_tag_ids(set(add_ids) | set(remove_ids), db_path=db_path)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    valid_filenames = []
+    seen_filenames = set()
+    input_dir = _user_input_dir()
     for filename in filenames:
-        if not isinstance(filename, str) or not filename.lower().endswith(".fit"):
+        if not isinstance(filename, str) or filename in seen_filenames:
             continue
-        meta     = _db.get_activity_meta(filename, db_path=db_path)
-        cur_ids  = {t["id"] for t in meta["tags"]}
-        new_ids  = list((cur_ids | set(add_ids)) - set(remove_ids))
-        _db.save_tags(filename, new_ids, db_path=db_path)
-        updated += 1
+        path = _validate_filename_in_input(filename, input_dir)
+        if path is None or not path.is_file():
+            continue
+        valid_filenames.append(filename)
+        seen_filenames.add(filename)
+    updated = _db.batch_update_tags(
+        valid_filenames, set(add_ids), set(remove_ids), db_path=db_path,
+    )
     return jsonify(ok=True, updated=updated)
 
 
@@ -1967,6 +2875,8 @@ def create_tag():
     color = (body.get("color") or "#888888").strip()
     if not name:
         return jsonify(error="name required"), 400
+    if len(name) > _MAX_TAG_NAME or not re.fullmatch(r'#[0-9A-Fa-f]{6}', color):
+        return jsonify(error="invalid tag name or color"), 400
     try:
         tag = _db.create_tag(name, color, db_path=_user_db_path())
         return jsonify(tag=tag), 201
@@ -1989,4 +2899,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
     mode_label = "server (multi-user)" if SERVER_MODE else "local (single-user)"
     logging.info("Starting FAFA in %s mode", mode_label)
-    app.run(debug=debug, port=5173)
+    host = _bind_host()
+    port = int(os.environ.get("FAFA_PORT", "5173"))
+    app.run(debug=debug, host=host, port=port)

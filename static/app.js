@@ -244,6 +244,10 @@ function switchSidebarView(name) {
 
 let _actActivities  = null; // cached from /api/activities
 let _actFilter      = { year: '', month: '', minKm: null, maxKm: null, tags: new Set() };
+let _actRenderList  = [];   // 当前过滤后的完整列表（分批渲染用）
+let _actRenderOffset = 0;   // 已渲染条数
+const _ACT_PAGE     = 60;   // 每批渲染数量
+let _actSentinelObs = null; // IntersectionObserver
 let _actSelectMode  = false;
 let _actSelected    = new Set(); // filenames
 let _allTags        = []; // all tags from /api/tags
@@ -469,7 +473,7 @@ async function _actBulkAiCompare() {
   }));
 
   const summaryHtml = acts
-    .map(a => `<span class="stat-chip">${(a.filename || '').replace(/\.fit$/i, '')}</span>`)
+    .map(a => `<span class="stat-chip">${_escapeHtml((a.filename || '').replace(/\.fit$/i, ''))}</span>`)
     .join('');
   const payload = { activities: results };
 
@@ -506,6 +510,10 @@ async function openActivitiesView() {
   const listEl    = document.getElementById('act-list');
   const emptyEl   = document.getElementById('act-empty-hint');
   const loadingEl = document.getElementById('act-loading-hint');
+  const labelEl   = document.getElementById('act-parse-label');
+  const progressWrap = document.getElementById('act-parse-progress-wrap');
+  const bar       = document.getElementById('act-parse-bar');
+  const countEl   = document.getElementById('act-parse-count');
 
   if (_actActivities) {
     _populateYearFilter();
@@ -515,21 +523,75 @@ async function openActivitiesView() {
 
   listEl.innerHTML = '';
   emptyEl.style.display = 'none';
+  labelEl.textContent = '正在加载…';
+  progressWrap.style.display = 'none';
+  bar.className = 'sync-progress-bar indeterminate';
+  bar.style.width = '';
+  countEl.textContent = '';
   loadingEl.style.display = '';
+
+  // 轮询解析进度
+  let parseTimer = setInterval(async () => {
+    try {
+      const st = await fetch('/api/parse/status').then(r => r.json());
+      if (st.state === 'parsing' && st.total > 0) {
+        progressWrap.style.display = '';
+        labelEl.textContent = '正在解析 FIT 文件…';
+        const pct = Math.round(st.done / st.total * 100);
+        bar.classList.remove('indeterminate');
+        bar.style.width = pct + '%';
+        countEl.textContent = `${st.done} / ${st.total}`;
+      }
+    } catch (_) {}
+  }, 400);
 
   try {
     const res  = await fetch('/api/activities');
     const data = await res.json();
+    clearInterval(parseTimer);
     _actActivities = (data.activities || []).sort((a, b) =>
       (b.start_time || '').localeCompare(a.start_time || ''));
     loadingEl.style.display = 'none';
+    progressWrap.style.display = 'none';
     _populateYearFilter();
     _renderActivityList(_actFilteredList());
   } catch (e) {
+    clearInterval(parseTimer);
     loadingEl.style.display = 'none';
+    progressWrap.style.display = 'none';
     emptyEl.style.display = '';
     emptyEl.textContent = '加载失败，请刷新重试';
   }
+}
+
+function _actAppendBatch(listEl) {
+  const batch = _actRenderList.slice(_actRenderOffset, _actRenderOffset + _ACT_PAGE);
+  if (!batch.length) return;
+  // 找出已渲染的最后一个月份头，避免重复插入
+  let lastMonthKey = listEl.querySelector('.act-month-header:last-of-type')?.textContent || null;
+  // 重新算 lastMonthKey：取已渲染最后一个条目的月份
+  if (_actRenderOffset > 0) {
+    const prev = _actRenderList[_actRenderOffset - 1];
+    const dt = prev.start_time ? new Date(prev.start_time.replace(' ', 'T')) : null;
+    lastMonthKey = dt ? `${dt.getFullYear()}年${dt.getMonth() + 1}月` : null;
+  } else {
+    lastMonthKey = null;
+  }
+  const frag = document.createDocumentFragment();
+  for (const act of batch) {
+    const dt = act.start_time ? new Date(act.start_time.replace(' ', 'T')) : null;
+    const monthKey = dt ? `${dt.getFullYear()}年${dt.getMonth() + 1}月` : null;
+    if (monthKey && monthKey !== lastMonthKey) {
+      const header = document.createElement('div');
+      header.className = 'act-month-header';
+      header.textContent = monthKey;
+      frag.appendChild(header);
+      lastMonthKey = monthKey;
+    }
+    frag.appendChild(_buildActivityCard(act));
+  }
+  listEl.appendChild(frag);
+  _actRenderOffset += batch.length;
 }
 
 function _renderActivityList(activities) {
@@ -537,18 +599,21 @@ function _renderActivityList(activities) {
   const emptyEl  = document.getElementById('act-empty-hint');
   const sumBarEl = document.getElementById('act-summary-bar');
 
+  // 断开旧 observer
+  if (_actSentinelObs) { _actSentinelObs.disconnect(); _actSentinelObs = null; }
   listEl.innerHTML = '';
 
   if (!activities.length) {
     emptyEl.style.display = '';
     sumBarEl.style.display = 'none';
+    _actRenderList = []; _actRenderOffset = 0;
     return;
   }
   emptyEl.style.display = 'none';
 
-  // Summary bar totals
-  const totalKm = activities.reduce((s, a) => s + ((a.summary || {}).total_dist_km     || 0), 0);
-  const totalS  = activities.reduce((s, a) => s + ((a.summary || {}).total_duration_s  || 0), 0);
+  // Summary bar
+  const totalKm = activities.reduce((s, a) => s + ((a.summary || {}).total_dist_km    || 0), 0);
+  const totalS  = activities.reduce((s, a) => s + ((a.summary || {}).total_duration_s || 0), 0);
   sumBarEl.style.display = '';
   sumBarEl.innerHTML =
     `<span class="sum-val">${activities.length}</span> 次骑行` +
@@ -557,19 +622,23 @@ function _renderActivityList(activities) {
     `<span class="sum-dot"> · </span>` +
     `<span class="sum-val">${_fmtDur(totalS)}</span>`;
 
-  // Render cards grouped by year-month
-  let lastMonthKey = null;
-  for (const act of activities) {
-    const dt = act.start_time ? new Date(act.start_time.replace(' ', 'T')) : null;
-    const monthKey = dt ? `${dt.getFullYear()}年${dt.getMonth() + 1}月` : null;
-    if (monthKey && monthKey !== lastMonthKey) {
-      const header = document.createElement('div');
-      header.className = 'act-month-header';
-      header.textContent = monthKey;
-      listEl.appendChild(header);
-      lastMonthKey = monthKey;
-    }
-    listEl.appendChild(_buildActivityCard(act));
+  _actRenderList   = activities;
+  _actRenderOffset = 0;
+  _actAppendBatch(listEl);
+
+  if (_actRenderOffset < _actRenderList.length) {
+    const sentinel = document.createElement('div');
+    sentinel.id = 'act-list-sentinel';
+    listEl.appendChild(sentinel);
+    _actSentinelObs = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) {
+        sentinel.remove();
+        _actAppendBatch(listEl);
+        if (_actRenderOffset < _actRenderList.length) listEl.appendChild(sentinel);
+        else { _actSentinelObs.disconnect(); _actSentinelObs = null; }
+      }
+    }, { rootMargin: '200px' });
+    _actSentinelObs.observe(sentinel);
   }
 }
 
@@ -3505,7 +3574,7 @@ function _onStravaAuthMessage(ev) {
 
 async function stravaStartAuth() {
   try {
-    const res = await fetch('/api/strava/auth_url');
+    const res = await fetch('/api/strava/auth_url', { method: 'POST' });
     const d = await res.json();
     if (d.error) { toast('Strava 授权失败：' + d.error); return; }
     if (!_stravaAuthListenerAdded) {
@@ -3876,6 +3945,12 @@ function _disposePmcChart() {
   }
 }
 
+function _escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
 function _disposePmcDailyCharts() {
   for (const ro of _pmcDailyResizeObservers) {
     try { ro.disconnect(); } catch {}
@@ -4022,8 +4097,6 @@ function _initTheme() {
 function openAnalyticsView(tab = 'pmc') {
   _analyticsOpen = true;
   _analyticsTab  = tab;
-  // 每次打开重置缓存，保证数据新鲜
-  _pmcAllData    = null;
   _pmcZonePeriod = 0;
   Object.keys(_pmcDistPeriods).forEach(k => { _pmcDistPeriods[k] = 0; });
   _calActivities = null;
@@ -5391,10 +5464,15 @@ function _renderCalendarMonth(year, month, activities) {
           const color  = _calTssColor(tss);
           const barPct = Math.min(100, tss > 0 ? (tss / 200) * 100 : 0).toFixed(0);
           const tags   = act.tags || [];
+          const _safeColor = c => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
           const tagDots = tags.length > 0
-            ? `<div class="cal-act-tag-dots">${tags.slice(0, 4).map(t =>
-                `<span class="cal-act-tag-dot" style="background:${t.color}" title="${t.name}"></span>`
-              ).join('')}</div>`
+            ? `<div class="cal-act-tag-dots">${tags.slice(0, 4).map(t => {
+                const dot = document.createElement('span');
+                dot.className = 'cal-act-tag-dot';
+                dot.style.background = _safeColor(t.color);
+                dot.title = t.name || '';
+                return dot.outerHTML;
+              }).join('')}</div>`
             : '';
 
           const chip = document.createElement('div');
@@ -5532,7 +5610,7 @@ function _renderCalSidePanel(year, month, activities, settings) {
   function bestRow(icon, label, item, fmt) {
     if (!item) return '';
     return `
-      <div class="cal-sp-best-item" data-filename="${item.act.filename}">
+      <div class="cal-sp-best-item" data-filename="${_escapeHtml(item.act.filename)}">
         <span class="cal-sp-best-icon">${icon}</span>
         <span class="cal-sp-best-label">${label}</span>
         <div style="text-align:right">
@@ -5565,10 +5643,16 @@ function _renderCalSidePanel(year, month, activities, settings) {
 function _calOpenActivityModal(act, tss) {
   const s = act.summary || {};
 
-  document.getElementById('cal-act-modal-header').innerHTML = `
-    <div class="cal-act-modal-date">${act.date}</div>
-    <div class="cal-act-modal-file">${act.filename}</div>
-  `;
+  const hdr = document.getElementById('cal-act-modal-header');
+  hdr.innerHTML = '';
+  const dateEl = document.createElement('div');
+  dateEl.className = 'cal-act-modal-date';
+  dateEl.textContent = act.date || '';
+  const fileEl = document.createElement('div');
+  fileEl.className = 'cal-act-modal-file';
+  fileEl.textContent = act.filename || '';
+  hdr.appendChild(dateEl);
+  hdr.appendChild(fileEl);
 
   const durS = s.moving_time_s || s.total_duration_s || 0;
   const h = Math.floor(durS / 3600), m = Math.floor((durS % 3600) / 60);

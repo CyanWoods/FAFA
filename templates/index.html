@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FAFA</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="/static/vendor/marked/marked.min.js"></script>
+  <script src="/static/vendor/dompurify/purify.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- DNS prefetch for tile servers -->
   <link rel="dns-prefetch" href="//a.basemaps.cartocdn.com">
@@ -60,7 +60,9 @@
     </div>
     <div id="user-bar">
       <span id="user-name">{{ username }}</span>
-      <a href="/logout" id="logout-btn" title="退出登录">⏻</a>
+      <form method="post" action="/logout" class="logout-form">
+        <button type="submit" id="logout-btn" title="退出登录">⏻</button>
+      </form>
     </div>
   </nav>
 
@@ -175,7 +177,15 @@
       <div id="act-summary-bar" style="display:none"></div>
       <div id="act-list"></div>
       <div id="act-empty-hint">将 .fit 文件拖入此处，或在「文件管理」中导入</div>
-      <div id="act-loading-hint" style="display:none">正在加载…</div>
+      <div id="act-loading-hint" style="display:none">
+        <div id="act-parse-label">正在加载…</div>
+        <div id="act-parse-progress-wrap" style="display:none">
+          <div class="sync-progress-wrap" style="margin:10px 0 0">
+            <div id="act-parse-bar" class="sync-progress-bar indeterminate"></div>
+          </div>
+          <div id="act-parse-count"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -783,8 +793,7 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
   <script src="/static/app.js"></script>
   <div id="bulk-tag-picker" style="display:none">
     <div id="bulk-tag-picker-list"></div>

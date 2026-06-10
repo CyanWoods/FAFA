@@ -31,7 +31,7 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 - **Training Calendar view** (`#analytics-view`, `data-view="calendar"`, z-index 960): Full-screen overlay showing a monthly calendar grid of daily rides. Per-day detail modal on click. AI period buttons trigger `startCalendarAi(period)` for weekly or monthly training suggestions. Opened via the sidebar 训练日历 icon.
 
 **Upload flow** (`/api/upload`):
-1. Saves `.fit` to a temp file, parses via `parse_fit()`, immediately deletes temp file.
+1. Saves `.fit` to a temp file, parses via `_run_parse_worker()` (sandboxed subprocess in server mode, direct call otherwise), immediately deletes temp file.
 2. Extracts GPS coords (semicircles → degrees).
 3. Computes `Summary`, `List[KmStats]` (per-km), `List[KmStats]` (per-100 m), `List[KmStats]` (per-1 min) via `fafa/stats.py`.
 4. Returns `{ coords, filename, is_gcj02, summary, km_stats, dist_stats, time_stats, time_stats_start }`.
@@ -40,13 +40,15 @@ Flask API backend + Leaflet.js + ECharts frontend. The main user-facing tool.
 
 **Activities API** (`/api/activities`): Returns lightweight summary of every `.fit` in `input/` — filename, date, start_time, summary fields, peak_power, zone_time_s, and a `tags` array (from `input/fafa.db`). Uses the same parse cache as `/api/load`. Used by both the activities view and the PMC computation.
 
+**Parse status API** (`/api/parse/status`): GET returns `{state, total, done}` for the current user's FIT parsing progress. `state` is `"parsing"` while `get_activities()` is running, `"idle"` otherwise. Polled by the activities view (400 ms interval) to render a progress bar + file count during initial load after a sync.
+
 **Activity metadata API** (`/api/meta/<filename>`): GET returns `{note, tags}` for an activity. POST `/api/meta/<filename>/note` saves a Markdown note. POST `/api/meta/<filename>/tags` saves tag assignments (`{tag_ids: [int]}`). Tags and notes are stored in `input/fafa.db` via `fafa/db.py`.
 
 **Batch tags API** (`/api/meta/batch/tags`): POST `{filenames: [...], add_tag_ids: [...], remove_tag_ids: [...]}` — applies tag additions and removals atomically across multiple activities. Used by the bulk tag picker in multi-select mode.
 
 **Tags API** (`/api/tags`): GET lists all tags `[{id, name, color, is_preset}]`. POST creates a new tag `{name, color}` → 201 `{tag}`. DELETE `/api/tags/<id>` removes a user-created tag (preset tags return 403).
 
-**Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses `ThreadPoolExecutor` (up to 8 workers) + the cache to parse the full library quickly on first load.
+**Disk cache** (`input/.cache/`): JSON cache files keyed by filename + mtime. Survives Flask restarts. `get_activities()` uses a global `_activity_executor` (4 workers) + the cache to parse the full library quickly on first load.
 
 **FIT sync** (`/api/sync/start`, `/api/sync/status`): Unified sync endpoint supporting 顽鹿（OneLap）and iGPSport platforms. POST `{platform: "onelap"|"igpsport", full: bool, limit?: int}` to start; dispatches `_run_sync(full, limit)` or `_run_igpsport_sync(full)` in a background thread. Shared `_sync` state dict + `_sync_lock`. Old `/api/onelap/sync` and `/api/onelap/status` preserved as aliases. 顽鹿: Chromium-based auth, auto-decrypts GCJ-02 files (C506 ≥ v19, C706 ≥ v20). iGPSport: REST API login (`https://prod.zh.igpsport.com/service`), Bearer token, paginated activity list, dedup by `iGPSport_{ride_id}_*.fit` glob; files are WGS-84, no decrypt needed. Credentials for both platforms loaded via `_load_onelap_credentials()` / `_load_igpsport_credentials()` from `config.json`.
 

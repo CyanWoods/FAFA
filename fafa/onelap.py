@@ -1,6 +1,8 @@
 """顽鹿（OneLap）下载客户端 — 可被 download_fit.py 和 app.py 共同使用。"""
 
 import base64
+from contextlib import nullcontext
+import fcntl
 import hashlib
 import json
 import os
@@ -26,6 +28,7 @@ UA = (
 )
 
 CST             = timezone(timedelta(hours=8))
+MAX_FIT_DOWNLOAD_BYTES = 32 * 1024 * 1024
 _MAGENE_RAW     = re.compile(r"^MAGENE_[A-Z]\d+_(\d+)_(\d+)_\d+(?:_\d+)?\.fit$", re.IGNORECASE)
 # group(1): 旧格式日期字符串 YYYYMMDD-HHMMSS（Magene_Cxxx_YYYYMMDD-HHMMSS_id.fit）
 # group(2): 新格式日期字符串 YYYYMMDD-HHMMSS（Magene_Cxxx_id_YYYYMMDD-HHMMSS.fit）
@@ -127,6 +130,37 @@ def parse_activity_time(act: dict) -> datetime | None:
     return None
 
 
+def safe_fit_filename(filename: str, fallback: str) -> str:
+    name = re.sub(r'[^A-Za-z0-9._-]+', '_', Path(filename).name).strip('._')
+    if not name:
+        name = re.sub(r'[^A-Za-z0-9_-]+', '_', str(fallback)).strip('_') or 'activity'
+    if not name.lower().endswith('.fit'):
+        name += '.fit'
+    return name
+
+
+def _reserve_download_filename(
+    state: dict, rid: str, filename: str, out_dir: Path, state_lock=None,
+) -> str:
+    with state_lock or nullcontext():
+        used = {
+            str(item.get('filename'))
+            for key, item in state.items()
+            if key != rid and isinstance(item, dict) and item.get('filename')
+        }
+        candidate = filename
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix or '.fit'
+        safe_rid = re.sub(r'[^A-Za-z0-9_-]+', '_', rid).strip('_') or 'activity'
+        index = 0
+        while candidate in used or (out_dir / candidate).exists():
+            extra = f'_{safe_rid}' if index == 0 else f'_{safe_rid}_{index}'
+            candidate = f'{stem}{extra}{suffix}'
+            index += 1
+        state[rid] = {"filename": candidate, "downloading": True}
+        return candidate
+
+
 # ── 会话 ──────────────────────────────────────────────────────────────────────
 def build_session(token: str, cookies: dict) -> requests.Session:
     s = requests.Session()
@@ -213,6 +247,7 @@ def download_activity(
     state: dict,
     out_dir: Path,
     skip_rename: bool = False,
+    state_lock=None,
 ) -> Path | None:
     """
     下载单个活动 FIT 文件。
@@ -223,7 +258,8 @@ def download_activity(
     if not rid:
         return None
 
-    state_item = state.get(rid) or {}
+    with state_lock or nullcontext():
+        state_item = dict(state.get(rid) or {})
     if state_item.get("downloaded"):
         existing = out_dir / state_item.get("filename", "")
         if existing.exists() and existing.stat().st_size > 0:
@@ -270,7 +306,10 @@ def download_activity(
             resp = r
             break
         except Exception:
-            pass
+            try:
+                r.close()
+            except Exception:
+                pass
 
     if resp is None:
         return None
@@ -284,51 +323,67 @@ def download_activity(
     if not filename:
         name = act.get("name") or act.get("start_riding_time") or rid
         filename = re.sub(r'[<>:"/\\|?*]+', "_", str(name)).strip(".")
-    if not filename.lower().endswith(".fit"):
-        filename += ".fit"
-    # Strip any directory components to prevent path traversal
-    filename = Path(filename).name
+    filename = safe_fit_filename(filename, rid)
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    filename = _reserve_download_filename(state, rid, filename, out_dir, state_lock)
     final = out_dir / filename
     part  = Path(f"{final}.part")
-
-    if final.exists() and final.stat().st_size > 0:
-        final = rename_magene(final)
-        state[rid] = {"filename": final.name, "downloaded": True}
-        resp.close()
-        return final
-
-    if part.exists():
-        part.unlink()
+    lock_path = Path(f"{final}.download.lock")
 
     try:
-        with part.open("wb") as f:
-            for chunk in resp.iter_content(65536):
-                if chunk:
-                    f.write(chunk)
-        part.replace(final)
+        lock_fh = open(lock_path, 'a+')
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
     except Exception:
+        resp.close()
+        with state_lock or nullcontext():
+            if state.get(rid, {}).get('downloading'):
+                state.pop(rid, None)
+        raise
+
+    try:
         if part.exists():
             part.unlink()
-        raise
+
+        try:
+            downloaded = 0
+            with part.open("wb") as f:
+                for chunk in resp.iter_content(65536):
+                    if chunk:
+                        downloaded += len(chunk)
+                        if downloaded > MAX_FIT_DOWNLOAD_BYTES:
+                            raise RuntimeError('FIT 文件超过 32 MB 限制')
+                        f.write(chunk)
+            part.replace(final)
+            os.chmod(final, 0o600)
+        except Exception:
+            if part.exists():
+                part.unlink()
+            raise
+        finally:
+            resp.close()
+
+        size_kb = final.stat().st_size / 1024
+        logging.debug(
+            "[onelap] rid=%s  key_resolve: %.2fs  download: %.2fs  size: %.1f KB",
+            rid, t1 - t0, time.time() - t1, size_kb,
+        )
+
+        if not skip_rename:
+            final = rename_magene(final)
+        with state_lock or nullcontext():
+            state[rid] = {
+                "filename": final.name,
+                "downloaded": True,
+                "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        return final
     finally:
-        resp.close()
-
-    size_kb = final.stat().st_size / 1024
-    logging.debug(
-        "[onelap] rid=%s  key_resolve: %.2fs  download: %.2fs  size: %.1f KB",
-        rid, t1 - t0, time.time() - t1, size_kb,
-    )
-
-    if not skip_rename:
-        final = rename_magene(final)
-    state[rid] = {
-        "filename": final.name,
-        "downloaded": True,
-        "downloaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    return final
+        lock_fh.close()
+        with state_lock or nullcontext():
+            if state.get(rid, {}).get('downloading'):
+                state.pop(rid, None)
 
 
 # ── API 登录 ──────────────────────────────────────────────────────────────────

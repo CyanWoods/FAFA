@@ -4,17 +4,19 @@ Credentials stored in config.json under strava_* keys.
 Upload dedup state at input/.strava_state.json.
 """
 
-import hashlib
 import json
 import logging
 import os
 import re
+import secrets
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
+import fcntl
 
 logger = logging.getLogger(__name__)
 
@@ -53,71 +55,102 @@ def load_config(config_file: Path | None = None) -> dict | None:
         return None
 
 
+def _atomic_save_config(cfg_path: Path, cfg: dict) -> None:
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{cfg_path.name}.', suffix='.tmp', dir=cfg_path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp_name).replace(cfg_path)
+        os.chmod(cfg_path, 0o600)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _save_tokens(access_token, refresh_token, expires_at,
                  athlete_id="", athlete_name="", config_file: Path | None = None):
     cfg_path = config_file or _AI_CONFIG_FILE
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    cfg["strava_access_token"] = access_token
-    cfg["strava_refresh_token"] = refresh_token
-    cfg["strava_expires_at"] = expires_at
-    if athlete_id:
-        cfg["strava_athlete_id"] = str(athlete_id)
-    if athlete_name:
-        cfg["strava_athlete_name"] = athlete_name
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    lock_path = cfg_path.with_name(cfg_path.name + '.lock')
+    with open(lock_path, 'a+') as lock_fh:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["strava_access_token"] = access_token
+        cfg["strava_refresh_token"] = refresh_token
+        cfg["strava_expires_at"] = expires_at
+        if athlete_id:
+            cfg["strava_athlete_id"] = str(athlete_id)
+        if athlete_name:
+            cfg["strava_athlete_name"] = athlete_name
+        _atomic_save_config(cfg_path, cfg)
 
 
 # ── Token management ──────────────────────────────────────────────────────────
 
 def get_access_token(config_file: Path | None = None) -> str:
-    cfg = load_config(config_file)
-    if not cfg:
-        raise Exception("Strava 未配置 client_id / client_secret")
-    if not cfg["refresh_token"]:
-        raise Exception("Strava 未授权，请先完成 OAuth 授权")
+    cfg_path = config_file or _AI_CONFIG_FILE
+    lock_path = cfg_path.with_name(cfg_path.name + '.lock')
+    with open(lock_path, 'a+') as lock_fh:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        cfg = load_config(cfg_path)
+        if not cfg:
+            raise Exception("Strava 未配置 client_id / client_secret")
+        if not cfg["refresh_token"]:
+            raise Exception("Strava 未授权，请先完成 OAuth 授权")
 
-    now = int(time.time())
-    if cfg["access_token"] and cfg["expires_at"] and cfg["expires_at"] > now + 3600:
-        return cfg["access_token"]
+        now = int(time.time())
+        if cfg["access_token"] and cfg["expires_at"] and cfg["expires_at"] > now + 3600:
+            return cfg["access_token"]
 
-    logger.info("[strava] 刷新 access_token...")
-    resp = requests.post(
-        "https://www.strava.com/oauth/token",
-        data={
-            "client_id": cfg["client_id"],
-            "client_secret": cfg["client_secret"],
-            "refresh_token": cfg["refresh_token"],
-            "grant_type": "refresh_token",
-        },
-        timeout=20,
-    )
-    try:
-        resp.raise_for_status()
-    except Exception:
-        raise Exception("Strava 授权已失效，请重新授权 (refresh_token 刷新失败)")
-    data = resp.json()
-    athlete = data.get("athlete") or {}
-    _save_tokens(
-        access_token=data.get("access_token", ""),
-        refresh_token=data.get("refresh_token", cfg["refresh_token"]),
-        expires_at=data.get("expires_at", 0),
-        athlete_id=athlete.get("id", ""),
-        athlete_name=athlete.get("username") or athlete.get("firstname") or "",
-        config_file=config_file,
-    )
-    logger.info("[strava] token 刷新成功")
-    return data.get("access_token", "")
+        logger.info("[strava] 刷新 access_token...")
+        resp = requests.post(
+            "https://www.strava.com/oauth/token",
+            data={
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "refresh_token": cfg["refresh_token"],
+                "grant_type": "refresh_token",
+            },
+            timeout=20,
+        )
+        try:
+            resp.raise_for_status()
+        except Exception:
+            raise Exception("Strava 授权已失效，请重新授权 (refresh_token 刷新失败)")
+        data = resp.json()
+        athlete = data.get("athlete") or {}
+        with open(cfg_path, encoding="utf-8") as f:
+            current = json.load(f)
+        current["strava_access_token"] = data.get("access_token", "")
+        current["strava_refresh_token"] = data.get("refresh_token", cfg["refresh_token"])
+        current["strava_expires_at"] = data.get("expires_at", 0)
+        if athlete.get("id"):
+            current["strava_athlete_id"] = str(athlete["id"])
+        athlete_name = athlete.get("username") or athlete.get("firstname") or ""
+        if athlete_name:
+            current["strava_athlete_name"] = athlete_name
+        _atomic_save_config(cfg_path, current)
+        logger.info("[strava] token 刷新成功")
+        return data.get("access_token", "")
 
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def build_auth_url(redirect_uri: str, config_file: Path | None = None) -> str:
+def build_auth_url(redirect_uri: str, config_file: Path | None = None,
+                   state_token: str | None = None) -> str:
     cfg = load_config(config_file)
     if not cfg:
         raise Exception("Strava 未配置 client_id")
-    state_tok = hashlib.md5(f"{cfg['client_id']}-{time.time()}".encode()).hexdigest()[:12]
+    state_tok = state_token or secrets.token_urlsafe(32)
     return (
         f"https://www.strava.com/oauth/authorize"
         f"?client_id={quote(cfg['client_id'])}"
@@ -178,10 +211,19 @@ def _load_state(input_dir: Path | None = None) -> dict:
 
 def _save_state(state: dict, input_dir: Path | None = None):
     state_file = (input_dir / ".strava_state.json") if input_dir else _STATE_FILE
+    tmp_name = None
     try:
-        with open(state_file, "w", encoding="utf-8") as f:
+        fd, tmp_name = tempfile.mkstemp(prefix=f'.{state_file.name}.', suffix='.tmp', dir=state_file.parent)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp_name).replace(state_file)
+        os.chmod(state_file, 0o600)
     except Exception as e:
+        if tmp_name:
+            Path(tmp_name).unlink(missing_ok=True)
         logger.warning(f"[strava] 保存状态失败: {e}")
 
 
@@ -201,7 +243,9 @@ def is_uploaded(filename: str, input_dir: Path | None = None) -> bool:
 
 # ── Activity list ─────────────────────────────────────────────────────────────
 
-def fetch_all_activities(access_token: str, per_page: int = 200) -> list[dict]:
+def fetch_all_activities(
+    access_token: str, per_page: int = 200, max_activities: int = 10_000,
+) -> list[dict]:
     """Fetch all Strava activities. Returns [{id, external_id, start_unix}]."""
     headers = {"Authorization": f"Bearer {access_token}"}
     all_acts: list[dict] = []
@@ -225,6 +269,8 @@ def fetch_all_activities(access_token: str, per_page: int = 200) -> list[dict]:
                     "external_id": (act.get("external_id") or "").strip(),
                     "start_unix": int(dt.timestamp()),
                 })
+                if len(all_acts) >= max_activities:
+                    return all_acts
             except Exception:
                 pass
         if len(batch) < per_page:

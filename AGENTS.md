@@ -177,4 +177,10 @@ venv/bin/python app.py
 
 Then open `http://localhost:5173`.
 
-There is no dedicated automated test suite in this repository. For changes to parsing/statistics, validate with one or more FIT files under `input/` when available. For frontend changes, run the Flask app and manually exercise the affected view.
+Run the repository quality gate before completing changes:
+
+```bash
+make check
+```
+
+`make fix` applies deterministic whitespace/cache cleanup before running the same checks. `make watch` continuously watches source changes and repeats that process. Parsing/statistics changes should still be validated with one or more FIT files under `input/` when available; frontend changes should still be manually exercised in the Flask app.

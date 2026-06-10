@@ -1,6 +1,9 @@
+import ipaddress
 import json
 import logging
+import os
 import re
+import socket
 import time
 import urllib.request
 import urllib.parse
@@ -19,6 +22,41 @@ _HEADERS = {
         "Chrome/123.0.0.0 Safari/537.36"
     ),
 }
+MAX_FIT_DOWNLOAD_BYTES = 32 * 1024 * 1024
+
+
+def _validate_public_https_url(url: str) -> str:
+    """Reject credential-bearing, non-HTTPS, and non-public download targets."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise RuntimeError("下载地址必须是公网 HTTPS 地址")
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise RuntimeError("下载地址域名解析失败") from exc
+    if not infos:
+        raise RuntimeError("下载地址未解析到可用地址")
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0])
+        checked = addr.ipv4_mapped or addr if isinstance(addr, ipaddress.IPv6Address) else addr
+        if not checked.is_global:
+            raise RuntimeError("下载地址禁止指向非公网地址")
+    return url
+
+
+class _PublicHTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_public_https_url(newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            old_host = urllib.parse.urlparse(req.full_url).hostname
+            new_host = urllib.parse.urlparse(newurl).hostname
+            if old_host != new_host:
+                redirected.remove_header("Authorization")
+        return redirected
+
+
+_DOWNLOAD_OPENER = urllib.request.build_opener(_PublicHTTPSRedirectHandler())
 
 
 def _parse_start_time(item: dict) -> datetime | None:
@@ -86,7 +124,7 @@ class IGPSportClient:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
-    def get_all_activities(self) -> list[dict]:
+    def get_all_activities(self, max_activities: int | None = None) -> list[dict]:
         all_acts: list[dict] = []
         page = 1
         total_pages = 1
@@ -101,6 +139,8 @@ class IGPSportClient:
             rows: list[dict] = page_data.get("rows") or []
             total_pages = page_data.get("totalPage", 1)
             all_acts.extend(rows)
+            if max_activities is not None and len(all_acts) >= max_activities:
+                return all_acts[:max_activities]
             logging.info("[iGPSport] 第 %d/%d 页: %d 条记录", page - 1, total_pages, len(rows))
             if not rows:
                 break
@@ -124,18 +164,27 @@ class IGPSportClient:
                 download_url = data.get("data")
                 if not download_url:
                     raise RuntimeError("下载地址为空")
+                _validate_public_https_url(download_url)
                 req = urllib.request.Request(download_url)
-                req.add_header("Authorization", f"Bearer {self.token}")
-                with urllib.request.urlopen(req, timeout=120) as resp, \
+                download_host = urllib.parse.urlparse(download_url).hostname
+                api_host = urllib.parse.urlparse(_BASE_URL).hostname
+                if download_host == api_host:
+                    req.add_header("Authorization", f"Bearer {self.token}")
+                with _DOWNLOAD_OPENER.open(req, timeout=120) as resp, \
                         open(part_path, "wb") as f:
+                    downloaded = 0
                     while True:
                         chunk = resp.read(256 * 1024)
                         if not chunk:
                             break
+                        downloaded += len(chunk)
+                        if downloaded > MAX_FIT_DOWNLOAD_BYTES:
+                            raise RuntimeError("FIT 文件超过 32 MB 限制")
                         f.write(chunk)
                 if not part_path.exists() or part_path.stat().st_size == 0:
                     raise RuntimeError("下载结果为空文件")
                 part_path.replace(dst_path)
+                os.chmod(dst_path, 0o600)
                 return
             except Exception as exc:
                 last_exc = exc
