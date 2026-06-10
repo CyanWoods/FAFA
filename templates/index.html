@@ -194,6 +194,7 @@
     <div id="files-header">
       <span class="act-list-title">文件管理</span>
       <div id="files-actions">
+        <button id="lib-export-all-btn" onclick="_libExportAll()">全部导出</button>
         <label id="act-upload-label">
           导入 FIT
           <input type="file" id="act-upload-input" accept=".fit" multiple style="display:none">
@@ -204,6 +205,7 @@
     </div>
     <div id="lib-select-bar" style="display:none">
       <span id="lib-select-count">已选 0 项</span>
+      <button id="lib-export-selected-btn" onclick="_libExportSelected()">导出已选 FIT</button>
       <button id="lib-select-all-btn" onclick="_libSelectAll()">全选</button>
       <button class="danger-btn" onclick="_libBulkDelete()">删除</button>
     </div>

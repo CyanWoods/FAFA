@@ -1844,6 +1844,8 @@ body {
 
 #files-actions button:hover,
 #files-actions #act-upload-label:hover { background: var(--surface-hover); color: #fff; }
+#files-actions button:disabled,
+#lib-select-bar button:disabled { opacity: .45; cursor: wait; }
 #files-actions button.danger-btn { border-color: rgba(231,76,60,0.4); color: var(--color-danger-soft); }
 #files-actions button.danger-btn:hover { background: rgba(231,76,60,0.15); }
 
