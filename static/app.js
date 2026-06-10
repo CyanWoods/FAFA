@@ -7,7 +7,7 @@ if (typeof echarts === 'undefined') {
 
 /* ── Tile configs ────────────────────────────────────────────────────────── */
 const _CARTO_OPTS = {
-  subdomains: 'bcd', maxZoom: 19, attribution: '&copy; CARTO',
+  subdomains: ['a', 'b', 'c', 'd'], maxZoom: 19, attribution: '&copy; CARTO',
   crossOrigin: 'anonymous',
   tileSize: 512, zoomOffset: -1,
   keepBuffer: 4, updateWhenZooming: false,
@@ -225,6 +225,7 @@ function switchSidebarView(name) {
   if (name === 'map') {
     mapView.classList.add('active');
     map.invalidateSize();
+    _refreshCdnStatus();
   } else {
     mapView.classList.remove('active');
   }
@@ -1463,8 +1464,23 @@ async function _loadTileImg(url, retries = 3) {
   return null;
 }
 
-const _TILE_SUBS = ['a', 'b', 'c', 'd'];
+let _cartoCdnAvail = ['a', 'b', 'c', 'd']; // 可用子域，由 _refreshCdnStatus 动态更新
 let _tileSubIdx = 0;
+
+async function _refreshCdnStatus() {
+  const probe = s => fetch(
+    `https://${s}.basemaps.cartocdn.com/dark_nolabels/1/0/0.png`,
+    { method: 'HEAD', cache: 'no-store' }
+  ).then(r => r.ok).catch(() => false);
+
+  const results = await Promise.all(['a', 'b', 'c', 'd'].map(probe));
+  const avail = ['a', 'b', 'c', 'd'].filter((_, i) => results[i]);
+  _cartoCdnAvail = avail.length > 0 ? avail : ['a', 'b', 'c', 'd'];
+  if (avail.length === 0) toast('地图服务不可用，瓦片加载可能失败');
+  _CARTO_OPTS.subdomains = _cartoCdnAvail;
+  if (tileLayer) tileLayer.options.subdomains = _cartoCdnAvail;
+  if (detailRouteTileLayer) detailRouteTileLayer.options.subdomains = _cartoCdnAvail;
+}
 
 // zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
 // zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
@@ -1493,7 +1509,7 @@ async function _drawTiles(ctx, zoom, scaleFactor, originX, originY, W, H, urlTem
     for (let row = row0; row <= row1; row++) {
       const tx = Math.max(0, Math.min(maxIdx, col));
       const ty = Math.max(0, Math.min(maxIdx, row));
-      const s = _TILE_SUBS[(_tileSubIdx++) % 4];
+      const s = _cartoCdnAvail[(_tileSubIdx++) % _cartoCdnAvail.length];
       const url = urlTemplate.replace('{s}', s).replace('{z}', zoom)
                              .replace('{x}', tx).replace('{y}', ty);
       const px = colX[col - col0], py = rowY[row - row0];
@@ -1809,6 +1825,7 @@ async function openDetailView(id) {
   if (!t) return;
   stopFlash(id);
   detailTrackId = id;
+  _refreshCdnStatus();
 
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
   detailRouteLayers = [];
@@ -3298,6 +3315,41 @@ function _libSelectAll() {
     if (cb) cb.checked = sel;
     row.classList.toggle('lib-row-selected', sel);
   });
+}
+
+function _libExportZip(filenames = null) {
+  if (filenames && !filenames.length) { toast('请先选择文件'); return; }
+  toast('正在打包 FIT 文件，请稍候…');
+  if (!filenames) {
+    const a = document.createElement('a');
+    a.href = '/api/files/export';
+    a.download = 'fafa_all_fit.zip';
+    a.click();
+    return;
+  }
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/api/files/export';
+  form.style.display = 'none';
+  for (const filename of filenames) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'filename';
+    input.value = filename;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+}
+
+function _libExportAll() {
+  if (!_libFiles.length) { toast('没有可导出的 FIT 文件'); return; }
+  _libExportZip();
+}
+
+function _libExportSelected() {
+  _libExportZip([..._libSelectedSet]);
 }
 
 async function _libBulkDelete() {

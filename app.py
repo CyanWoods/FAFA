@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
@@ -123,6 +124,7 @@ _SECRET_MASK      = '••••••••'
 _MAX_NOTE_CHARS   = 20_000
 _MAX_TAG_NAME     = 64
 _MAX_BATCH_FILES  = 1_000
+_MAX_EXPORT_FILES = 10_000
 _MAX_TAG_IDS      = 100
 _MAX_AI_MESSAGES  = 100
 _MAX_AI_TEXT      = 200_000
@@ -1133,6 +1135,55 @@ def delete_all_files():
     return jsonify(deleted=deleted)
 
 
+@app.route("/api/files/export", methods=["GET", "POST"])
+@_auth.login_required
+def export_fit_files():
+    """Download all or selected library FIT files as a ZIP archive."""
+    input_dir = _user_input_dir()
+    filenames = request.form.getlist("filename") if request.method == "POST" else None
+
+    if filenames is None:
+        paths = _library_fit_paths(input_dir)
+        archive_name = "fafa_all_fit.zip"
+    else:
+        try:
+            _validate_string_list(filenames, max_items=_MAX_EXPORT_FILES, field="filenames")
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        paths = []
+        seen = set()
+        for filename in filenames:
+            if filename in seen:
+                continue
+            path = _validate_filename_in_input(filename, input_dir)
+            if path is None or not path.is_file():
+                return jsonify(error=f"无效或不存在的文件: {filename}"), 400
+            paths.append(path)
+            seen.add(filename)
+        archive_name = "fafa_selected_fit.zip"
+
+    if not paths:
+        return jsonify(error="没有可导出的 FIT 文件"), 400
+    if len(paths) > _MAX_EXPORT_FILES:
+        return jsonify(error=f"导出文件数量不能超过 {_MAX_EXPORT_FILES}"), 413
+
+    archive = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024, mode="w+b")
+    try:
+        with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_STORED) as zf:
+            for path in paths:
+                zf.write(path, arcname=path.name)
+        archive.seek(0)
+        return send_file(
+            archive,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=archive_name,
+        )
+    except Exception:
+        archive.close()
+        raise
+
+
 @app.route("/api/load", methods=["POST"])
 @_auth.login_required
 def load_file():
@@ -1858,9 +1909,7 @@ def _validate_config_update(data: dict) -> dict:
                 raise ValueError(f'{key} 格式无效')
             value = value.strip()
             if key == 'api_base':
-                parsed = urlparse(value)
-                if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
-                    raise ValueError('api_base 必须是无用户信息的 HTTPS 地址')
+                _validate_api_base(value)
             validated[key] = value
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -1930,8 +1979,28 @@ def save_config_raw():
     return jsonify(ok=True)
 
 
-def _resolve_public_api_base(url: str) -> tuple[str, str, list[str]]:
-    """Validate an HTTPS API base and return a pinned set of public addresses."""
+
+_SSRF_BLOCKED_V4 = [
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('169.254.0.0/16'),
+]
+_SSRF_BLOCKED_V6 = [
+    ipaddress.ip_network('::1/128'),
+    ipaddress.ip_network('fc00::/7'),
+    ipaddress.ip_network('fe80::/10'),
+]
+
+
+def _is_ssrf_blocked(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    nets = _SSRF_BLOCKED_V4 if isinstance(addr, ipaddress.IPv4Address) else _SSRF_BLOCKED_V6
+    return any(addr in net for net in nets)
+
+
+def _resolve_public_api_base(url: str) -> None:
+    """Validate url is a safe HTTPS endpoint (SSRF guard). Raises ValueError on violation."""
     import socket as _socket
     parsed = urlparse(url)
     if parsed.scheme != 'https' or parsed.username or parsed.password:
@@ -1943,7 +2012,8 @@ def _resolve_public_api_base(url: str) -> tuple[str, str, list[str]]:
         infos = _socket.getaddrinfo(host, parsed.port or 443, type=_socket.SOCK_STREAM)
     except _socket.gaierror as e:
         raise ValueError(f'api_base 域名解析失败: {e}')
-    addresses = []
+    if not infos:
+        raise ValueError('api_base 未解析到可用地址')
     for info in infos:
         raw_addr = info[4][0]
         try:
@@ -1951,36 +2021,14 @@ def _resolve_public_api_base(url: str) -> tuple[str, str, list[str]]:
         except ValueError:
             raise ValueError('api_base 解析到无效地址')
         checked = addr.ipv4_mapped or addr if isinstance(addr, ipaddress.IPv6Address) else addr
-        if not checked.is_global:
-            raise ValueError('api_base 禁止指向非公网地址')
-        if raw_addr not in addresses:
-            addresses.append(raw_addr)
-    if not addresses:
-        raise ValueError('api_base 未解析到可用公网地址')
-    return url, host, addresses
+        if _is_ssrf_blocked(checked):
+            raise ValueError('api_base 禁止指向内网地址')
 
 
 def _validate_api_base(url: str) -> str:
     _resolve_public_api_base(url)
     return url
 
-
-def _pinned_https_session(hostname: str, address: str):
-    import requests as _req
-    from requests.adapters import HTTPAdapter
-
-    class PinnedHTTPSAdapter(HTTPAdapter):
-        def get_connection_with_tls_context(self, prepared, verify, proxies=None, cert=None):
-            host_params, pool_kwargs = self.build_connection_pool_key_attributes(prepared, verify, cert)
-            host_params['host'] = address
-            pool_kwargs['server_hostname'] = hostname
-            pool_kwargs['assert_hostname'] = hostname
-            return self.poolmanager.connection_from_host(**host_params, pool_kwargs=pool_kwargs)
-
-    sess = _req.Session()
-    sess.trust_env = False
-    sess.mount('https://', PinnedHTTPSAdapter())
-    return sess
 
 
 def _iter_sse_payloads(resp):
@@ -2019,6 +2067,36 @@ def _limited_error_text(resp, limit: int = 4096) -> str:
     return bytes(data[:limit]).decode('utf-8', errors='replace')
 
 
+def _format_upstream_api_error(status_code: int, raw_detail: str) -> str:
+    """Turn OpenAI-compatible API failures into concise user-facing messages."""
+    detail = (raw_detail or '').strip()
+    if detail:
+        try:
+            parsed = json.loads(detail)
+            error = parsed.get('error', parsed) if isinstance(parsed, dict) else parsed
+            if isinstance(error, dict):
+                detail = str(error.get('message') or error.get('detail') or error.get('code') or '').strip()
+            elif isinstance(error, str):
+                detail = error.strip()
+        except (TypeError, ValueError):
+            pass
+        detail = re.sub(r'<[^>]*>', ' ', detail)
+        detail = re.sub(r'\s+', ' ', detail).strip()[:300]
+
+    defaults = {
+        400: '请求参数或模型配置不受支持，请检查模型名称和 API Base',
+        401: 'API Key 无效或已过期，请检查密钥配置',
+        403: '当前 API Key 没有访问该模型的权限',
+        418: '上游 API 拒绝请求，请检查 API Base、API Key、模型名称或服务商账户风控状态',
+        429: '上游 API 请求过于频繁或额度不足，请稍后重试并检查账户余额',
+    }
+    fallback = defaults.get(status_code)
+    if fallback is None and status_code >= 500:
+        fallback = '上游 API 服务暂时不可用，请稍后重试'
+    fallback = fallback or '上游 API 请求失败'
+    return f'{fallback}（HTTP {status_code}）' + (f'：{detail}' if detail else '')
+
+
 def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = None, max_tokens_override: int | None = None):
     """共享 SSE 流式响应助手，所有 AI 端点都通过此函数返回。"""
     from flask import Response as _Resp, stream_with_context
@@ -2026,10 +2104,11 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
 
     api_base = cfg.get("api_base", "https://api.openai.com/v1").rstrip("/")
     try:
-        _, api_host, api_addresses = _resolve_public_api_base(api_base)
+        _resolve_public_api_base(api_base)
     except ValueError as e:
+        _err_msg = str(e)
         def _err():
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': _err_msg})}\n\n"
         from flask import Response as _Resp, stream_with_context
         return _Resp(stream_with_context(_err()), mimetype='text/event-stream')
     auth     = f"Bearer {cfg['api_key']}"
@@ -2049,27 +2128,18 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
             yield f"data: {json.dumps({'type': 'prompt', 'content': prompt}, ensure_ascii=False)}\n\n"
         sess = None
         try:
-            last_error = None
-            resp = None
-            for address in api_addresses:
-                sess = _pinned_https_session(api_host, address)
-                try:
-                    resp = sess.post(
-                        f"{api_base}/chat/completions",
-                        headers={"Content-Type": "application/json", "Authorization": auth},
-                        json=payload, stream=True, timeout=(10, 120), allow_redirects=False,
-                    )
-                    break
-                except Exception as e:
-                    last_error = e
-                    sess.close()
-                    sess = None
-            if resp is None:
-                raise last_error or RuntimeError('AI API 连接失败')
+            sess = _req.Session()
+            resp = sess.post(
+                f"{api_base}/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": auth},
+                json=payload, stream=True, timeout=(10, 120), allow_redirects=False,
+            )
             with resp:
                 if not resp.ok:
-                    detail = _limited_error_text(resp, 200)
-                    yield f"data: {json.dumps({'error': f'API {resp.status_code}: {detail}'})}\n\n"
+                    detail = _limited_error_text(resp, 4096)
+                    message = _format_upstream_api_error(resp.status_code, detail)
+                    logging.warning('AI API rejected request: status=%s detail=%s', resp.status_code, detail[:500])
+                    yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
                     return
                 for ds in _iter_sse_payloads(resp):
                     if ds == "[DONE]":
