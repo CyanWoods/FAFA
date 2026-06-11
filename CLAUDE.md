@@ -15,14 +15,17 @@ python app.py
 # Production server (requires FAFA_SECRET env var)
 FAFA_SERVER=1 FAFA_SECRET=<secret> ./start.sh
 
-# Quality gate (compile + security + dependency + JS/shell syntax checks)
-make check
+# Quality gate (22 checks: security, syntax, deps, frontend, formatting, runtime)
+python scripts/quality.py check
 
-# Auto-fix (strip trailing whitespace, clear __pycache__, fix file permissions) then check
-make fix
+# Auto-fix (trailing whitespace, __pycache__, file permissions) then check
+python scripts/quality.py fix
 
-# Watch mode (re-runs fix+check on file changes)
-make watch
+# CI mode (skips local-only checks: file-permissions, sqlite-integrity)
+python scripts/quality.py check --ci
+
+# Install pre-commit hook (run once after clone)
+bash scripts/install-hooks.sh
 
 # User management (server mode only)
 python -m fafa.tools.manage_users add <username>
