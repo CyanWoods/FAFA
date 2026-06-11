@@ -271,6 +271,64 @@ def _dependency_consistency() -> CheckResult:
     return CheckResult()
 
 
+# ── Phase 4: Code Syntax ──────────────────────────────────────────────────────
+
+@check("python-compile")
+def _python_compile() -> CheckResult:
+    errors = []
+    for path in _python_files():
+        try:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except (SyntaxError, UnicodeError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: {exc}")
+    return CheckResult(errors=errors)
+
+
+@check("js-syntax")
+def _js_syntax() -> CheckResult:
+    node = shutil.which("node")
+    if not node:
+        return _skip("node not installed")
+    target = ROOT / "static" / "app.js"
+    if not target.exists():
+        return CheckResult(errors=["static/app.js not found"])
+    r = subprocess.run([node, "--check", str(target)], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        return CheckResult(errors=[r.stderr.strip() or "JS syntax error"])
+    return CheckResult()
+
+
+@check("shell-syntax")
+def _shell_syntax() -> CheckResult:
+    bash = shutil.which("bash")
+    if not bash:
+        return _skip("bash not installed")
+    errors = []
+    for sh in sorted(ROOT.glob("**/*.sh")):
+        parts = sh.relative_to(ROOT).parts
+        if any(s in parts for s in ("vendor", "venv", ".git")):
+            continue
+        r = subprocess.run([bash, "-n", str(sh)], cwd=ROOT, capture_output=True, text=True)
+        if r.returncode:
+            errors.append(f"{sh.relative_to(ROOT)}: {r.stderr.strip()}")
+    return CheckResult(errors=errors)
+
+
+@check("dockerfile-lint")
+def _dockerfile_lint() -> CheckResult:
+    hadolint = shutil.which("hadolint")
+    if not hadolint:
+        return _skip("hadolint not installed")
+    dockerfile = ROOT / "Dockerfile"
+    if not dockerfile.exists():
+        return CheckResult(errors=["Dockerfile not found"])
+    r = subprocess.run([hadolint, str(dockerfile)], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        errors = [line for line in r.stdout.splitlines() if line.strip()]
+        return CheckResult(errors=errors or [r.stdout.strip()])
+    return CheckResult()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")
