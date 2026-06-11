@@ -229,6 +229,48 @@ def _python_security() -> CheckResult:
     return CheckResult(errors=errors)
 
 
+# ── Phase 3: Config & Dependency Validity ────────────────────────────────────
+
+@check("config-template-json")
+def _config_template_json() -> CheckResult:
+    path = ROOT / "config.template.json"
+    if not path.exists():
+        return CheckResult(errors=["config.template.json not found"])
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return CheckResult(errors=[f"config.template.json invalid: {exc}"])
+    return CheckResult()
+
+
+@check("docker-compose-yaml")
+def _docker_compose_yaml() -> CheckResult:
+    path = ROOT / "docker-compose.yml"
+    if not path.exists():
+        return CheckResult(errors=["docker-compose.yml not found"])
+    try:
+        import importlib.util
+        if importlib.util.find_spec("yaml") is None:
+            return _skip("PyYAML not installed")
+        import yaml  # type: ignore[import-untyped]
+        yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return CheckResult(errors=[f"docker-compose.yml invalid YAML: {exc}"])
+    return CheckResult()
+
+
+@check("dependency-consistency")
+def _dependency_consistency() -> CheckResult:
+    r = subprocess.run(
+        [sys.executable, "-m", "pip", "check"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if r.returncode:
+        errors = [line for line in r.stdout.splitlines() if line.strip()]
+        return CheckResult(errors=errors or [r.stdout.strip()])
+    return CheckResult()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")
