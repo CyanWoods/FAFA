@@ -21,3 +21,4 @@ scripts/
 *.md
 .git/
 .gitignore
+*.fit
