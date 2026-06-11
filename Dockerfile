@@ -9,22 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps before copying source (better layer cache)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -r requirements.txt
 
-# Application source
 COPY . .
 
-# Persistent data dirs (mount these as volumes in production)
-RUN mkdir -p input output
+VOLUME ["/app/input"]
 
-EXPOSE 5173
-
-ENV FAFA_SERVER=1 \
-    FAFA_PROXY_HOPS=1 \
-    PYTHONUNBUFFERED=1 \
-    FAFA_HOST=0.0.0.0 \
-    FAFA_PORT=5173
-
-CMD ["sh", "-c", "touch /app/users.db /app/config.json && mkdir -p /app/input && python app.py --server"]
+CMD ["tail", "-f", "/dev/null"]

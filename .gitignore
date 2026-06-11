@@ -2,6 +2,7 @@
 *json
 !config.template.json
 *pyc
+__pycache__/
 *fit
 .venv
 input/

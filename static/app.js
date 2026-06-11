@@ -452,7 +452,7 @@ async function _fetchActivityData(act) {
 
 async function _actBulkAiCompare() {
   if (_actSelected.size < 2) { toast('请至少选择 2 条记录'); return; }
-  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
 
   const filenames = [..._actSelected];
   const acts = filenames
@@ -3579,7 +3579,7 @@ function _setSyncUI(msg, pct, total) {
 /* ── Strava 上传 ─────────────────────────────────────────────────────────── */
 let _stravaPollTimer = null;
 
-const STRAVA_AUTH_MSG_DEFAULT = '需要先完成 Strava 授权。请在 <code>config.json</code> 中填写 <code>strava_client_id</code> 和 <code>strava_client_secret</code>，然后点击授权。';
+const STRAVA_AUTH_MSG_DEFAULT = '需要先完成 Strava 授权。请点击左下角「设置」按钮填写 Strava 凭据，然后点击授权。';
 
 function openStravaModal() {
   document.getElementById('strava-modal').style.display = 'flex';
@@ -3676,7 +3676,7 @@ async function _stravaStartUpload(filenames) {
 async function _stravaUploadSingle(filename) {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请点击左下角「设置」按钮配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -3731,7 +3731,7 @@ async function _stravaConfirmDiff() {
 async function _stravaUploadAllVisible() {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请点击左下角「设置」按钮配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -3743,7 +3743,7 @@ async function _stravaUploadSelected() {
   const filenames = [..._actSelected];
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请先在 config.json 中配置 strava_client_id 和 strava_client_secret');
+    toast('请点击左下角「设置」按钮配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -3836,7 +3836,7 @@ async function openAiView() {
   const id = detailTrackId;
   const t  = tracks.get(id);
   if (!t) return;
-  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
   aiTrackId = id;
 
   const chips = _statChips(t.summary || {});
@@ -3892,9 +3892,7 @@ async function startAiEval() {
     loading.style.display = 'none';
     result.innerHTML = `<div class="ai-unconfigured">
       <strong>AI 评估未配置</strong><br>
-      请编辑项目根目录下的 <code>config.json</code>，填入 API Key 后重启服务器。<br><br>
-      配置示例：<br>
-      <code>{ "api_base": "https://api.openai.com/v1", "api_key": "sk-...", "model": "gpt-4o-mini" }</code>
+      请点击左下角「设置」按钮填入 API Key 进行配置。
     </div>`;
     return;
   }
@@ -3918,7 +3916,7 @@ async function startAiEval() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       loading.style.display = 'none';
-      _setErrorHtml(result, d.error || '请求失败，请检查 config.json 配置');
+      _setErrorHtml(result, d.error || '请求失败，请点击左下角「设置」按钮检查配置');
       return;
     }
 
@@ -3971,7 +3969,7 @@ function _setErrorHtml(el, message) {
   el.innerHTML = '';
   const div = document.createElement('div');
   div.className = 'ai-error';
-  div.textContent = message || '请求失败，请检查 config.json 配置';
+  div.textContent = message || '请求失败，请点击左下角「设置」按钮检查配置';
   el.appendChild(div);
 }
 
@@ -5107,7 +5105,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn, systemMsg) {
     loading.style.display = 'none';
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      _setErrorHtml(resultEl, d.error || '请求失败，请检查 config.json 配置');
+      _setErrorHtml(resultEl, d.error || '请求失败，请点击左下角「设置」按钮检查配置');
       return;
     }
     const reader = res.body.getReader();
@@ -5227,7 +5225,7 @@ function _windDirArrow(deg) {
 
 /* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
 async function openActAiModal(act) {
-  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
   const chips = _statChips(act.summary || {});
   const { kmStats, windData } = await _fetchActivityData(act);
   let weatherHtml = '';
@@ -5248,7 +5246,7 @@ async function openActAiModal(act) {
 
 /* ── 训练日历 AI 建议 ──────────────────────────────────────────────────────── */
 async function startCalendarAi(period) {
-  if (!_aiModel) { toast('AI 未配置，请先编辑 config.json'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
   const acts    = _calActivities || [];
   const now     = new Date();
   const cutoff  = new Date(now);
@@ -5280,7 +5278,7 @@ async function startPmcAi() {
     return;
   }
   if (!_aiModel) {
-    toast('AI 未配置，请先编辑 config.json');
+    toast('AI 未配置，请点击左下角「设置」按钮进行配置');
     return;
   }
 

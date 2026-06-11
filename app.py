@@ -2173,7 +2173,7 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
 def ai_evaluate():
     cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
+        return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     body = request.get_json(silent=True) or {}
     too_large = _reject_large_json(body)
     if too_large:
@@ -2192,7 +2192,7 @@ def ai_evaluate():
 def ai_chat():
     cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
+        return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     body = request.get_json(silent=True) or {}
     messages = body.get("messages") or []
     if not messages:
@@ -2217,7 +2217,7 @@ def ai_chat():
 def ai_compare():
     cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑设置中的 config.json"), 503
+        return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     body       = request.get_json(silent=True) or {}
     too_large = _reject_large_json(body)
     if too_large:
@@ -2490,7 +2490,7 @@ def _build_pmc_prompt(data: dict) -> str:
 def ai_pmc():
     cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑 config.json"), 503
+        return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     data   = request.get_json(silent=True) or {}
     too_large = _reject_large_json(data)
     if too_large:
@@ -2572,7 +2572,7 @@ def _build_calendar_prompt(data: dict) -> str:
 def ai_calendar():
     cfg = _get_ai_config()
     if not cfg:
-        return jsonify(error="AI 未配置，请编辑 config.json"), 503
+        return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     data   = request.get_json(silent=True) or {}
     too_large = _reject_large_json(data)
     if too_large:

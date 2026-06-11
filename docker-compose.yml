@@ -1,0 +1,18 @@
+services:
+  fafa:
+    image: fafa:latest
+    container_name: fafa
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - /path/to/data/input:/app/input
+      - /path/to/data/users.db:/app/users.db
+    environment:
+      FAFA_SERVER: "1"
+      FAFA_SECRET: "your_secret_here"
+      FAFA_HOST: "0.0.0.0"
+      FAFA_PORT: "5173"
+      FAFA_PROXY_HOPS: "0"
+      PYTHONUNBUFFERED: "1"
+    command: ["python", "app.py", "--server"]
