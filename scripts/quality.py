@@ -122,6 +122,54 @@ def _run_all(*, fix: bool = False, ci: bool = False) -> bool:
     return False
 
 
+# ── Phase 1: Repository & Git State ──────────────────────────────────────────
+
+@check("git-sensitive-files")
+def _git_sensitive_files() -> CheckResult:
+    forbidden = {"config.json", "users.db", "download_state.json", "result.json"}
+    errors = []
+    for name in _git_tracked():
+        p = Path(name)
+        if name in forbidden or p.suffix.lower() == ".fit" or name.startswith("input/"):
+            errors.append(f"sensitive file tracked by git: {name}")
+    return CheckResult(errors=errors)
+
+
+@check("dockerignore")
+def _dockerignore() -> CheckResult:
+    di = ROOT / ".dockerignore"
+    if not di.exists():
+        return CheckResult(errors=[".dockerignore does not exist"])
+    content = di.read_text(encoding="utf-8")
+    required = ["config.json", "users.db", "input/", "*.fit", "download_state.json", "result.json"]
+    errors = [f".dockerignore missing pattern: {p}" for p in required if p not in content]
+    return CheckResult(errors=errors)
+
+
+_SECRET_PATTERNS = [
+    re.compile(r'(?i)password\s*=\s*["\'][^"\']{4,}["\']'),
+    re.compile(r'(?i)(?:api_?key|secret|private_?key|access_?token)\s*=\s*["\'][^"\']{4,}["\']'),
+]
+_SECRET_ALLOWLIST = re.compile(r'change.me|placeholder|example|your[-_]|<[^>]+>', re.I)
+
+
+@check("staged-secrets-scan")
+def _staged_secrets_scan() -> CheckResult:
+    diff = _git_diff_cached()
+    if not diff:
+        return CheckResult()
+    errors = []
+    for i, line in enumerate(diff.splitlines(), 1):
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:]
+        for pattern in _SECRET_PATTERNS:
+            m = pattern.search(content)
+            if m and not _SECRET_ALLOWLIST.search(m.group()):
+                errors.append(f"potential secret in staged diff (line {i}): {m.group()[:60]}")
+    return CheckResult(errors=errors)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")
