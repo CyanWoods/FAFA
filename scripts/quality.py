@@ -329,6 +329,95 @@ def _dockerfile_lint() -> CheckResult:
     return CheckResult()
 
 
+# ── Phase 5: Frontend Assets ──────────────────────────────────────────────────
+
+_VENDOR_ASSETS = (
+    "static/vendor/leaflet/leaflet.js",
+    "static/vendor/leaflet/leaflet.css",
+    "static/vendor/marked/marked.min.js",
+    "static/vendor/dompurify/purify.min.js",
+)
+
+_CDN_PREFIXES = ("https://cdn", "http://cdn", "//cdn")
+
+
+@check("no-cdn-scripts")
+def _no_cdn_scripts() -> CheckResult:
+    index = ROOT / "templates" / "index.html"
+    if not index.exists():
+        return CheckResult(errors=["templates/index.html not found"])
+    text = index.read_text(encoding="utf-8")
+    errors = [f"CDN reference in index.html: {p}" for p in _CDN_PREFIXES if p in text]
+    return CheckResult(errors=errors)
+
+
+@check("vendor-assets")
+def _vendor_assets() -> CheckResult:
+    errors = [f"missing vendor asset: {a}" for a in _VENDOR_ASSETS if not (ROOT / a).is_file()]
+    return CheckResult(errors=errors)
+
+
+_CSS_COLOR_RE = re.compile(r':\s*[^;{]*#[0-9a-fA-F]{3,8}\b')
+_CSS_RADIUS_RE = re.compile(r'border-radius\s*:[^;]*[\d.]+px')
+_CSS_FONTSIZE_RE = re.compile(r'font-size\s*:[^;]*[\d.]+(?:px|rem|em)')
+_CSS_TRANSITION_RE = re.compile(r'transition[^;]*[\d.]+(?:ms|s)')
+
+
+@check("css-token-enforcement")
+def _css_token_enforcement() -> CheckResult:
+    diff = _git_diff_cached("static/style.css")
+    if not diff:
+        return CheckResult()
+    errors = []
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:].strip()
+        if not content or content.startswith(("/*", "//")):
+            continue
+        if content.startswith("--"):
+            continue
+        if _CSS_COLOR_RE.search(content) and "var(--" not in content:
+            errors.append(f"hardcoded color in staged CSS: {content[:80]}")
+        elif _CSS_RADIUS_RE.search(content) and "var(--" not in content:
+            errors.append(f"hardcoded border-radius in staged CSS: {content[:80]}")
+        elif _CSS_FONTSIZE_RE.search(content) and "var(--" not in content:
+            errors.append(f"hardcoded font-size in staged CSS: {content[:80]}")
+        elif _CSS_TRANSITION_RE.search(content) and "var(--" not in content:
+            errors.append(f"hardcoded transition duration in staged CSS: {content[:80]}")
+    return CheckResult(errors=errors)
+
+
+_JS_STYLE_COLOR_RE = re.compile(
+    r'\.style\.(?:color|backgroundColor|borderColor)\s*=\s*["\'](?:#[0-9a-fA-F]{3,8}|rgb|hsl)'
+)
+_JS_SETATTR_COLOR_RE = re.compile(
+    r'setAttribute\s*\(\s*["\']style["\'][^)]*#[0-9a-fA-F]{3,8}'
+)
+_JS_TEMPLATE_COLOR_RE = re.compile(
+    r'`[^`]*style[^`]*#[0-9a-fA-F]{3,8}[^`]*`'
+)
+
+
+@check("js-inline-style-tokens")
+def _js_inline_style_tokens() -> CheckResult:
+    diff = _git_diff_cached("static/app.js")
+    if not diff:
+        return CheckResult()
+    errors = []
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:]
+        if _JS_STYLE_COLOR_RE.search(content):
+            errors.append(f"hardcoded color in JS .style assignment: {content.strip()[:80]}")
+        elif _JS_SETATTR_COLOR_RE.search(content):
+            errors.append(f"hardcoded color in setAttribute style: {content.strip()[:80]}")
+        elif _JS_TEMPLATE_COLOR_RE.search(content):
+            errors.append(f"hardcoded color in template literal style: {content.strip()[:80]}")
+    return CheckResult(errors=errors)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")
