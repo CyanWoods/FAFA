@@ -170,6 +170,65 @@ def _staged_secrets_scan() -> CheckResult:
     return CheckResult(errors=errors)
 
 
+# ── Phase 2: Security Invariants ─────────────────────────────────────────────
+
+_SECURITY_MARKERS = (
+    "SESSION_COOKIE_HTTPONLY",
+    "SESSION_COOKIE_SAMESITE",
+    "_resolve_public_api_base",
+    "_try_acquire_slot",
+    "_validate_filename_in_input",
+    "ProxyFix",
+)
+
+
+@check("app-security-invariants")
+def _app_security_invariants() -> CheckResult:
+    app_text = (ROOT / "app.py").read_text(encoding="utf-8")
+    errors = [f"security invariant missing from app.py: {m}" for m in _SECURITY_MARKERS if m not in app_text]
+    return CheckResult(errors=errors)
+
+
+@check("route-auth-decorators")
+def _route_auth_decorators() -> CheckResult:
+    app_text = (ROOT / "app.py").read_text(encoding="utf-8")
+    tree = ast.parse(app_text, filename="app.py")
+    errors = []
+    protected_prefixes = ("/api/", "/strava/", "/logout")
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        decs = [ast.unparse(d) for d in node.decorator_list]
+        routes = [d for d in decs if d.startswith("app.route(")]
+        if not routes:
+            continue
+        protected = any("login_required" in d for d in decs)
+        for route in routes:
+            if any(p in route for p in protected_prefixes) and not protected:
+                errors.append(
+                    f"route missing @login_required at app.py:{node.lineno}: {route}"
+                )
+    return CheckResult(errors=errors)
+
+
+@check("python-security")
+def _python_security() -> CheckResult:
+    bandit = shutil.which("bandit")
+    if not bandit:
+        return _skip("bandit not installed")
+    targets = [str(ROOT / "app.py")]
+    fafa = ROOT / "fafa"
+    if fafa.exists():
+        targets.append(str(fafa))
+    r = subprocess.run(
+        [bandit, "-r", *targets, "-ll", "-q", "--format", "custom",
+         "--msg-template", "{relpath}:{line}: {test_id} {msg}"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    errors = [line for line in r.stdout.splitlines() if line.strip()]
+    return CheckResult(errors=errors)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")
