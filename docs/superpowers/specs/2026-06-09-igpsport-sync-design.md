@@ -23,18 +23,18 @@ IGPSportClient(username, password)
                                           三次重试，失败清理 .part 文件
 ```
 
-**文件命名**：`iGPSport_{ride_id}_{YYYYMMDD-HHMMSS}.fit`  
-**去重策略**：glob `input/iGPSport_{ride_id}_*.fit`，命中则跳过（与顽鹿策略一致）  
+**文件命名**：`iGPSport_{ride_id}_{YYYYMMDD-HHMMSS}.fit`
+**去重策略**：glob `input/iGPSport_{ride_id}_*.fit`，命中则跳过（与顽鹿策略一致）
 **全量模式**：`full=True` 时跳过去重检查，强制重新下载
 
 ### `app.py` 变更
 
 **新增函数：**
 
-- `_load_igpsport_credentials() → dict | None`  
+- `_load_igpsport_credentials() → dict | None`
   读取 `config.json` 中 `igpsport_username` / `igpsport_password`
 
-- `_run_igpsport_sync(full: bool)`  
+- `_run_igpsport_sync(full: bool)`
   后台线程执行流程：
   1. 读取凭据，无则报错
   2. `IGPSportClient.login()`
@@ -45,13 +45,13 @@ IGPSportClient(username, password)
 
 **新增路由：**
 
-- `POST /api/sync/start`  
-  body: `{platform: "onelap"|"igpsport", full: bool}`  
-  - `platform="onelap"` → 启动 `_run_sync()` 线程  
-  - `platform="igpsport"` → 启动 `_run_igpsport_sync()` 线程  
+- `POST /api/sync/start`
+  body: `{platform: "onelap"|"igpsport", full: bool}`
+  - `platform="onelap"` → 启动 `_run_sync()` 线程
+  - `platform="igpsport"` → 启动 `_run_igpsport_sync()` 线程
   - 同时运行时返回 409
 
-- `GET /api/sync/status`  
+- `GET /api/sync/status`
   返回共享 `_sync` 状态对象（与 `/api/onelap/status` 完全相同）
 
 **保留不变：**

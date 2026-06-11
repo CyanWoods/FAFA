@@ -418,6 +418,108 @@ def _js_inline_style_tokens() -> CheckResult:
     return CheckResult(errors=errors)
 
 
+# ── Phase 6: Formatting ───────────────────────────────────────────────────────
+
+@check("whitespace")
+def _whitespace() -> CheckResult:
+    r = subprocess.run(
+        ["git", "diff", "--check"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if r.returncode:
+        errors = [line for line in r.stdout.splitlines() if line.strip()]
+        return CheckResult(errors=errors or ["whitespace errors detected"])
+    return CheckResult()
+
+
+@check("trailing-whitespace", fixable=True)
+def _trailing_whitespace(*, fix: bool = False) -> CheckResult:
+    result = CheckResult()
+    for path in _text_files():
+        try:
+            original = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        cleaned = "\n".join(line.rstrip() for line in original.splitlines()) + "\n"
+        if cleaned != original:
+            if fix:
+                path.write_text(cleaned, encoding="utf-8")
+                result.fixed.append(str(path.relative_to(ROOT)))
+            else:
+                result.errors.append(f"trailing whitespace: {path.relative_to(ROOT)}")
+    return result
+
+
+# ── Phase 7: Local Runtime ────────────────────────────────────────────────────
+
+@check("file-permissions", fixable=True, local_only=True)
+def _file_permissions(*, fix: bool = False) -> CheckResult:
+    result = CheckResult()
+    for d in ROOT.glob("input/*"):
+        if not d.is_dir() or d.name == ".cache":
+            continue
+        mode = d.stat().st_mode & 0o777
+        if mode & 0o077:
+            if fix:
+                d.chmod(0o700)
+                result.fixed.append(f"chmod 700 {d.relative_to(ROOT)}")
+            else:
+                result.errors.append(f"directory too permissive: {d.relative_to(ROOT)} ({mode:o})")
+    db_paths = [ROOT / "users.db", *ROOT.glob("input/*/fafa.db")]
+    json_paths = [
+        ROOT / "config.json", ROOT / "download_state.json",
+        *(p for p in ROOT.glob("input/*/*.json") if p.parent.name != ".cache"),
+    ]
+    sidecars = [*ROOT.glob("*.db-wal"), *ROOT.glob("*.db-shm"),
+                *ROOT.glob("input/*/*.db-wal"), *ROOT.glob("input/*/*.db-shm")]
+    for path in [*db_paths, *json_paths, *sidecars]:
+        if not path.is_file():
+            continue
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o077:
+            if fix:
+                path.chmod(0o600)
+                result.fixed.append(f"chmod 600 {path.relative_to(ROOT)}")
+            else:
+                result.errors.append(
+                    f"file too permissive: {path.relative_to(ROOT)} ({mode:o})"
+                )
+    return result
+
+
+@check("sqlite-integrity", local_only=True)
+def _sqlite_integrity() -> CheckResult:
+    errors = []
+    for db_path in [ROOT / "users.db", *ROOT.glob("input/*/fafa.db")]:
+        if not db_path.is_file():
+            continue
+        try:
+            with sqlite3.connect(str(db_path)) as conn:
+                ok = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            if ok != "ok":
+                errors.append(f"SQLite integrity failure: {db_path.relative_to(ROOT)}: {ok}")
+        except Exception as exc:
+            errors.append(f"SQLite error: {db_path.relative_to(ROOT)}: {exc}")
+    return CheckResult(errors=errors)
+
+
+# ── Phase 8: Cleanup ──────────────────────────────────────────────────────────
+
+@check("pycache-cleanup", fixable=True)
+def _pycache_cleanup(*, fix: bool = False) -> CheckResult:
+    result = CheckResult()
+    skip_parts = {"vendor", "venv", ".git"}
+    for cache in ROOT.rglob("__pycache__"):
+        if any(s in cache.parts for s in skip_parts):
+            continue
+        if fix:
+            shutil.rmtree(cache)
+            result.fixed.append(str(cache.relative_to(ROOT)))
+        else:
+            result.errors.append(f"stale __pycache__: {cache.relative_to(ROOT)}")
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="FAFA quality gate")
     parser.add_argument("mode", choices=("check", "fix"), nargs="?", default="check")

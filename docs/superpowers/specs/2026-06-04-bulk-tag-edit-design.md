@@ -1,6 +1,6 @@
 # Bulk Tag Edit in Multi-Select Mode
 
-**Date:** 2026-06-04  
+**Date:** 2026-06-04
 **Status:** Approved
 
 ## Overview

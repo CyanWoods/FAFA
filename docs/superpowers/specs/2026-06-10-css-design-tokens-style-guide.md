@@ -1,6 +1,6 @@
 # CSS Design Tokens & Style Guide
 
-**Date:** 2026-06-10  
+**Date:** 2026-06-10
 **Scope:** `static/style.css`, `templates/index.html`, `static/app.js`
 
 ## Goal
@@ -106,7 +106,7 @@ Replace every hardcoded magic value with its token. Key substitutions:
 | `transition: background 0.15s, color 0.15s` | `transition: var(--transition-base)` |
 | `transition: background 0.15s, color 0.15s, border-color 0.15s` | `transition: var(--transition-full)` |
 
-**Note on `#111`, `#222`, `#333`, `#444`, `#666`, `#777`, `#999`, `#aaa`, `#bbb`, `#ddd`, `#fff`:**  
+**Note on `#111`, `#222`, `#333`, `#444`, `#666`, `#777`, `#999`, `#aaa`, `#bbb`, `#ddd`, `#fff`:**
 These are used in both dark and light themes at different frequencies and meanings. Do NOT token-ize them — they are context-specific one-offs. Only the tokens above are global invariants.
 
 ### 1.3 Light theme override in `.light-theme`
