@@ -432,26 +432,24 @@ Web 查看器在前端实时进行坐标转换，无需预处理文件；`fafa.t
 
 ## 持续检查与自动修复
 
-执行完整质量门禁：
+执行完整质量门禁（22 项检查：安全不变量、语法、依赖、前端资产、格式、运行时）：
 
 ```bash
 venv/bin/python scripts/quality.py check
 ```
 
-执行低风险自动修复（尾随空格、末尾换行、生成缓存）后重新检查：
+执行低风险自动修复（尾随空格、`__pycache__`、文件权限）后重新检查：
 
 ```bash
 venv/bin/python scripts/quality.py fix
 ```
 
-持续监听源码变化并自动修复、复检：
+安装 Git pre-commit hook（首次 clone 后运行一次）：
 
 ```bash
-venv/bin/python scripts/quality.py watch
+bash scripts/install-hooks.sh
 ```
 
-也可以使用对应的 `make check`、`make fix` 和 `make watch` 快捷命令。
-
-GitHub Actions 会在每次 push 和 pull request 上运行同一质量门禁。
+Gitea CI 会在每次 push 和 pull request 上运行同一质量门禁（CI 模式跳过本地专属检查）。
 
 服务模式默认信任一层本机反向代理的 `X-Forwarded-For`、`X-Forwarded-Proto` 和 `X-Forwarded-Host`。代理层数不同时通过 `FAFA_PROXY_HOPS` 调整；直接暴露 Gunicorn 时应设置为 `0`。

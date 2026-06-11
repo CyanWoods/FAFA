@@ -41,7 +41,7 @@ python -m fafa.tools.ant_analysis <file.fit> [--gap SECONDS] [--json]
 python -m fafa.tools.download_fit
 ```
 
-There are no automated tests — `make check` is the quality gate.
+There are no automated tests — `python scripts/quality.py check` is the quality gate.
 
 ## Architecture
 
@@ -72,7 +72,7 @@ Cache key = absolute path + mtime. Lookup chain: `_cache_get` → `_disk_cache_l
 
 ### Security invariants (enforced by quality gate)
 
-`scripts/quality.py::repository_guard()` checks every commit:
+`scripts/quality.py` checks every commit via the `git-sensitive-files` check:
 - `config.json`, `users.db`, `download_state.json`, `result.json`, `input/`, and `.fit` files must never be git-tracked
 - These symbols must remain in `app.py`: `SESSION_COOKIE_HTTPONLY`, `SESSION_COOKIE_SAMESITE`, `_resolve_public_api_base`, `_try_acquire_slot`, `_validate_filename_in_input`, `ProxyFix`
 - Every `@app.route` under `/api/` must also carry `@_auth.login_required`
