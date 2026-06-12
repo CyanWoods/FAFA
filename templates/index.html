@@ -47,6 +47,10 @@
         <span class="sb-icon sb-icon--lg">⊞</span>
         <span class="sb-label">文件管理 <span id="lib-count" class="sb-badge"></span></span>
       </button>
+      <button class="sb-item" data-view="about" onclick="switchSidebarView('about')">
+        <span class="sb-icon sb-icon--lg">ⓘ</span>
+        <span class="sb-label">关于</span>
+      </button>
     </div>
     <div class="sb-bottom">
       <button class="sb-bottom-btn" id="theme-toggle-btn" onclick="toggleTheme()">
@@ -214,6 +218,31 @@
     </div>
     <div id="lib-filter"></div>
     <div id="lib-list"></div>
+  </div>
+
+  <!-- ── 关于视图 ──────────────────────────────────────────────────────────── -->
+  <div id="about-view">
+    <div id="about-header">
+      <span class="act-list-title">关于</span>
+    </div>
+    <div id="about-body">
+      <div class="about-logo-row">
+        <img src="/static/fafa-logo.png" class="about-logo" alt="FAFA">
+        <div class="about-title-block">
+          <span class="about-name">FAFA</span>
+          <span class="about-version">{{ version }}</span>
+        </div>
+      </div>
+      <p class="about-desc">FIT 文件解析、纠偏、可视化工具集，支持 Garmin、Magene 等设备导出的骑行数据。</p>
+      <div class="about-section-title">功能视图</div>
+      <ul class="about-feature-list">
+        <li><span class="about-feat-icon">◈</span> <b>骑行记录</b> — 活动卡片列表，按月分组，支持筛选、详情、AI 分析</li>
+        <li><span class="about-feat-icon">⤳</span> <b>骑行轨迹</b> — 拖拽加载路径，多路径叠加，PNG 导出</li>
+        <li><span class="about-feat-icon">⬡</span> <b>体能管理</b> — CTL/ATL/TSB 曲线、功率曲线、区间分布</li>
+        <li><span class="about-feat-icon">⊟</span> <b>训练日历</b> — 月视图，按天展示活动</li>
+        <li><span class="about-feat-icon">⊞</span> <b>文件管理</b> — FIT 文件库，支持导入、同步、导出</li>
+      </ul>
+    </div>
   </div>
 
   <!-- ── 顽鹿同步弹窗 ───────────────────────────────────────────────────────── -->
