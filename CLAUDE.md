@@ -15,7 +15,7 @@ python app.py
 # Production server (requires FAFA_SECRET env var)
 FAFA_SERVER=1 FAFA_SECRET=<secret> ./start.sh
 
-# Quality gate (22 checks: security, syntax, deps, frontend, formatting, runtime)
+# Quality gate (23 checks: security, syntax, deps, frontend, formatting, runtime)
 python scripts/quality.py check
 
 # Auto-fix (trailing whitespace, __pycache__, file permissions) then check

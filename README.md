@@ -1,6 +1,6 @@
 # FAFA — Fit Analysis & Functional Aggregator
 
-解析、纠偏、可视化骑行 FIT 文件的工具集，包含五视图交互式 Web 查看器和命令行分析工具。
+解析、纠偏、可视化骑行 FIT 文件的工具集，包含六视图交互式 Web 查看器和命令行分析工具。
 
 支持 Garmin、Magene 等设备导出的 `.fit` 格式文件。
 
@@ -54,7 +54,7 @@ venv\Scripts\pip install -r requirements.txt
 
 ## Web 可视化工具
 
-主要功能入口，基于 Flask + Leaflet.js + ECharts 的多视图交互查看器。左侧固定侧边栏通过图标切换五个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
+主要功能入口，基于 Flask + Leaflet.js + ECharts 的多视图交互查看器。左侧固定侧边栏通过图标切换六个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理、关于。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
 
 **macOS / Linux：**
 ```bash
@@ -89,6 +89,11 @@ docker run -d \
   -v /data/fafa/users.db:/app/users.db \
   -v /data/fafa/config.json:/app/config.json \
   fafa
+```
+
+# 多平台镜像构建（macOS / Linux，需要 Docker buildx）
+./buildx.sh                           # linux/amd64 + linux/arm64
+./buildx.sh linux/amd64 --no-cache    # 仅 amd64，禁用缓存
 ```
 
 ### 活动视图（默认启动视图）
@@ -151,6 +156,10 @@ docker run -d \
 | 多选模式 | 点击「选择」进入多选，支持批量加载到地图、批量删除 |
 | 导入 FIT | 点击按钮上传本地 `.fit` 文件 |
 | FIT 同步 | 触发顽鹿（OneLap）或 iGPSport 增量下载 |
+
+### 关于视图
+
+侧边栏第六个视图，展示当前版本号（来自项目根目录 `version` 文件）和五个功能视图的简要说明。
 
 ### 骑行详情视图（全屏覆盖）
 
