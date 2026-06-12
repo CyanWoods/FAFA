@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime
 import json
 import re
 import shutil
@@ -518,6 +519,31 @@ def _pycache_cleanup(*, fix: bool = False) -> CheckResult:
         else:
             result.errors.append(f"stale __pycache__: {cache.relative_to(ROOT)}")
     return result
+
+
+@check("version-date")
+def _version_date() -> CheckResult:
+    vf = ROOT / "version"
+    if not vf.exists():
+        return CheckResult(errors=["version file missing"])
+    content = vf.read_text().strip()
+    m = re.fullmatch(r'v(\d{4})\.(\d{2})\.(\d{2})', content)
+    if not m:
+        return CheckResult(errors=[f"version format invalid (expected vYYYY.MM.DD): {content!r}"])
+    version_date = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+    r = subprocess.run(
+        ["git", "log", "-1", "--format=%cd", "--date=format:%Y.%m.%d"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return _skip("git log unavailable")
+    commit_date = r.stdout.strip()
+    if version_date != commit_date:
+        return CheckResult(errors=[
+            f"version date {version_date!r} != last commit date {commit_date!r}; "
+            f"update version file to v{commit_date}"
+        ])
+    return CheckResult()
 
 
 def main() -> int:
