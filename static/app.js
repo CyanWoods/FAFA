@@ -213,6 +213,7 @@ function switchSidebarView(name) {
 
   document.getElementById('activities-view').classList.remove('active');
   document.getElementById('files-view').classList.remove('active');
+  document.getElementById('about-view').classList.remove('active');
   closeAnalyticsView(false);
 
   // Update sidebar button active state
@@ -240,6 +241,8 @@ function switchSidebarView(name) {
   } else if (name === 'files') {
     document.getElementById('files-view').classList.add('active');
     refreshLibrary();
+  } else if (name === 'about') {
+    document.getElementById('about-view').classList.add('active');
   }
 }
 
