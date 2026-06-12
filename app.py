@@ -119,6 +119,8 @@ def _check_same_origin():
     return None
 
 PROJECT_ROOT      = Path(__file__).parent
+_version_file     = PROJECT_ROOT / "version"
+FAFA_VERSION      = _version_file.read_text().strip() if _version_file.exists() else "unknown"
 SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
 _SECRET_MASK      = '••••••••'
 _MAX_NOTE_CHARS   = 20_000
@@ -1046,7 +1048,7 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
 @app.route("/")
 @_auth.login_required
 def index():
-    return render_template("index.html", username=g.username)
+    return render_template("index.html", username=g.username, version=FAFA_VERSION)
 
 
 @app.route("/api/upload", methods=["POST"])
