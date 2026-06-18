@@ -107,10 +107,13 @@ def parse_fit(filepath: str) -> FitData:
 
 def decode_lr_balance(raw: int) -> Optional[tuple]:
     """Return (left_pct, right_pct) from raw FIT left_right_balance value.
-    Bit 7 = side flag: 1 means bits 0-6 are right %, 0 means bits 0-6 are left %."""
+    Bit 7 = side flag: 1 means bits 0-6 are right %, 0 means bits 0-6 are left %.
+    val=0 is a device sentinel meaning no valid reading — return None."""
     if raw is None:
         return None
     val = raw & 0x7F
+    if val == 0:
+        return None
     if raw & 0x80:
         right_pct = val
         left_pct  = 100 - val
