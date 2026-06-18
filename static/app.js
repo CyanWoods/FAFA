@@ -50,10 +50,10 @@ const METRICS = [
   { key: 'altitude',     label: '海拔',     field: 'end_alt_m',       rField: 'altitude',    unit: 'm',    color: '#2ecc71' },
   { key: 'grade',        label: '坡度',     field: 'avg_grade_pct',   rField: 'grade',       unit: '%',    color: '#1abc9c' },
   { key: 'temperature',  label: '气温',     field: 'avg_temp_c',      rField: 'temp_c',      unit: '°C',   color: '#e67e22' },
-  { key: 'torque_eff',   label: '踏板效率', field: 'avg_torque_eff',  unit: '%',    color: '#16a085', noRoute: true,
-    series: [{ label: '左', rField: 'left_torque_eff', color: '#16a085' }, { label: '右', rField: 'right_torque_eff', color: '#1abc9c' }] },
-  { key: 'pedal_smooth', label: '踏板流畅', field: 'avg_pedal_smooth', unit: '%',    color: '#8e44ad', noRoute: true,
-    series: [{ label: '左', rField: 'left_pedal_smooth', color: '#8e44ad' }, { label: '右', rField: 'right_pedal_smooth', color: '#9b59b6' }] },
+  { key: 'torque_eff',   label: '踏板效率', field: 'avg_torque_eff',  unit: '%',    color: '#3498db', noRoute: true,
+    series: [{ label: '左', rField: 'left_torque_eff', color: '#3498db' }, { label: '右', rField: 'right_torque_eff', color: '#e74c3c' }] },
+  { key: 'pedal_smooth', label: '踏板流畅', field: 'avg_pedal_smooth', unit: '%',    color: '#3498db', noRoute: true,
+    series: [{ label: '左', rField: 'left_pedal_smooth', color: '#3498db' }, { label: '右', rField: 'right_pedal_smooth', color: '#e74c3c' }] },
 ];
 
 const ROUTE_COLOR_SCALE = {
