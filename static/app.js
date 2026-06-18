@@ -2580,6 +2580,7 @@ function _renderDetailCharts(records, fallbackStats) {
       },
       yAxis: {
         type: 'value',
+        min: meta.key === 'altitude' ? 'dataMin' : undefined,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { color: tickColor, fontSize: 10 },
