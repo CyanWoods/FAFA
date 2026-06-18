@@ -43,12 +43,15 @@ const PALETTE = [
 
 /* ── Detail view constants ───────────────────────────────────────────────── */
 const METRICS = [
-  { key: 'speed',    label: '速度', field: 'avg_speed_kmh',  rField: 'speed_kmh', unit: 'km/h', color: '#2e86de' },
-  { key: 'hr',       label: '心率', field: 'avg_hr',         rField: 'hr',        unit: 'bpm',  color: '#e74c3c' },
-  { key: 'power',    label: '功率', field: 'avg_power',      rField: 'power',     unit: 'W',    color: '#f39c12' },
-  { key: 'cadence',  label: '踏频', field: 'avg_cadence',    rField: 'cadence',   unit: 'rpm',  color: '#9b59b6' },
-  { key: 'altitude', label: '海拔', field: 'end_alt_m',      rField: 'altitude',  unit: 'm',    color: '#2ecc71' },
-  { key: 'grade',    label: '坡度', field: 'avg_grade_pct',  rField: 'grade',     unit: '%',    color: '#1abc9c' },
+  { key: 'speed',        label: '速度',     field: 'avg_speed_kmh',   rField: 'speed_kmh',   unit: 'km/h', color: '#2e86de' },
+  { key: 'hr',           label: '心率',     field: 'avg_hr',          rField: 'hr',          unit: 'bpm',  color: '#e74c3c' },
+  { key: 'power',        label: '功率',     field: 'avg_power',       rField: 'power',       unit: 'W',    color: '#f39c12' },
+  { key: 'cadence',      label: '踏频',     field: 'avg_cadence',     rField: 'cadence',     unit: 'rpm',  color: '#9b59b6' },
+  { key: 'altitude',     label: '海拔',     field: 'end_alt_m',       rField: 'altitude',    unit: 'm',    color: '#2ecc71' },
+  { key: 'grade',        label: '坡度',     field: 'avg_grade_pct',   rField: 'grade',       unit: '%',    color: '#1abc9c' },
+  { key: 'temperature',  label: '气温',     field: 'avg_temp_c',      rField: 'temp_c',      unit: '°C',   color: '#e67e22' },
+  { key: 'torque_eff',   label: '踏板效率', field: 'avg_torque_eff',  rField: 'torque_eff',  unit: '%',    color: '#16a085' },
+  { key: 'pedal_smooth', label: '踏板流畅', field: 'avg_pedal_smooth',rField: 'pedal_smooth',unit: '%',    color: '#8e44ad' },
 ];
 
 const ROUTE_COLOR_SCALE = {
@@ -77,6 +80,9 @@ const TABLE_COLS = [
   { key: 'elevation_gain_m', label: '爬升',     fmt: v => Math.round(v) + ' m' },
   { key: 'end_alt_m',        label: '海拔',     fmt: v => Math.round(v) + ' m' },
   { key: 'avg_temp_c',       label: '气温',     fmt: v => v.toFixed(1) + ' °C' },
+  { key: 'left_pct',         label: '左右平衡', fmt: v => `L ${v.toFixed(0)}% / R ${(100 - v).toFixed(0)}%` },
+  { key: 'avg_torque_eff',   label: '踏板效率', fmt: v => v.toFixed(1) + '%' },
+  { key: 'avg_pedal_smooth', label: '踏板流畅', fmt: v => v.toFixed(1) + '%' },
 ];
 
 /* ── Export constants ────────────────────────────────────────────────────── */
@@ -912,6 +918,14 @@ function _statChips(summary) {
     chips.push('♥ ' + Math.round(summary.avg_hr));
   if (summary.avg_power != null)
     chips.push('⚡ ' + Math.round(summary.avg_power) + ' W');
+  if (summary.left_pct != null) {
+    const r = (100 - summary.left_pct).toFixed(0);
+    chips.push('L ' + summary.left_pct.toFixed(0) + '% / R ' + r + '%');
+  }
+  if (summary.avg_torque_eff != null)
+    chips.push('效率 ' + summary.avg_torque_eff.toFixed(1) + '%');
+  if (summary.avg_pedal_smooth != null)
+    chips.push('流畅 ' + summary.avg_pedal_smooth.toFixed(1) + '%');
   return chips;
 }
 
@@ -2997,7 +3011,7 @@ function _renderDetailRoute() {
   } else if (detailMetric === 'speed' || detailMetric === 'cadence') {
     legendBar.style.background = 'linear-gradient(to right, hsl(120,90%,42%), hsl(60,90%,42%), hsl(30,90%,42%), hsl(0,90%,42%))';
   } else {
-    legendBar.style.background = '';
+    legendBar.style.background = 'linear-gradient(to right, hsl(240,88%,56%), hsl(120,88%,56%), hsl(60,88%,56%), hsl(0,88%,56%))';
   }
   const marker = document.getElementById('detail-route-legend-marker');
   if (marker && scale) {
