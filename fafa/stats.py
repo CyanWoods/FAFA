@@ -173,9 +173,12 @@ def _build_one_segment(recs: List[Record], seg_idx: int, ftp) -> KmStats:
 
     ps_vals = []
     for r in recs:
-        vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
-                if v is not None and v > 0]
-        ps_vals.extend(vals)
+        lr_vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
+                   if v is not None and v > 0]
+        if lr_vals:
+            ps_vals.extend(lr_vals)
+        elif r.combined_pedal_smoothness is not None and r.combined_pedal_smoothness > 0:
+            ps_vals.append(r.combined_pedal_smoothness)
 
     cal_vals = [r.calories for r in recs if r.calories is not None]
     calories_delta = max(0, cal_vals[-1] - cal_vals[0]) if len(cal_vals) >= 2 else (cal_vals[0] if cal_vals else None)
@@ -310,9 +313,12 @@ def compute_summary(fit: FitData, km_stats: List[KmStats]) -> Summary:
 
     ps_vals = []
     for r in records:
-        vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
-                if v is not None and v > 0]
-        ps_vals.extend(vals)
+        lr_vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
+                   if v is not None and v > 0]
+        if lr_vals:
+            ps_vals.extend(lr_vals)
+        elif r.combined_pedal_smoothness is not None and r.combined_pedal_smoothness > 0:
+            ps_vals.append(r.combined_pedal_smoothness)
 
     ftp = session.get("threshold_power")
     avg_power = round(sum(powers) / len(powers), 1) if powers else None

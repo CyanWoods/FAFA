@@ -24,6 +24,7 @@ class Record:
     right_torque_effectiveness: Optional[float] = None  # %
     left_pedal_smoothness: Optional[float] = None       # %
     right_pedal_smoothness: Optional[float] = None      # %
+    combined_pedal_smoothness: Optional[float] = None   # % (single-sided meters)
     calories: Optional[int] = None         # cumulative kcal
 
 
@@ -78,6 +79,7 @@ def parse_fit(filepath: str) -> FitData:
             right_torque_effectiveness=r.get("right_torque_effectiveness"),
             left_pedal_smoothness=r.get("left_pedal_smoothness"),
             right_pedal_smoothness=r.get("right_pedal_smoothness"),
+            combined_pedal_smoothness=r.get("combined_pedal_smoothness"),
             calories=r.get("calories"),
         ))
 

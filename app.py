@@ -1247,8 +1247,11 @@ def get_records(filename):
         lr = decode_lr_balance(r.left_right_balance)
         te_vals = [v for v in [r.left_torque_effectiveness, r.right_torque_effectiveness]
                    if v is not None and v > 0]
-        ps_vals = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
-                   if v is not None and v > 0]
+        ps_lr = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
+                 if v is not None and v > 0]
+        ps_vals = ps_lr if ps_lr else (
+            [r.combined_pedal_smoothness] if r.combined_pedal_smoothness and r.combined_pedal_smoothness > 0 else []
+        )
         out.append({
             "t":            ts_local.strftime("%H:%M:%S"),
             "speed_kmh":    round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
