@@ -50,8 +50,10 @@ const METRICS = [
   { key: 'altitude',     label: '海拔',     field: 'end_alt_m',       rField: 'altitude',    unit: 'm',    color: '#2ecc71' },
   { key: 'grade',        label: '坡度',     field: 'avg_grade_pct',   rField: 'grade',       unit: '%',    color: '#1abc9c' },
   { key: 'temperature',  label: '气温',     field: 'avg_temp_c',      rField: 'temp_c',      unit: '°C',   color: '#e67e22' },
-  { key: 'torque_eff',   label: '踏板效率', field: 'avg_torque_eff',  rField: 'torque_eff',  unit: '%',    color: '#16a085' },
-  { key: 'pedal_smooth', label: '踏板流畅', field: 'avg_pedal_smooth',rField: 'pedal_smooth',unit: '%',    color: '#8e44ad' },
+  { key: 'torque_eff',   label: '踏板效率', field: 'avg_torque_eff',  unit: '%',    color: '#16a085', noRoute: true,
+    series: [{ label: '左', rField: 'left_torque_eff', color: '#16a085' }, { label: '右', rField: 'right_torque_eff', color: '#1abc9c' }] },
+  { key: 'pedal_smooth', label: '踏板流畅', field: 'avg_pedal_smooth', unit: '%',    color: '#8e44ad', noRoute: true,
+    series: [{ label: '左', rField: 'left_pedal_smooth', color: '#8e44ad' }, { label: '右', rField: 'right_pedal_smooth', color: '#9b59b6' }] },
 ];
 
 const ROUTE_COLOR_SCALE = {
@@ -2271,7 +2273,7 @@ function _buildRouteMetricBar() {
   const bar = document.getElementById('detail-route-metric-bar');
   if (!bar) return;
   const probe = t.distStats.length ? t.distStats : t.kmStats;
-  const available = METRICS.filter(m => probe.some(s => s[m.field] != null));
+  const available = METRICS.filter(m => !m.noRoute && probe.some(s => s[m.field] != null));
   if (!available.find(m => m.key === detailMetric)) detailMetric = available[0]?.key || 'speed';
   bar.innerHTML = '';
   for (const m of available) {
@@ -2524,9 +2526,14 @@ function _renderDetailCharts(records, fallbackStats) {
   const tooltipBody  = isDark ? '#ddd' : '#333';
 
   for (const meta of METRICS) {
-    const hasData = useRecords
-      ? records.some(r => r[meta.rField] != null)
-      : (fallbackStats || []).some(s => s[meta.field] != null);
+    const isDual = meta.series && meta.series.length > 0;
+
+    // dual-series: records-only; fallback to single avg if no records
+    const hasData = isDual && useRecords
+      ? meta.series.some(s => records.some(r => r[s.rField] != null))
+      : useRecords
+        ? records.some(r => r[meta.rField] != null)
+        : (fallbackStats || []).some(s => s[meta.field] != null);
     if (!hasData) continue;
 
     const block = document.createElement('div');
@@ -2542,17 +2549,30 @@ function _renderDetailCharts(records, fallbackStats) {
     block.appendChild(cw);
     wrap.appendChild(block);
 
-    let labels, data;
-    if (useRecords) {
+    let labels, seriesList;
+    if (isDual && useRecords) {
       labels = records.map(r => r.t);
-      data   = records.map(r => r[meta.rField] ?? null);
+      seriesList = meta.series.map(s => ({
+        type: 'line',
+        name: s.label,
+        data: records.map(r => r[s.rField] ?? null),
+        symbol: 'none',
+        lineStyle: { color: s.color, width: 1.5 },
+        areaStyle: { color: s.color, opacity: 0.04 },
+        connectNulls: false,
+        emphasis: { disabled: true },
+      }));
+    } else if (useRecords) {
+      labels = records.map(r => r.t);
+      let data = records.map(r => r[meta.rField] ?? null);
       if (meta.key === 'altitude') {
         const firstValid = data.findIndex(v => v != null);
-        if (firstValid > 0) {
-          labels = labels.slice(firstValid);
-          data   = data.slice(firstValid);
-        }
+        if (firstValid > 0) { labels = labels.slice(firstValid); data = data.slice(firstValid); }
       }
+      seriesList = [{ type: 'line', data, symbol: 'none',
+        lineStyle: { color: meta.color, width: 1.5 },
+        areaStyle: { color: meta.color, opacity: 0.06 },
+        connectNulls: false, emphasis: { disabled: true } }];
     } else {
       const t0 = track?.timeStatsStart ? new Date(track.timeStatsStart) : null;
       labels = (fallbackStats || []).map((_, i) => {
@@ -2560,7 +2580,11 @@ function _renderDetailCharts(records, fallbackStats) {
         const d = new Date(t0.getTime() + i * 60000);
         return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
       });
-      data = (fallbackStats || []).map(s => s[meta.field] ?? null);
+      const data = (fallbackStats || []).map(s => s[meta.field] ?? null);
+      seriesList = [{ type: 'line', data, symbol: 'none',
+        lineStyle: { color: meta.color, width: 1.5 },
+        areaStyle: { color: meta.color, opacity: 0.06 },
+        connectNulls: false, emphasis: { disabled: true } }];
     }
 
     const chart = echarts.init(cw, null, { renderer: 'svg' });
@@ -2568,7 +2592,13 @@ function _renderDetailCharts(records, fallbackStats) {
     chart.setOption({
       animation: false,
       backgroundColor: 'transparent',
-      grid: { top: 6, bottom: 22, left: 44, right: 8, containLabel: false },
+      grid: { top: isDual ? 22 : 6, bottom: 22, left: 44, right: 8, containLabel: false },
+      legend: isDual ? {
+        data: meta.series.map(s => s.label),
+        textStyle: { color: tickColor, fontSize: 10 },
+        itemWidth: 12, itemHeight: 8,
+        right: 8, top: 2,
+      } : undefined,
       xAxis: {
         type: 'category',
         data: labels,
@@ -2586,15 +2616,7 @@ function _renderDetailCharts(records, fallbackStats) {
         axisLabel: { color: tickColor, fontSize: 10 },
         splitLine: { lineStyle: { color: gridColor } },
       },
-      series: [{
-        type: 'line',
-        data,
-        symbol: 'none',
-        lineStyle: { color: meta.color, width: 1.5 },
-        areaStyle: { color: meta.color, opacity: 0.06 },
-        connectNulls: false,
-        emphasis: { disabled: true },
-      }],
+      series: seriesList,
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
@@ -2602,11 +2624,20 @@ function _renderDetailCharts(records, fallbackStats) {
         borderColor: tooltipBorder,
         borderWidth: 1,
         textStyle: { color: tooltipBody, fontSize: 11 },
-        formatter: params => {
-          const p = params[0];
-          const val = p.value != null ? `${p.value} ${meta.unit}` : '无数据';
-          return `<span style="color:${tooltipTitle}">${p.name}</span><br/>${meta.label}: ${val}`;
-        },
+        formatter: isDual
+          ? params => {
+              const time = params[0]?.name || '';
+              const lines = params.map(p => {
+                const val = p.value != null ? `${p.value} ${meta.unit}` : '无数据';
+                return `<span style="color:${p.color}">●</span> ${p.seriesName}: ${val}`;
+              });
+              return `<span style="color:${tooltipTitle}">${time}</span><br/>${lines.join('<br/>')}`;
+            }
+          : params => {
+              const p = params[0];
+              const val = p.value != null ? `${p.value} ${meta.unit}` : '无数据';
+              return `<span style="color:${tooltipTitle}">${p.name}</span><br/>${meta.label}: ${val}`;
+            },
       },
     });
 

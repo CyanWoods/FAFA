@@ -1245,25 +1245,23 @@ def get_records(filename):
     for r in fit.records:
         ts_local = r.timestamp.astimezone(tz)
         lr = decode_lr_balance(r.left_right_balance)
-        te_vals = [v for v in [r.left_torque_effectiveness, r.right_torque_effectiveness]
-                   if v is not None and v > 0]
-        ps_lr = [v for v in [r.left_pedal_smoothness, r.right_pedal_smoothness]
-                 if v is not None and v > 0]
-        ps_vals = ps_lr if ps_lr else (
-            [r.combined_pedal_smoothness] if r.combined_pedal_smoothness and r.combined_pedal_smoothness > 0 else []
-        )
+        def _pct(v):
+            return round(v, 1) if v is not None and v > 0 else None
+        cps = _pct(r.combined_pedal_smoothness)
         out.append({
-            "t":            ts_local.strftime("%H:%M:%S"),
-            "speed_kmh":    round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
-            "hr":           r.heart_rate,
-            "power":        r.power,
-            "cadence":      r.cadence,
-            "altitude":     round(r.altitude, 1) if r.altitude is not None else None,
-            "grade":        round(r.grade, 2) if r.grade is not None else None,
-            "temp_c":       r.temperature,
-            "lr_left":      lr[0] if lr else None,
-            "torque_eff":   round(sum(te_vals) / len(te_vals), 1) if te_vals else None,
-            "pedal_smooth": round(sum(ps_vals) / len(ps_vals), 1) if ps_vals else None,
+            "t":                 ts_local.strftime("%H:%M:%S"),
+            "speed_kmh":         round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
+            "hr":                r.heart_rate,
+            "power":             r.power,
+            "cadence":           r.cadence,
+            "altitude":          round(r.altitude, 1) if r.altitude is not None else None,
+            "grade":             round(r.grade, 2) if r.grade is not None else None,
+            "temp_c":            r.temperature,
+            "lr_left":           lr[0] if lr else None,
+            "left_torque_eff":   _pct(r.left_torque_effectiveness),
+            "right_torque_eff":  _pct(r.right_torque_effectiveness),
+            "left_pedal_smooth":  _pct(r.left_pedal_smoothness) or cps,
+            "right_pedal_smooth": _pct(r.right_pedal_smoothness) or cps,
         })
 
     encoded_size = 1024 + len(out) * 256
