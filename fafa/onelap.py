@@ -381,6 +381,7 @@ def download_activity(
         return final
     finally:
         lock_fh.close()
+        lock_path.unlink(missing_ok=True)
         with state_lock or nullcontext():
             if state.get(rid, {}).get('downloading'):
                 state.pop(rid, None)
