@@ -55,6 +55,7 @@ Important Flask endpoints in `app.py`:
 - `/api/export/all` — global JSON export of parsed activities; supports `no_km_stats=1` and `min_km=N`.
 - `/api/activities` — lightweight activity list for activities, PMC, calendar, tags, and bulk actions.
 - `/api/config/raw` — settings modal read/write for `config.json`; Strava OAuth token fields are read-only in this endpoint.
+- `/api/weather/<filename>` — wind analysis (headwind/tailwind/crosswind) from Open-Meteo. Source is user-selectable via the `wind_source` config field (`auto`/`ecmwf`/`gfs`/`icon`/`era5`, default `auto`); high-res forecast models cover ~2022–present, older rides fall back to ERA5 reanalysis (1940–present). Cached in-process, keyed by file signature and `wind_source`.
 - `/api/ai/evaluate`, `/api/ai/pmc`, `/api/ai/calendar` — SSE streams through `_llm_stream()`.
 - `/api/onelap/sync`, `/api/onelap/status` — background OneLap download sync.
 - `/api/strava/status`, `/api/strava/auth_url`, `/strava/callback`, `/api/strava/diff`, `/api/strava/upload`, `/api/strava/upload/status` — Strava OAuth, diff, and upload.

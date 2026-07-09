@@ -95,7 +95,7 @@ Required local vendor assets (absent = failing build):
 
 ### AI integration
 
-All AI endpoints (`/api/ai/evaluate`, `/api/ai/pmc`, `/api/ai/calendar`, `/api/ai/compare`) use an OpenAI-compatible chat completions API configured in `config.json`. Responses stream via SSE. `_resolve_public_api_base` validates the URL before any request. `/api/ai/chat` accepts multi-turn `messages` (max 100 messages, 200 000 chars total). Weather data for wind analysis comes from the Open-Meteo archive API (`/api/weather/<filename>`); results are cached in-process with a TTL.
+All AI endpoints (`/api/ai/evaluate`, `/api/ai/pmc`, `/api/ai/calendar`, `/api/ai/compare`) use an OpenAI-compatible chat completions API configured in `config.json`. Responses stream via SSE. `_resolve_public_api_base` validates the URL before any request. `/api/ai/chat` accepts multi-turn `messages` (max 100 messages, 200 000 chars total). Weather data for wind analysis comes from Open-Meteo (`/api/weather/<filename>`); the source is user-selectable via the `wind_source` config field (`auto`/`ecmwf`/`gfs`/`icon`/`era5`, default `auto`, mapped in `_WIND_SOURCES`). High-resolution forecast models (`historical-forecast-api`) cover ~2022–present; rides with no model data (older than ~2022) silently fall back to the ERA5 reanalysis (`archive-api`, 1940–present). The response carries `source`/`source_label` for the actually-used source. Results are cached in-process with a TTL, keyed by file signature **and** `wind_source`.
 
 ### Frontend CSS
 

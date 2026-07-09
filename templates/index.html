@@ -758,6 +758,21 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">风向数据源</div>
+        <div class="settings-row">
+          <label class="settings-label">数据源</label>
+          <select id="cfg-wind-source">
+            <option value="auto">自动（推荐）</option>
+            <option value="ecmwf">ECMWF · 欧洲中心</option>
+            <option value="gfs">GFS · 美国 NOAA</option>
+            <option value="icon">ICON · 德国 DWD</option>
+            <option value="era5">ERA5 再分析（覆盖 1940+）</option>
+          </select>
+        </div>
+        <div class="settings-hint">高精模式查不到的老骑行（约 2022 年前）自动回退 ERA5 再分析。</div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">AI 配置</div>
         <div class="settings-row">
           <label class="settings-label">API 地址</label>

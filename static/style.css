@@ -3902,6 +3902,28 @@ body {
 
 .settings-row input:focus { border-color: rgba(99,153,255,0.5); }
 
+.settings-row select {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--surface-1);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: var(--radius-input);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  outline: none;
+  transition: border-color var(--duration-fast);
+  min-width: 0;
+}
+
+.settings-row select:focus { border-color: rgba(99,153,255,0.5); }
+
+.settings-hint {
+  font-size: var(--text-sm);
+  color: var(--text-disabled);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
 .settings-input-wrap {
   flex: 1;
   display: flex;
@@ -4164,6 +4186,12 @@ body {
   color: var(--bg-panel);
 }
 .light-theme .settings-row input:focus { border-color: rgba(46,134,222,0.7); }
+.light-theme .settings-row select {
+  background: var(--surface-1);
+  border-color: rgba(0,0,0,0.15);
+  color: var(--text-secondary);
+}
+.light-theme .settings-row select:focus { border-color: rgba(46,134,222,0.7); }
 .light-theme .settings-unit { color: var(--text-subtle); }
 
 .light-theme .modal-overlay { background: rgba(0,0,0,0.30); }

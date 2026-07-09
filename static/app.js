@@ -1888,7 +1888,8 @@ async function openDetailView(id) {
             `<span class="stat-chip">🌬 ${d.wind_speed_avg_kmh} km/h</span>` +
             `<span class="stat-chip">${arrow} ${d.wind_dir_label}</span>` +
             `<span class="stat-chip">逆风 ${d.headwind_pct}% / 顺风 ${d.tailwind_pct}%</span>` +
-            (d.gust_max_kmh ? `<span class="stat-chip">阵风 ${d.gust_max_kmh} km/h</span>` : '')
+            (d.gust_max_kmh ? `<span class="stat-chip">阵风 ${d.gust_max_kmh} km/h</span>` : '') +
+            (d.source_label ? `<span class="stat-chip" title="风向数据源">📡 ${d.source_label}</span>` : '')
           );
         }
       }
@@ -4104,6 +4105,7 @@ async function openSettingsModal() {
     document.getElementById('cfg-route-grade-max').value   = cfg.route_grade_max      ?? '';
     document.getElementById('cfg-route-speed-max').value   = cfg.route_speed_max      ?? '';
     document.getElementById('cfg-route-cadence-max').value = cfg.route_cadence_max    ?? '';
+    document.getElementById('cfg-wind-source').value   = cfg.wind_source          || 'auto';
     document.getElementById('cfg-api-base').value      = cfg.api_base             ?? '';
     document.getElementById('cfg-api-key').value       = cfg.api_key              ?? '';
     document.getElementById('cfg-model').value         = cfg.model                ?? '';
@@ -4134,6 +4136,7 @@ async function saveSettingsModal() {
     route_grade_max:      num('cfg-route-grade-max'),
     route_speed_max:      num('cfg-route-speed-max'),
     route_cadence_max:    num('cfg-route-cadence-max'),
+    wind_source:          val('cfg-wind-source')   || 'auto',
     api_base:             val('cfg-api-base')      || null,
     api_key:              val('cfg-api-key')       || null,
     model:                val('cfg-model')         || null,
@@ -4158,7 +4161,7 @@ async function saveSettingsModal() {
       _pmcAllData = null;
       _loadAndRenderPmc();
     }
-    if (detailTrackId != null) _renderDetailRoute();
+    if (detailTrackId != null) openDetailView(detailTrackId);
   } catch { toast('保存失败'); }
 }
 

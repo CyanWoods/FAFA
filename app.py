@@ -381,6 +381,21 @@ _weather_cache: dict = {}       # key → (result, expire_epoch)
 _weather_lock = threading.Lock()
 _WEATHER_TTL_S = 3600
 _WEATHER_MAX   = 500
+
+# 风向数据源 → (Open-Meteo 端点, models 参数)。models=None 表示 ERA5 archive。
+# 高精预报模式仅覆盖约 2022 至今；老骑行无数据时自动回退 ERA5（archive 覆盖 1940 至今）。
+_WIND_FORECAST_API = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+_WIND_ARCHIVE_API  = "https://archive-api.open-meteo.com/v1/archive"
+_WIND_SOURCES = {
+    "auto":  (_WIND_FORECAST_API, "best_match"),
+    "ecmwf": (_WIND_FORECAST_API, "ecmwf_ifs025"),
+    "gfs":   (_WIND_FORECAST_API, "gfs_seamless"),
+    "icon":  (_WIND_FORECAST_API, "icon_seamless"),
+    "era5":  (_WIND_ARCHIVE_API,  None),
+}
+_WIND_SOURCE_LABELS = {
+    "auto": "自动", "ecmwf": "ECMWF", "gfs": "GFS", "icon": "ICON", "era5": "ERA5 再分析",
+}
 _db_init_done: set[str] = set()  # 已初始化的 input_dir 路径（进程级缓存）
 _db_init_lock = threading.Lock()
 
@@ -1896,7 +1911,14 @@ _CONFIG_NUMBER_RANGES = {
     'route_cadence_max': (60, 200), 'max_tokens': (256, 16_000),
     'strava_redirect_port': (1024, 65_535),
 }
-_CONFIG_ALLOWED_KEYS = frozenset(_CONFIG_STRING_LIMITS) | frozenset(_CONFIG_NUMBER_RANGES)
+_CONFIG_ENUM_VALUES = {
+    'wind_source': frozenset({'auto', 'ecmwf', 'gfs', 'icon', 'era5'}),
+}
+_CONFIG_ALLOWED_KEYS = (
+    frozenset(_CONFIG_STRING_LIMITS)
+    | frozenset(_CONFIG_NUMBER_RANGES)
+    | frozenset(_CONFIG_ENUM_VALUES)
+)
 
 
 def _mask_secrets(data: dict) -> dict:
@@ -1916,6 +1938,11 @@ def _validate_config_update(data: dict) -> dict:
         raise ValueError(f'不支持的配置项: {sorted(unknown)[0]}')
     validated = {}
     for key, value in data.items():
+        if key in _CONFIG_ENUM_VALUES:
+            if not isinstance(value, str) or value not in _CONFIG_ENUM_VALUES[key]:
+                raise ValueError(f'{key} 取值无效')
+            validated[key] = value
+            continue
         if key in _CONFIG_STRING_LIMITS:
             if not isinstance(value, str) or len(value) > _CONFIG_STRING_LIMITS[key]:
                 raise ValueError(f'{key} 格式无效')
@@ -1945,12 +1972,14 @@ def get_config_raw():
             with open(template, encoding="utf-8") as f:
                 data = json.load(f)
             data.pop("_comment", None)
+            data.pop("_comments", None)
         else:
             data = {}
         return jsonify(_mask_secrets(data))
     with open(config_file, encoding="utf-8") as f:
         data = json.load(f)
     data.pop("_comment", None)
+    data.pop("_comments", None)
     return jsonify(_mask_secrets(data))
 
 
@@ -2258,7 +2287,19 @@ def weather_for_activity(filename: str):
     if path.parent != input_dir.resolve():
         return jsonify(error="非法路径"), 403
 
-    _wkey = (str(path), _file_signature(path) if path.exists() else '')
+    # 用户选择的风向数据源（默认 auto）
+    wind_source = "auto"
+    try:
+        cfg_file = _user_config_file()
+        if cfg_file.exists():
+            with open(cfg_file, encoding="utf-8") as f:
+                wind_source = json.load(f).get("wind_source") or "auto"
+    except Exception:
+        wind_source = "auto"
+    if wind_source not in _WIND_SOURCES:
+        wind_source = "auto"
+
+    _wkey = (str(path), _file_signature(path) if path.exists() else '', wind_source)
     with _weather_lock:
         if _wkey in _weather_cache:
             entry, exp = _weather_cache[_wkey]
@@ -2295,24 +2336,44 @@ def weather_for_activity(filename: str):
     start_date = start_dt.strftime("%Y-%m-%d")
     end_date   = end_dt.strftime("%Y-%m-%d")
 
+    def _fetch_wind(url, models):
+        params = {
+            "latitude":        round(lat, 6),
+            "longitude":       round(lon, 6),
+            "start_date":      start_date,
+            "end_date":        end_date,
+            "hourly":          "windspeed_10m,winddirection_10m,windgusts_10m",
+            "wind_speed_unit": "kmh",
+            "timezone":        "UTC",
+        }
+        if models:
+            params["models"] = models
+        r = _req.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def _has_wind(d):
+        dirs = ((d or {}).get("hourly") or {}).get("winddirection_10m") or []
+        return any(x is not None for x in dirs)
+
+    source_used = wind_source
+    url, models = _WIND_SOURCES[wind_source]
     try:
-        resp = _req.get(
-            "https://archive-api.open-meteo.com/v1/archive",
-            params={
-                "latitude":        round(lat, 6),
-                "longitude":       round(lon, 6),
-                "start_date":      start_date,
-                "end_date":        end_date,
-                "hourly":          "windspeed_10m,winddirection_10m,windgusts_10m",
-                "wind_speed_unit": "kmh",
-                "timezone":        "UTC",
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = _fetch_wind(url, models)
     except Exception as e:
-        logging.warning("weather: Open-Meteo failed %s: %s", filename, e)
+        logging.warning("weather: Open-Meteo failed %s (%s): %s", filename, wind_source, e)
+        data = None
+
+    # 高精预报模式无数据（多为 2022 前的老骑行）→ 静默回退 ERA5 再分析
+    if wind_source != "era5" and not _has_wind(data):
+        try:
+            era5_url, era5_models = _WIND_SOURCES["era5"]
+            data = _fetch_wind(era5_url, era5_models)
+            source_used = "era5"
+        except Exception as e:
+            logging.warning("weather: ERA5 fallback failed %s: %s", filename, e)
+
+    if not _has_wind(data):
         return jsonify(available=False)
 
     try:
@@ -2321,6 +2382,8 @@ def weather_for_activity(filename: str):
         logging.warning("weather: _wind_stats failed %s: %s", filename, e)
         return jsonify(available=False)
     if result.get("available"):
+        result["source"] = source_used
+        result["source_label"] = _WIND_SOURCE_LABELS.get(source_used, source_used)
         result["start_epoch"] = int(
             datetime.fromisoformat(start_time_utc.replace("Z", "+00:00")).timestamp()
         )
