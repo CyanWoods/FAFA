@@ -140,6 +140,7 @@
       <button onclick="_stravaUploadSelected()">上传 Strava</button>
       <button onclick="_actBulkLoad()">加载轨迹</button>
       <button id="act-bulk-tag-btn" onclick="_openBulkTagPicker(this)">标签</button>
+      <button id="act-bulk-chart-btn" onclick="_actBulkChartCompare()" disabled>图表对比</button>
       <button id="act-bulk-ai-btn" onclick="_actBulkAiCompare()" disabled>AI 对比</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
     </div>
@@ -645,6 +646,57 @@
   </div>
 
   <!-- 活动列表单条 AI 分析弹窗 -->
+  <!-- 骑行图表对比 -->
+  <div id="compare-modal" style="display:none">
+    <div id="compare-modal-overlay" onclick="closeCompareModal()"></div>
+    <div id="compare-modal-box">
+      <div id="compare-modal-header">
+        <span id="compare-modal-title"></span>
+        <button onclick="closeCompareModal()">✕</button>
+      </div>
+      <div id="compare-legend"></div>
+      <div id="compare-tabs">
+        <button class="cmp-tab active" data-tab="summary" onclick="switchCompareTab('summary')">聚合指标</button>
+        <button class="cmp-tab" data-tab="distance" onclick="switchCompareTab('distance')">逐公里</button>
+        <button class="cmp-tab" data-tab="percent" onclick="switchCompareTab('percent')">行程 %</button>
+      </div>
+      <div id="compare-modal-body">
+        <div id="compare-loading" class="pmc-ai-loading-row">
+          <div class="ai-spinner"></div>
+          <span>正在加载骑行数据…</span>
+        </div>
+
+        <div id="cmp-pane-summary" class="cmp-pane" style="display:none">
+          <div class="cmp-section">
+            <div class="cmp-section-title">关键指标</div>
+            <div id="cmp-metric-table"></div>
+            <div class="cmp-note">Δ 相对最早一次骑行；归一化均速已按风力修正</div>
+          </div>
+          <div class="cmp-section">
+            <div class="cmp-section-title">峰值功率曲线</div>
+            <div id="cmp-curve-wrap"></div>
+          </div>
+          <div class="cmp-section">
+            <div class="cmp-section-title">功率区间分布</div>
+            <div id="cmp-zone-wrap"></div>
+          </div>
+        </div>
+
+        <div id="cmp-pane-distance" class="cmp-pane" style="display:none">
+          <div class="cmp-metric-switch" id="cmp-dist-metrics"></div>
+          <div id="cmp-dist-wrap"></div>
+          <div class="cmp-note" id="cmp-dist-note"></div>
+        </div>
+
+        <div id="cmp-pane-percent" class="cmp-pane" style="display:none">
+          <div class="cmp-metric-switch" id="cmp-pct-metrics"></div>
+          <div id="cmp-pct-wrap"></div>
+          <div class="cmp-note">纵轴为各次骑行相对自身均值的比例，可跨距离比较配速策略</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="act-ai-modal" style="display:none">
     <div id="act-ai-modal-overlay" onclick="closeActAiModal()"></div>
     <div id="act-ai-modal-box">

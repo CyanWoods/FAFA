@@ -397,6 +397,8 @@ function _updateSelectBar() {
   }
   const aiBtn = document.getElementById('act-bulk-ai-btn');
   if (aiBtn) aiBtn.disabled = (_actSelected.size < 2 || !_aiModel);
+  const chartBtn = document.getElementById('act-bulk-chart-btn');
+  if (chartBtn) chartBtn.disabled = (_actSelected.size < 2);
 }
 
 function _actSelectAll() {
@@ -499,6 +501,477 @@ async function _actBulkAiCompare() {
     }),
     '你是专业骑行教练 AI。以下是多次骑行的原始数据，请基于此回答后续问题。'
   );
+}
+
+/* ── 骑行图表对比 ─────────────────────────────────────────────────────────── */
+
+let _cmpRides   = [];      // [{filename, label, color, summary, kmStats, windData, peakPower, zoneTime}]
+let _cmpTab     = 'summary';
+let _cmpCharts  = {};      // id → echarts instance
+let _cmpObs     = [];      // ResizeObserver list
+let _cmpDistMetric = 'avg_speed_kmh';
+let _cmpPctMetric  = 'avg_speed_kmh';
+let _cmpLoadToken  = 0;    // 递增令牌：关闭弹窗或重新发起时作废在途加载
+
+const _CMP_METRICS = [
+  { key: 'avg_speed_kmh', label: '速度', unit: 'km/h', digits: 1 },
+  { key: 'avg_hr',        label: '心率', unit: 'bpm',  digits: 0 },
+  { key: 'avg_power',     label: '功率', unit: 'W',    digits: 0 },
+  { key: 'avg_cadence',   label: '踏频', unit: 'rpm',  digits: 0 },
+  { key: 'end_alt_m',     label: '海拔', unit: 'm',    digits: 0 },
+];
+
+// 指标定义：higher 表示数值越大越好（用于 Δ 着色）；null 表示不着色
+const _CMP_ROWS = [
+  { label: '距离',       unit: 'km',   digits: 1, higher: null, get: r => r.summary.total_dist_km },
+  { label: '移动时间',   unit: '',     digits: 0, higher: null, fmt: v => _fmtDur(v), get: r => r.summary.moving_time_s ?? r.summary.total_duration_s },
+  { label: '均速',       unit: 'km/h', digits: 1, higher: true, get: r => r.summary.avg_speed_kmh },
+  { label: '归一化均速', unit: 'km/h', digits: 1, higher: true, get: r => r.vNorm },
+  { label: '有效逆风',   unit: 'km/h', digits: 1, higher: false, get: r => r.effHeadwind },
+  { label: '均功率',     unit: 'W',    digits: 0, higher: true, get: r => r.summary.avg_power },
+  { label: 'NP',         unit: 'W',    digits: 0, higher: true, get: r => r.summary.normalized_power },
+  { label: 'VI',         unit: '',     digits: 2, higher: false, get: r => _cmpVi(r) },
+  { label: '均心率',     unit: 'bpm',  digits: 0, higher: false, get: r => r.summary.avg_hr },
+  { label: 'EF',         unit: '',     digits: 2, higher: true, get: r => _cmpEf(r) },
+  { label: '爬升',       unit: 'm',    digits: 0, higher: null, get: r => r.summary.total_elevation_gain_m },
+  { label: '均踏频',     unit: 'rpm',  digits: 0, higher: true, get: r => r.summary.avg_cadence },
+];
+
+function _cmpVi(r) {
+  const np = r.summary.normalized_power, ap = r.summary.avg_power;
+  return (np && ap) ? np / ap : null;
+}
+
+function _cmpEf(r) {
+  const np = r.summary.normalized_power, hr = r.summary.avg_hr;
+  return (np && hr) ? np / hr : null;
+}
+
+// 与后端 _wind_normalize_speed 保持一致：每 1 km/h 有效逆风折算 0.25 km/h
+function _cmpWindNormalize(avgSpeed, wind) {
+  if (!wind || !wind.available || !avgSpeed) return { vNorm: avgSpeed ?? null, effHeadwind: null };
+  const spd  = wind.wind_speed_avg_kmh || 0;
+  const head = wind.headwind_pct || 0;
+  const tail = wind.tailwind_pct || 0;
+  const eff  = spd * (head - tail) / 100;
+  return { vNorm: Math.round((avgSpeed + eff * 0.25) * 10) / 10, effHeadwind: Math.round(eff * 10) / 10 };
+}
+
+function _disposeCompareCharts() {
+  for (const ro of _cmpObs) { try { ro.disconnect(); } catch {} }
+  _cmpObs = [];
+  for (const key of Object.keys(_cmpCharts)) {
+    try { _cmpCharts[key].dispose(); } catch {}
+  }
+  _cmpCharts = {};
+}
+
+function _cmpInitChart(el, key) {
+  const chart = echarts.init(el, null, { renderer: 'svg' });
+  _cmpCharts[key] = chart;
+  const ro = new ResizeObserver(() => { try { chart.resize(); } catch {} });
+  ro.observe(el);
+  _cmpObs.push(ro);
+  return chart;
+}
+
+function _cmpBaseOption(theme) {
+  return {
+    grid: { left: 52, right: 20, top: 30, bottom: 34 },
+    legend: { textStyle: { color: theme.legendColor }, top: 0 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: theme.tooltipBg,
+      borderColor: theme.tooltipBorder,
+      textStyle: { color: theme.tooltipText },
+    },
+  };
+}
+
+function _cmpAxisStyle(theme) {
+  return {
+    axisLine:  { lineStyle: { color: theme.axisColor } },
+    axisLabel: { color: theme.tickColor },
+    splitLine: { lineStyle: { color: theme.gridColor } },
+  };
+}
+
+async function _actBulkChartCompare() {
+  if (_actSelected.size < 2) { toast('请至少选择 2 条记录'); return; }
+
+  const acts = [..._actSelected]
+    .map(fn => (_actActivities || []).find(a => a.filename === fn))
+    .filter(Boolean)
+    .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  if (acts.length < 2) { toast('获取记录信息失败'); return; }
+
+  const token = ++_cmpLoadToken;
+  _disposeCompareCharts();
+  _cmpTab = 'summary';
+  document.querySelectorAll('#compare-tabs .cmp-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === 'summary');
+  });
+  document.querySelectorAll('.cmp-pane').forEach(p => { p.style.display = 'none'; });
+  document.getElementById('compare-loading').style.display = '';
+  document.getElementById('compare-modal-title').textContent = `骑行对比 · 图表（${acts.length} 条）`;
+  document.getElementById('compare-legend').innerHTML = '';
+  document.getElementById('compare-modal').style.display = 'flex';
+
+  // 同一天可能有多次骑行：重复的日期标签会让 ECharts 系列重名，补上时间消歧
+  const dayCount = {};
+  for (const a of acts) {
+    const d = (a.start_time || '').slice(0, 10);
+    dayCount[d] = (dayCount[d] || 0) + 1;
+  }
+
+  const loaded = await Promise.all(acts.map(async (act, i) => {
+    const { kmStats, windData } = await _fetchActivityData(act);
+    const summary = act.summary || {};
+    const { vNorm, effHeadwind } = _cmpWindNormalize(summary.avg_speed_kmh, windData);
+    const day = (act.start_time || '').slice(0, 10);
+    const label = day
+      ? (dayCount[day] > 1 ? `${day} ${(act.start_time || '').slice(11, 16)}` : day)
+      : (act.filename || '').replace(/\.fit$/i, '');
+    return {
+      filename:  act.filename || '',
+      label,
+      color:     PALETTE[i % PALETTE.length],
+      summary,
+      kmStats:   kmStats || [],
+      windData,
+      vNorm,
+      effHeadwind,
+      peakPower: act.peak_power  || {},
+      zoneTime:  act.zone_time_s || null,
+    };
+  }));
+
+  // 弹窗已关闭或又发起了一次加载 → 丢弃本次结果，避免往隐藏弹窗里建实例
+  if (token !== _cmpLoadToken) return;
+
+  _cmpRides = loaded;
+  document.getElementById('compare-loading').style.display = 'none';
+  document.getElementById('compare-legend').innerHTML = loaded
+    .map(r => `<span class="cmp-legend-item"><i class="cmp-legend-dot" data-color="${r.color}"></i>${_escapeHtml(r.label)}</span>`)
+    .join('');
+  document.querySelectorAll('#compare-legend .cmp-legend-dot').forEach(el => {
+    el.style.background = el.dataset.color;
+  });
+
+  _renderCmpMetricSwitch('cmp-dist-metrics', _cmpDistMetric, m => {
+    _cmpDistMetric = m; _renderCmpDistance();
+  });
+  _renderCmpMetricSwitch('cmp-pct-metrics', _cmpPctMetric, m => {
+    _cmpPctMetric = m; _renderCmpPercent();
+  });
+
+  switchCompareTab('summary');
+}
+
+function closeCompareModal() {
+  _cmpLoadToken++;               // 作废在途加载
+  _disposeCompareCharts();
+  document.getElementById('compare-modal').style.display = 'none';
+  _cmpRides = [];
+}
+
+function switchCompareTab(tab) {
+  _cmpTab = tab;
+  document.querySelectorAll('#compare-tabs .cmp-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('.cmp-pane').forEach(p => { p.style.display = 'none'; });
+  const pane = document.getElementById(`cmp-pane-${tab}`);
+  if (pane) pane.style.display = '';
+  if (tab === 'summary')       _renderCmpSummary();
+  else if (tab === 'distance') _renderCmpDistance();
+  else if (tab === 'percent')  _renderCmpPercent();
+}
+
+function _renderCmpMetricSwitch(containerId, current, onPick) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  wrap.innerHTML = _CMP_METRICS
+    .map(m => `<button class="cmp-metric-btn${m.key === current ? ' active' : ''}" data-key="${m.key}">${m.label}</button>`)
+    .join('');
+  wrap.querySelectorAll('.cmp-metric-btn').forEach(btn => {
+    btn.onclick = () => {
+      wrap.querySelectorAll('.cmp-metric-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      onPick(btn.dataset.key);
+    };
+  });
+}
+
+/* ── Tab 1: 聚合指标 ──────────────────────────────────────────────────────── */
+
+function _renderCmpSummary() {
+  _renderCmpMetricTable();
+  _renderCmpCurve();
+  _renderCmpZones();
+}
+
+function _renderCmpMetricTable() {
+  const wrap = document.getElementById('cmp-metric-table');
+  if (!wrap) return;
+  const base = _cmpRides[0];
+
+  const head = `<tr><th>指标</th>${
+    _cmpRides.map((r, i) => `<th>${_escapeHtml(r.label)}${i === 0 ? '<span class="cmp-base-tag">基准</span>' : ''}</th>`).join('')
+  }</tr>`;
+
+  const rows = _CMP_ROWS.map(row => {
+    const baseVal = row.get(base);
+    const cells = _cmpRides.map((r, i) => {
+      const v = row.get(r);
+      if (v == null) return '<td class="cmp-na">—</td>';
+      const text = row.fmt ? row.fmt(v) : `${v.toFixed(row.digits)}${row.unit ? ' ' + row.unit : ''}`;
+      if (i === 0 || baseVal == null || !baseVal || row.higher === null || row.fmt) {
+        return `<td>${text}</td>`;
+      }
+      const pct = (v - baseVal) / Math.abs(baseVal) * 100;
+      if (!isFinite(pct)) return `<td>${text}</td>`;
+      const better = row.higher ? pct > 0 : pct < 0;
+      const cls = Math.abs(pct) < 0.5 ? 'cmp-flat' : (better ? 'cmp-better' : 'cmp-worse');
+      const sign = pct > 0 ? '+' : '';
+      return `<td>${text}<span class="cmp-delta ${cls}">${sign}${pct.toFixed(1)}%</span></td>`;
+    }).join('');
+    return `<tr><td class="cmp-row-label">${row.label}</td>${cells}</tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<table class="cmp-table"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+}
+
+function _renderCmpCurve() {
+  const wrap = document.getElementById('cmp-curve-wrap');
+  if (!wrap) return;
+  const hasAny = _cmpRides.some(r => Object.values(r.peakPower || {}).some(v => v > 0));
+  if (!hasAny) {
+    wrap.innerHTML = '<div class="cmp-empty">所选骑行均无功率数据</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div id="cmp-curve-chart" class="cmp-chart"></div>';
+  const el = document.getElementById('cmp-curve-chart');
+  const theme = _pmcChartTheme(el.closest('.cmp-section'));
+  const chart = _cmpInitChart(el, 'curve');
+
+  // 5 个固定时长用等距 category 轴：log 轴会自选 10/100/1000 作刻度，导致标签丢失
+  const xLabels = ['5s', '1m', '5m', '20m', '60m'];
+
+  chart.setOption({
+    ..._cmpBaseOption(theme),
+    tooltip: {
+      ..._cmpBaseOption(theme).tooltip,
+      valueFormatter: v => v == null ? '—' : `${v} W`,
+    },
+    xAxis: {
+      type: 'category',
+      data: xLabels,
+      boundaryGap: false,
+      axisLabel: { color: theme.tickColor },
+      axisLine: { lineStyle: { color: theme.axisColor } },
+      splitLine: { show: false },
+    },
+    yAxis: { type: 'value', name: 'W', nameTextStyle: { color: theme.mutedColor }, ..._cmpAxisStyle(theme) },
+    series: _cmpRides.map(r => ({
+      name: r.label,
+      type: 'line',
+      data: _CURVE_DURATIONS.map(d => r.peakPower[d.key] || null),
+      lineStyle: { color: r.color, width: 2 },
+      itemStyle: { color: r.color },
+      symbol: 'circle', symbolSize: 6,
+      connectNulls: false,
+    })),
+  });
+}
+
+function _renderCmpZones() {
+  const wrap = document.getElementById('cmp-zone-wrap');
+  if (!wrap) return;
+  const rides = _cmpRides.filter(r => r.zoneTime);
+  if (!rides.length) {
+    wrap.innerHTML = '<div class="cmp-empty">所选骑行均无功率区间数据（需含功率且已设置 FTP）</div>';
+    return;
+  }
+
+  wrap.innerHTML = `<div id="cmp-zone-chart" class="cmp-chart" data-rows="${rides.length}"></div>`;
+  const el = document.getElementById('cmp-zone-chart');
+  el.style.height = `${Math.max(120, rides.length * 46 + 60)}px`;
+  const theme = _pmcChartTheme(el.closest('.cmp-section'));
+  const chart = _cmpInitChart(el, 'zone');
+
+  // 每次骑行按自身踏踩总时长归一为百分比，消除时长差异
+  const pcts = rides.map(r => {
+    const z = r.zoneTime;
+    const total = Array.from({ length: 7 }, (_, i) => z[String(i + 1)] || 0).reduce((a, b) => a + b, 0);
+    return Array.from({ length: 7 }, (_, i) => total > 0 ? (z[String(i + 1)] || 0) / total * 100 : 0);
+  });
+
+  chart.setOption({
+    grid: { left: 116, right: 24, top: 30, bottom: 24 },
+    legend: { textStyle: { color: theme.legendColor }, top: 0 },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      backgroundColor: theme.tooltipBg, borderColor: theme.tooltipBorder,
+      textStyle: { color: theme.tooltipText },
+      valueFormatter: v => `${v.toFixed(1)}%`,
+    },
+    xAxis: { type: 'value', max: 100, axisLabel: { color: theme.tickColor, formatter: '{value}%' }, ..._cmpAxisStyle(theme) },
+    yAxis: {
+      type: 'category',
+      data: rides.map(r => r.label),
+      axisLabel: { color: theme.tickColor },
+      axisLine: { lineStyle: { color: theme.axisColor } },
+      splitLine: { show: false },
+    },
+    series: Array.from({ length: 7 }, (_, zi) => ({
+      name: `Z${zi + 1}`,
+      type: 'bar',
+      stack: 'zone',
+      barMaxWidth: 26,
+      itemStyle: { color: POWER_ZONE_COLORS[zi] },
+      data: pcts.map(p => p[zi]),
+    })),
+  });
+}
+
+/* ── Tab 2: 逐公里（绝对距离） ────────────────────────────────────────────── */
+
+function _renderCmpDistance() {
+  const wrap = document.getElementById('cmp-dist-wrap');
+  const note = document.getElementById('cmp-dist-note');
+  if (!wrap) return;
+
+  const usable = _cmpRides.filter(r => r.kmStats.length);
+  if (!usable.length) {
+    wrap.innerHTML = '<div class="cmp-empty">无逐公里数据</div>';
+    if (note) note.textContent = '';
+    return;
+  }
+
+  const metric  = _CMP_METRICS.find(m => m.key === _cmpDistMetric) || _CMP_METRICS[0];
+  const minLen  = Math.min(...usable.map(r => r.kmStats.length));
+  const maxLen  = Math.max(...usable.map(r => r.kmStats.length));
+  if (note) {
+    note.textContent = minLen === maxLen
+      ? `共 ${minLen} km，各次骑行等长`
+      : `按最短的一次截断至 ${minLen} km（最长 ${maxLen} km），超出部分不绘制`;
+  }
+
+  wrap.innerHTML = '<div id="cmp-dist-chart" class="cmp-chart cmp-chart-tall"></div>';
+  const el = document.getElementById('cmp-dist-chart');
+  const theme = _pmcChartTheme(el.closest('.cmp-pane'));
+  const chart = _cmpInitChart(el, 'dist');
+
+  chart.setOption({
+    ..._cmpBaseOption(theme),
+    tooltip: {
+      ..._cmpBaseOption(theme).tooltip,
+      valueFormatter: v => v == null ? '—' : `${Number(v).toFixed(metric.digits)} ${metric.unit}`,
+    },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 4, textStyle: { color: theme.mutedColor } }],
+    grid: { left: 52, right: 20, top: 30, bottom: 52 },
+    xAxis: {
+      type: 'category',
+      data: Array.from({ length: minLen }, (_, i) => `${i + 1}`),
+      name: 'km', nameLocation: 'end', nameTextStyle: { color: theme.mutedColor },
+      ..._cmpAxisStyle(theme),
+      splitLine: { show: false },
+    },
+    yAxis: { type: 'value', scale: true, name: metric.unit, nameTextStyle: { color: theme.mutedColor }, ..._cmpAxisStyle(theme) },
+    series: usable.map(r => ({
+      name: r.label,
+      type: 'line',
+      showSymbol: false,
+      data: r.kmStats.slice(0, minLen).map(s => s[metric.key] ?? null),
+      lineStyle: { color: r.color, width: 2 },
+      itemStyle: { color: r.color },
+      connectNulls: false,
+    })),
+  });
+}
+
+/* ── Tab 3: 行程百分比归一 ────────────────────────────────────────────────── */
+
+// 把不等长序列线性重采样到固定点数
+function _cmpResample(values, points) {
+  const clean = values.map(v => (typeof v === 'number' && isFinite(v)) ? v : null);
+  if (clean.length < 2) return new Array(points).fill(clean[0] ?? null);
+  const out = [];
+  for (let i = 0; i < points; i++) {
+    const pos = i / (points - 1) * (clean.length - 1);
+    const lo  = Math.floor(pos);
+    const hi  = Math.min(clean.length - 1, lo + 1);
+    const a = clean[lo], b = clean[hi];
+    if (a == null || b == null) { out.push(a ?? b ?? null); continue; }
+    out.push(a + (b - a) * (pos - lo));
+  }
+  return out;
+}
+
+function _renderCmpPercent() {
+  const wrap = document.getElementById('cmp-pct-wrap');
+  if (!wrap) return;
+
+  const usable = _cmpRides.filter(r => r.kmStats.length >= 2);
+  if (!usable.length) {
+    wrap.innerHTML = '<div class="cmp-empty">逐公里数据不足，无法归一化</div>';
+    return;
+  }
+
+  const metric = _CMP_METRICS.find(m => m.key === _cmpPctMetric) || _CMP_METRICS[0];
+  const POINTS = 50;
+
+  const series = usable.map(r => {
+    const raw = r.kmStats.map(s => s[metric.key] ?? null);
+    const valid = raw.filter(v => typeof v === 'number' && isFinite(v));
+    if (!valid.length) return null;
+    const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+    if (!mean) return null;
+    const resampled = _cmpResample(raw, POINTS);
+    return {
+      name: r.label,
+      type: 'line',
+      showSymbol: false,
+      data: resampled.map(v => v == null ? null : Math.round(v / mean * 1000) / 1000),
+      lineStyle: { color: r.color, width: 2 },
+      itemStyle: { color: r.color },
+      connectNulls: false,
+    };
+  }).filter(Boolean);
+
+  if (!series.length) {
+    wrap.innerHTML = '<div class="cmp-empty">该指标在所选骑行中均无有效数据</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div id="cmp-pct-chart" class="cmp-chart cmp-chart-tall"></div>';
+  const el = document.getElementById('cmp-pct-chart');
+  const theme = _pmcChartTheme(el.closest('.cmp-pane'));
+  const chart = _cmpInitChart(el, 'pct');
+
+  chart.setOption({
+    ..._cmpBaseOption(theme),
+    tooltip: {
+      ..._cmpBaseOption(theme).tooltip,
+      valueFormatter: v => v == null ? '—' : `${(Number(v) * 100).toFixed(0)}% 自身均值`,
+    },
+    xAxis: {
+      type: 'category',
+      data: Array.from({ length: POINTS }, (_, i) => Math.round(i / (POINTS - 1) * 100)),
+      axisLabel: { color: theme.tickColor, formatter: v => `${v}%`, interval: Math.floor(POINTS / 5) },
+      axisLine: { lineStyle: { color: theme.axisColor } },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value', scale: true,
+      axisLabel: { color: theme.tickColor, formatter: v => `${Math.round(v * 100)}%` },
+      axisLine: { lineStyle: { color: theme.axisColor } },
+      splitLine: { lineStyle: { color: theme.gridColor } },
+    },
+    series,
+  });
 }
 
 async function _actLoadAllVisible() {
@@ -3123,7 +3596,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
+      if (document.getElementById('compare-modal').style.display === 'flex') closeCompareModal();
+      else if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
       else if (aiTrackId != null) closeAiView();
       else if (detailTrackId != null) closeDetailView();
       // analytics and files are sidebar views; no ESC needed
@@ -4181,6 +4655,10 @@ function toggleTheme() {
   }
   if (_analyticsOpen && _analyticsTab === 'pmc' && _pmcAllData) {
     _loadAndRenderPmc();
+  }
+  if (_cmpRides.length && document.getElementById('compare-modal').style.display === 'flex') {
+    _disposeCompareCharts();
+    switchCompareTab(_cmpTab);
   }
 }
 
