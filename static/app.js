@@ -234,6 +234,9 @@ function switchSidebarView(name) {
   if (name === 'map') {
     mapView.classList.add('active');
     map.invalidateSize();
+    // 启动时地图视图是隐藏的（默认停在骑行记录），#map 高度为 0，minZoom 只能算成 0。
+    // ResizeObserver 虽然也会补一次，但触发时机不保证，这里显式重算才是确定的。
+    _applyMinZoom();
     _refreshCdnStatus();
   } else {
     mapView.classList.remove('active');
@@ -1231,10 +1234,59 @@ async function _activityCardClick(act, cardEl) {
 }
 
 /* ── Map init ────────────────────────────────────────────────────────────── */
+// 使整个投影世界的高度刚好等于容器高度的缩放级别。低于它地图上下就会露白、
+// 南北极缩进页面内部，所以把它当作最小缩放。
+// 返回值通常是小数，需配合建图时的 zoomSnap: 0 才真正可达（见 initMap）。
+function _minZoomForViewport() {
+  const el = document.getElementById('map');
+  const h = el ? el.clientHeight : 0;
+  if (!h) return 0;
+  const world = map.getPixelWorldBounds(0);
+  const worldH = world ? world.getSize().y : 256;   // EPSG3857 下为 256
+  return Math.max(0, Math.log2(h / worldH));
+}
+
+function _applyMinZoom() {
+  if (!map) return;
+  const z = _minZoomForViewport();
+  // setMinZoom 会在当前缩放低于新下限时自动拉回
+  if (Math.abs(z - map.getMinZoom()) > 1e-6) map.setMinZoom(z);
+}
+
+// Web Mercator 的纬度截断值，即投影世界的上下边界
+const MERCATOR_MAX_LAT = 85.0511287798066;
+// 经度给一个远超可达范围的值：maxBounds 会同时约束横纵两个方向，而东西向需要
+// 保持无限滚动，用超大经度等价于横向不设限。
+const _PAN_LNG_SPAN = 1e5;
+
+// 仅靠 minZoom 还不够：世界高度等于视口高度时，上下拖拽仍会在一端露白。
+// 必须走 maxBounds 而不是监听 move 后自行 panTo —— 后者会被自己触发的 move
+// 再次调用，递归直到爆栈，届时拖动与滚轮缩放会一起失效。
+function _applyPanBounds() {
+  if (!map) return;
+  map.setMaxBounds(L.latLngBounds(
+    [-MERCATOR_MAX_LAT, -_PAN_LNG_SPAN],
+    [MERCATOR_MAX_LAT, _PAN_LNG_SPAN],
+  ));
+}
+
 function initMap() {
-  map = L.map('map', { center: [30, 116], zoom: 8, zoomControl: false });
+  map = L.map('map', {
+    center: [30, 116], zoom: 8, zoomControl: false,
+    // 必须允许小数缩放：默认 zoomSnap=1 会先把缩放取整再夹到 minZoom，
+    // 于是「世界高度正好等于视口」这个小数下限永远到不了，滚轮只能停在上一个整数级。
+    zoomSnap: 0,
+    maxBoundsViscosity: 1.0,     // 硬边界，不做橡皮筋回弹
+  });
   setTiles('dark-nolabels');
-  setTimeout(() => map.invalidateSize(), 200);
+  _applyMinZoom();
+  _applyPanBounds();
+  // 容器尺寸受窗口、侧栏切换、底部轨迹面板拖拽影响，统一用 ResizeObserver 兜住
+  const mapEl = document.getElementById('map');
+  if (mapEl && window.ResizeObserver) {
+    new ResizeObserver(() => _applyMinZoom()).observe(mapEl);
+  }
+  setTimeout(() => { map.invalidateSize(); _applyMinZoom(); }, 200);
 }
 
 function setTiles(name) {
@@ -1804,19 +1856,27 @@ function initZoomSlider() {
   const thumb  = document.getElementById('zoom-thumb');
   const track  = document.getElementById('zoom-track');
   const TRACK_H = 180, THUMB_H = 16, RANGE = TRACK_H - THUMB_H;
-  const MIN_Z = 1, MAX_Z = 18;
+  const MAX_Z = 18;
+
+  // 下限随容器高度变化，不能写死：写死后滑块底端与地图实际能到的最小缩放会脱节
+  const minZ = () => map.getMinZoom();
 
   function zoomToTop(z) {
-    return RANGE * (1 - (Math.max(MIN_Z, Math.min(MAX_Z, z)) - MIN_Z) / (MAX_Z - MIN_Z));
+    const lo = minZ();
+    if (MAX_Z <= lo) return 0;
+    return RANGE * (1 - (Math.max(lo, Math.min(MAX_Z, z)) - lo) / (MAX_Z - lo));
   }
   function topToZoom(top) {
-    return Math.round(MIN_Z + (1 - top / RANGE) * (MAX_Z - MIN_Z));
+    const lo = minZ();
+    const z = lo + (1 - top / RANGE) * (MAX_Z - lo);
+    // 拖到最底就给出精确下限，避免取整后又被夹回、缩略图与地图对不上
+    return top >= RANGE - 0.5 ? lo : Math.round(z);
   }
   function syncThumb() {
     thumb.style.top = zoomToTop(map.getZoom()) + 'px';
   }
 
-  map.on('zoom', syncThumb);
+  map.on('zoom zoomend', syncThumb);
   syncThumb();
 
   // Mouse drag
@@ -1854,11 +1914,14 @@ function initZoomSlider() {
   document.addEventListener('touchend', () => { dragging = false; });
 
   // +/- buttons
+  // zoomSnap=0 允许小数缩放，按钮仍按整数级走，否则连点会停在 3.27 这类级别上
   document.getElementById('zoom-in-btn').addEventListener('click', () => {
-    map.setZoom(Math.min(MAX_Z, map.getZoom() + 1));
+    const z = map.getZoom();
+    map.setZoom(Math.min(MAX_Z, Math.floor(z + 1e-6) + 1));
   });
   document.getElementById('zoom-out-btn').addEventListener('click', () => {
-    map.setZoom(Math.max(MIN_Z, map.getZoom() - 1));
+    const z = map.getZoom();
+    map.setZoom(Math.max(minZ(), Math.ceil(z - 1e-6) - 1));
   });
 
   // Click on track (jump to position)

@@ -153,6 +153,12 @@ The 23 checks run in 8 phases. The load-bearing ones:
 - **`version-date`** — the `version` file must be `vYYYY.MM.DD` matching the last commit date. Bump it when committing.
 - **`staged-secrets-scan`**, **`dockerignore`**, **`python-security`** (bandit, `-ll`), **`file-permissions`** (0700 dirs / 0600 files), **`sqlite-integrity`**.
 
+Several checks silently degrade to `[SKIP]` when their tool is absent, so CI installs `bandit` and `PyYAML` explicitly — otherwise `python-security` and `docker-compose-yaml` are listed as passing checks that never actually ran. Bandit's surviving findings are all false positives and carry inline `# nosec <id>` with the reason (bind-to-all in server mode, `?`-only SQL interpolation, urlopen against hardcoded HTTPS constants, MD5 mandated by the OneLap protocol). `hadolint` is still not installed, so `dockerfile-lint` skips.
+
+### CI (`.gitea/workflows/ci.yml`)
+
+One workflow, two jobs: `quality` runs on every push and PR; `build` declares `needs: quality` and is further gated by `if` to `main`, `v*` tags and manual dispatch. Keeping them in separate workflow files makes them run **in parallel**, which lets an image publish while the gate is red — that was the previous setup.
+
 Other hard-coded defenses to preserve: `_validate_filename_in_input` (rejects symlinks, requires parent == resolved input dir), `_resolve_public_api_base` (SSRF: HTTPS-only, blocks RFC1918/loopback/link-local for v4 and v6), `_check_same_origin` before-request hook, CSP/HSTS in `_security_headers`, `_atomic_write_json` for every JSON write, and the 16 MB `MAX_CONTENT_LENGTH`.
 
 ### Key data conventions
@@ -274,6 +280,19 @@ Frontend notes:
 - Markdown always goes through `DOMPurify.sanitize(marked.parse(...))`. Never assign raw model output to `innerHTML`.
 - Uploaded-only tracks have no library filename, so `/api/records` is unavailable — fall back to the returned `timeStats` / `kmStats`.
 - UI text is Chinese unless a section is already English-only.
+
+### Map zoom floor
+
+The track map's minimum zoom is computed from the container height (`_minZoomForViewport`) so the projected world is never shorter than the viewport — zoomed all the way out, the Mercator poles (±85.0511°) sit exactly on the top and bottom edges. A `ResizeObserver` on `#map` re-applies it, since the container is resized by window changes, sidebar switches and the bottom track panel.
+
+That floor is fractional (≈1.67 at 815 px), which forces two non-obvious settings:
+
+- **`zoomSnap: 0`** on the main map. Leaflet's `_limitZoom` snaps *before* clamping, so with the default `zoomSnap: 1` a fractional `minZoom` is unreachable — zooming out stops at the next integer and the poles never reach the edges. The cost is that most zoom levels become fractional, so tiles are scaled; the default CartoDB layers are `@2x`, which absorbs it. The zoom buttons re-quantize to integers so repeated clicks don't strand the map on 3.27.
+- **`maxBounds`** with `±85.0511°` latitude and a deliberately absurd `±1e5` longitude. Constraining latitude alone is not expressible in Leaflet's API, and the huge longitude span makes `_getBoundsOffset` return zero horizontal offset, preserving infinite east-west scroll. Without this, the world exactly fills the height but can still be dragged vertically off-screen.
+
+Do **not** clamp panning by listening for `move` and calling `panTo` — `panTo` fires `move`, which re-enters the handler until the stack overflows, and the blown stack takes map dragging and wheel zoom down with it. `maxBounds` clamps inside `_limitCenter`, before the move happens.
+
+The detail-view route map is a separate `L.map` instance and keeps Leaflet's defaults.
 
 ### CSS
 
