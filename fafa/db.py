@@ -111,9 +111,10 @@ def save_tags(filename: str, tag_ids: list, db_path: Path | None = None) -> None
 def _validate_tag_ids_conn(conn: sqlite3.Connection, tag_ids: set[int]) -> None:
     if not tag_ids:
         return
+    # 插值进 SQL 的只有 '?' 占位符本身，取值全部走参数绑定
     placeholders = ','.join('?' for _ in tag_ids)
     rows = conn.execute(
-        f"SELECT id FROM tags WHERE id IN ({placeholders})", tuple(tag_ids)
+        f"SELECT id FROM tags WHERE id IN ({placeholders})", tuple(tag_ids)  # nosec B608
     ).fetchall()
     existing = {int(row["id"]) for row in rows}
     missing = sorted(tag_ids - existing)
@@ -136,10 +137,11 @@ def batch_update_tags(
     with _db_lock, _connect(db_path) as conn:
         _validate_tag_ids_conn(conn, add_ids | remove_ids)
         if remove_ids:
+            # 同上：插值的只有 '?' 占位符，取值走参数绑定
             placeholders = ','.join('?' for _ in remove_ids)
             for filename in unique_filenames:
                 conn.execute(
-                    f"DELETE FROM activity_tags WHERE filename = ? AND tag_id IN ({placeholders})",
+                    f"DELETE FROM activity_tags WHERE filename = ? AND tag_id IN ({placeholders})",  # nosec B608
                     (filename, *remove_ids),
                 )
         if add_ids:

@@ -69,7 +69,9 @@ if SERVER_MODE:
 
 def _bind_host() -> str:
     """Keep unauthenticated local mode on loopback unless explicitly overridden."""
-    host = os.environ.get('FAFA_HOST') or ('0.0.0.0' if SERVER_MODE else '127.0.0.1')
+    # 服务模式本就要对外提供服务；本地模式默认回环，非回环地址需由下方
+    # FAFA_ALLOW_INSECURE_REMOTE 显式放行才生效
+    host = os.environ.get('FAFA_HOST') or ('0.0.0.0' if SERVER_MODE else '127.0.0.1')  # nosec B104
     if SERVER_MODE or os.environ.get('FAFA_ALLOW_INSECURE_REMOTE') == '1':
         return host
     try:
@@ -343,7 +345,8 @@ def login_page():
         username = (request.form.get('username') or '').strip()
         valid_username = bool(re.fullmatch(r'[A-Za-z0-9_-]{1,32}', username))
         user_rk = f'u:{username.lower()}' if valid_username else None
-        ip_rk = f'ip:{request.remote_addr or "0.0.0.0"}'
+        # 限流键的兜底字符串，不是监听地址
+        ip_rk = f'ip:{request.remote_addr or "0.0.0.0"}'  # nosec B104
         rate_keys = [key for key in (user_rk, ip_rk) if key]
         if not all(_check_login_rate(key) for key in rate_keys):
             error = '登录尝试过于频繁，请稍后再试'

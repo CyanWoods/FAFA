@@ -102,7 +102,8 @@ class IGPSportClient:
         for attempt in range(1, 4):
             req = urllib.request.Request(url, data=payload, headers=_HEADERS)
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                # URL 由模块内硬编码的 HTTPS 常量 _BASE_URL 拼出，非外部输入
+                with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
                     data = json.loads(resp.read().decode("utf-8"))
                 if data.get("code") != 0:
                     raise RuntimeError(data.get("message") or "登录失败")
@@ -121,7 +122,8 @@ class IGPSportClient:
             url += "?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url)
         req.add_header("Authorization", f"Bearer {self.token}")
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # 同上：URL 源自硬编码的 _BASE_URL
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
             return json.loads(resp.read().decode())
 
     def get_all_activities(self, max_activities: int | None = None) -> list[dict]:

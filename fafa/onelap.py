@@ -44,7 +44,9 @@ def sign(params: dict) -> dict:
     merged = {k: (None if v == "" else v) for k, v in params.items()}
     merged.update(nonce=nonce, timestamp=ts)
     parts = [f"{k}={v}" for k, v in sorted(merged.items()) if v is not None]
-    sig = hashlib.md5(("&".join(parts) + f"&key={SIGN_KEY}").encode()).hexdigest()
+    # MD5 是顽鹿接口签名算法的规定，用于请求完整性校验而非安全散列
+    sig = hashlib.md5(("&".join(parts) + f"&key={SIGN_KEY}").encode(),
+                      usedforsecurity=False).hexdigest()
     return {"nonce": nonce, "timestamp": ts, "sign": sig}
 
 
@@ -393,7 +395,8 @@ LOGIN_API = f"{ONELAP_WEB}/api/login"
 
 def api_login(username: str, password: str) -> dict:
     """账号密码直接 API 登录顽鹿，返回 {token, cookies}。"""
-    pwd_md5 = hashlib.md5(password.encode()).hexdigest()
+    # 顽鹿登录接口要求提交 md5(password)，散列算法由对方协议决定，我方无从选择
+    pwd_md5 = hashlib.md5(password.encode()).hexdigest()  # nosec B324
     payload = {"account": username, "password": pwd_md5}
 
     sess = requests.Session()
