@@ -1650,6 +1650,94 @@ def _load_user_prompts() -> tuple[dict, dict]:
     return {}, {}
 
 
+def _prompts_path() -> Path:
+    return _user_input_dir() / 'prompts.json'
+
+
+def _prompts_history_path() -> Path:
+    return _user_input_dir() / 'prompts_history.json'
+
+
+def _read_json_file(path: Path, what: str) -> dict:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        logging.warning('%s 读取失败，按空处理: %s', what, e)
+    return {}
+
+
+def _save_user_prompt(kind: str, text: str | None) -> dict:
+    """保存一份模板。text 为 None 或等于默认值 → 删除该键（即恢复默认）。
+
+    写入顺序刻意为「先历史、后当前」：两次写之间若崩溃，宁可历史多一条与现值
+    重复的条目（无害），也不能让被替换掉的旧文本无处可寻。
+    """
+    if kind not in _prompts.DEFAULT_TEMPLATES:
+        raise ValueError('未知的提示词类型')
+
+    path = _prompts_path()
+    lock_fh = _locked_file(path)
+    try:
+        current_doc = _read_json_file(path, 'prompts.json')
+        templates = dict(current_doc.get('templates') or {})
+        previous = templates.get(kind)
+
+        normalized = None
+        if isinstance(text, str) and text.strip():
+            if len(text) > _prompts.MAX_TEMPLATE_CHARS:
+                raise ValueError(f'模板长度不能超过 {_prompts.MAX_TEMPLATE_CHARS} 字符')
+            # 与默认值一致就不存副本，否则默认模板日后改进时这份会僵在旧文本上
+            normalized = None if text == _prompts.DEFAULT_TEMPLATES[kind] else text
+
+        if normalized == previous:
+            return {'changed': False, 'is_default': normalized is None}
+
+        if isinstance(previous, str) and previous.strip():
+            _push_prompt_history(kind, previous)
+
+        if normalized is None:
+            templates.pop(kind, None)
+        else:
+            templates[kind] = normalized
+        current_doc['version'] = 1
+        current_doc['templates'] = templates
+        _atomic_write_json(path, current_doc)
+        return {'changed': True, 'is_default': normalized is None}
+    finally:
+        lock_fh.close()
+
+
+def _push_prompt_history(kind: str, text: str) -> None:
+    """把被替换掉的旧文本压入历史队首，每种类型滚动保留 MAX_HISTORY_PER_KIND 条。
+
+    条目标识用单调递增的 rev，不能用 ts：秒级时间戳在连续保存时会重复，
+    重复后按 ts 取正文永远只能命中第一条。ts 仅用于界面展示。
+    """
+    path = _prompts_history_path()
+    doc = _read_json_file(path, 'prompts_history.json')
+    history = doc.get('history')
+    if not isinstance(history, dict):
+        history = {}
+    entries = [e for e in (history.get(kind) or []) if isinstance(e, dict)]
+    try:
+        next_rev = int(doc.get('next_rev') or 1)
+    except (TypeError, ValueError):
+        next_rev = 1
+    next_rev = max(next_rev, max((int(e.get('rev') or 0) for e in entries), default=0) + 1)
+
+    entries.insert(0, {
+        'rev': next_rev, 'ts': int(time.time()), 'chars': len(text), 'text': text,
+    })
+    history[kind] = entries[:_prompts.MAX_HISTORY_PER_KIND]
+    doc['version'] = 1
+    doc['next_rev'] = next_rev + 1
+    doc['history'] = history
+    _atomic_write_json(path, doc)
+
+
 def _summary_scalars(summary: dict) -> dict:
     """把 summary 铺成占位符值。含单位，None → 无数据（与改造前 fmt() 一致）。"""
     fmt = _prompts.fmt_value
@@ -1722,16 +1810,15 @@ def _activity_meta_scalars(template: str, filename: str) -> dict:
     }
 
 
-def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str,
-                       time_stats: list | None = None,
-                       wind_data: dict | None = None) -> str:
-    templates, block_cfg = _load_user_prompts()
-    template = _prompts.resolve_template('evaluate', templates)
-    blocks_cfg = _prompts.resolve_blocks(block_cfg)
-
+def _eval_inputs(data: dict, template: str, blocks_cfg: dict) -> tuple[dict, dict]:
+    """把单次骑行的原始数据装配成占位符值与数据块。预览与实际请求共用此函数，
+    因此设置界面看到的渲染结果与真正发给模型的内容不会出现偏差。"""
+    summary = data.get('summary') or {}
+    filename = data.get('filename') or ''
+    wind_data = data.get('wind_data')
     scalars = {
-        'filename':   filename or '',
-        'start_time': start_time or '',
+        'filename':   filename,
+        'start_time': data.get('start_time') or '',
         **_summary_scalars(summary),
         **_wind_scalars(wind_data),
         **_activity_meta_scalars(template, filename),
@@ -1740,23 +1827,46 @@ def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time:
     blocks = {
         'left_right': _prompts.build_left_right(summary.get('left_pct')),
         'wind':       _prompts.build_wind_block(wind_data, source_label),
-        'km_table':   _prompts.build_km_table(km_stats or [], blocks_cfg['km_table_rows']),
-        'time_table': _prompts.build_time_table(time_stats or [], blocks_cfg['time_table_rows']),
+        'km_table':   _prompts.build_km_table(
+            data.get('km_stats') or [], blocks_cfg['km_table_rows']),
+        'time_table': _prompts.build_time_table(
+            data.get('time_stats') or [], blocks_cfg['time_table_rows']),
     }
-    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
-    return text
+    return scalars, blocks
 
 
-def _build_compare_prompt(activities: list) -> str:
-    templates, block_cfg = _load_user_prompts()
-    template = _prompts.resolve_template('compare', templates)
-    blocks_cfg = _prompts.resolve_blocks(block_cfg)
-    blocks = {
+def _compare_inputs(data: dict, template: str, blocks_cfg: dict) -> tuple[dict, dict]:
+    activities = data.get('activities') or []
+    return {}, {
         'compare_table':  _prompts.build_compare_table(activities),
         'compare_detail': _prompts.build_compare_detail(
             activities, blocks_cfg['compare_km_rows']),
     }
-    text, _warnings = _prompts.render(template, scalars={}, blocks=blocks)
+
+
+def _render_kind(kind: str, data: dict, *, template_override: str | None = None) -> tuple[str, list]:
+    """按 kind 解析模板并渲染。template_override 供预览传入未保存的草稿。"""
+    templates, block_cfg = _load_user_prompts()
+    template = template_override if template_override is not None else \
+        _prompts.resolve_template(kind, templates)
+    blocks_cfg = _prompts.resolve_blocks(block_cfg)
+    builder = _KIND_INPUTS[kind]
+    scalars, blocks = builder(data, template, blocks_cfg)
+    return _prompts.render(template, scalars=scalars, blocks=blocks)
+
+
+def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str,
+                       time_stats: list | None = None,
+                       wind_data: dict | None = None) -> str:
+    text, _warnings = _render_kind('evaluate', {
+        'summary': summary, 'km_stats': km_stats, 'filename': filename,
+        'start_time': start_time, 'time_stats': time_stats, 'wind_data': wind_data,
+    })
+    return text
+
+
+def _build_compare_prompt(activities: list) -> str:
+    text, _warnings = _render_kind('compare', {'activities': activities})
     return text
 
 
@@ -2352,11 +2462,7 @@ def parse_status():
 
 
 # ── AI PMC 体能分析 ───────────────────────────────────────────────────────────
-def _build_pmc_prompt(data: dict) -> str:
-    templates, block_cfg = _load_user_prompts()
-    template = _prompts.resolve_template('pmc', templates)
-    blocks_cfg = _prompts.resolve_blocks(block_cfg)
-
+def _pmc_inputs(data: dict, template: str, blocks_cfg: dict) -> tuple[dict, dict]:
     cur   = data.get("current", {})
     trend = data.get("trend", {})
     rides = data.get("recent_rides", [])
@@ -2391,7 +2497,11 @@ def _build_pmc_prompt(data: dict) -> str:
         'recent_rides':      _prompts.build_recent_rides(
             rides, blocks_cfg['recent_rides_rows']),
     }
-    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
+    return scalars, blocks
+
+
+def _build_pmc_prompt(data: dict) -> str:
+    text, _warnings = _render_kind('pmc', data)
     return text
 
 
@@ -2409,12 +2519,8 @@ def ai_pmc():
     return _llm_stream(cfg, prompt)
 
 
-def _build_calendar_prompt(data: dict) -> str:
-    templates, block_cfg = _load_user_prompts()
+def _calendar_inputs(data: dict, template: str, blocks_cfg: dict) -> tuple[dict, dict]:
     period = data.get("period", "30d")
-    kind = 'calendar_7d' if period == '7d' else 'calendar_30d'
-    template = _prompts.resolve_template(kind, templates)
-
     acts = data.get("activities", [])
     total_dist = sum((a.get("dist_km") or 0) for a in acts)
     total_dur  = sum((a.get("dur_min") or 0) for a in acts)
@@ -2429,7 +2535,23 @@ def _build_calendar_prompt(data: dict) -> str:
         'period_elev_m':  f'{total_elev:.0f}',
     }
     blocks = {'calendar_rides': _prompts.build_calendar_rides(acts)}
-    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
+    return scalars, blocks
+
+
+# kind → 输入装配函数。calendar_7d / calendar_30d 共用同一份装配逻辑，
+# 差异只在各自的默认模板文本里。
+_KIND_INPUTS = {
+    'evaluate':     _eval_inputs,
+    'compare':      _compare_inputs,
+    'pmc':          _pmc_inputs,
+    'calendar_7d':  _calendar_inputs,
+    'calendar_30d': _calendar_inputs,
+}
+
+
+def _build_calendar_prompt(data: dict) -> str:
+    kind = 'calendar_7d' if data.get('period') == '7d' else 'calendar_30d'
+    text, _warnings = _render_kind(kind, data)
     return text
 
 
@@ -2827,6 +2949,250 @@ def delete_tag(tag_id):
     if not ok:
         return jsonify(error="preset tags cannot be deleted"), 403
     return jsonify(ok=True)
+
+
+# ── AI 提示词模板 ─────────────────────────────────────────────────────────────
+
+def _sample_activity_data() -> dict:
+    """预览用样本。优先取库里最新一条真实骑行，没有则退回内置示例，
+    保证零文件的新用户也能预览。"""
+    fallback = {
+        'summary': {
+            'total_dist_km': 82.4, 'total_duration_s': 10800, 'moving_time_s': 10200,
+            'avg_speed_kmh': 28.1, 'max_speed_kmh': 54.2, 'avg_hr': 148, 'max_hr': 178,
+            'avg_power': 210, 'max_power': 620, 'normalized_power': 231,
+            'avg_cadence': 84, 'total_elevation_gain_m': 640,
+            'total_elevation_loss_m': 655, 'total_calories_kcal': 1980,
+            'avg_temp_c': 28.4, 'left_pct': 47.0, 'tss': 145,
+        },
+        'km_stats': [{
+            'km': i, 'duration_s': 128, 'avg_speed_kmh': 28.0 + (i % 5) * 0.4,
+            'avg_hr': 145 + (i % 4), 'avg_power': 205 + (i % 6) * 3,
+            'avg_cadence': 84, 'elevation_gain_m': 8, 'avg_grade_pct': 1.2,
+        } for i in range(1, 13)],
+        'time_stats': [],
+        'filename': '示例骑行.fit',
+        'start_time': '2026-06-08T18:33:11',
+        'wind_data': None,
+    }
+    try:
+        paths = _library_fit_paths(_user_input_dir())
+        if not paths:
+            return fallback
+        newest = max(paths, key=lambda p: p.stat().st_mtime)
+        parsed = _parse_and_build(str(newest), newest.name)
+        return {
+            'summary':     parsed.get('summary') or {},
+            'km_stats':    parsed.get('km_stats') or [],
+            'time_stats':  parsed.get('time_stats') or [],
+            'filename':    newest.name,
+            'start_time':  parsed.get('time_stats_start') or '',
+            'wind_data':   None,
+        }
+    except Exception as e:
+        logging.warning('预览样本取真实骑行失败，改用内置示例: %s', e)
+        return fallback
+
+
+def _sample_payload(kind: str) -> dict:
+    """各类型的预览输入。evaluate/compare 用真实骑行；pmc/calendar 的数据由前端
+    计算后随请求上送，后端无从重算，故用代表性示例。"""
+    if kind == 'evaluate':
+        return _sample_activity_data()
+    if kind == 'compare':
+        base = _sample_activity_data()
+        second = {**base, 'km_stats': (base.get('km_stats') or [])[:6]}
+        return {'activities': [base, second]}
+    if kind == 'pmc':
+        return {
+            'current': {'ctl': 62.3, 'atl': 41.2, 'tsb': 21.1},
+            'trend': {'ctl_7d_ago': 58.1, 'ctl_30d_ago': 44.9},
+            'settings': {'ftp': 240, 'weight_kg': 68, 'wkg': 3.5},
+            'total_activities': 233, 'first_date': '2025-01-04',
+            'zone_distribution': 'Z1 20% | Z2 35% | Z3 25% | Z4 12% | Z5 8%',
+            'power_curve_alltime': '5s 900W | 1m 480W | 5m 320W | 20m 265W',
+            'power_curve_90d': '5s 850W | 1m 455W | 5m 305W | 20m 252W',
+            'recent_rides': [{
+                'date': f'2026-06-{d:02d}', 'dist_km': 40.0 + d, 'dur_min': 90 + d,
+                'tss': 80 + d, 'avg_hr': 142, 'avg_power': 205,
+            } for d in range(1, 9)],
+        }
+    period = '7d' if kind == 'calendar_7d' else '30d'
+    return {
+        'period': period,
+        'current_date': datetime.now().strftime('%Y-%m-%d'),
+        'activities': [{
+            'date': f'2026-06-{d:02d}', 'dist_km': 30.0 + d, 'dur_min': 70 + d,
+            'avg_hr': 141, 'avg_power': 198, 'elevation_m': 200 + d,
+        } for d in range(1, 8)],
+    }
+
+
+@app.route("/api/prompts")
+@_auth.login_required
+def get_prompts():
+    templates, blocks = _load_user_prompts()
+    customized = {
+        kind: templates.get(kind)
+        for kind in _prompts.TEMPLATE_KINDS
+        if isinstance(templates.get(kind), str) and templates[kind].strip()
+    }
+    return jsonify(
+        templates=customized,
+        blocks=_prompts.resolve_blocks(blocks),
+        defaults=_prompts.DEFAULT_TEMPLATES,
+        labels=_prompts.TEMPLATE_LABELS,
+        kinds=list(_prompts.TEMPLATE_KINDS),
+        catalog=_prompts.catalog(),
+        limits={
+            'max_template_chars': _prompts.MAX_TEMPLATE_CHARS,
+            'max_history_per_kind': _prompts.MAX_HISTORY_PER_KIND,
+        },
+    )
+
+
+@app.route("/api/prompts", methods=["POST"])
+@_auth.login_required
+def save_prompts():
+    body = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(body, _prompts.MAX_TEMPLATE_CHARS * 4)
+    if too_large:
+        return too_large
+
+    # 先把两部分全部校验完再落盘。前端一次提交同时带 text 和 blocks，
+    # 若边写边校验，块参数越界会在模板已写入（并推了历史）之后才报错，
+    # 用户看到「保存失败」却其实已保存，再点一次又多一条历史。
+    kind = text = None
+    if 'kind' in body:
+        kind = body.get('kind')
+        text = body.get('text')
+        if kind not in _prompts.DEFAULT_TEMPLATES:
+            return jsonify(error='未知的提示词类型'), 400
+        if text is not None and not isinstance(text, str):
+            return jsonify(error='text 必须是字符串'), 400
+        if isinstance(text, str) and len(text) > _prompts.MAX_TEMPLATE_CHARS:
+            return jsonify(error=f'模板长度不能超过 {_prompts.MAX_TEMPLATE_CHARS} 字符'), 400
+
+    blocks = None
+    if 'blocks' in body:
+        blocks = body.get('blocks')
+        if not isinstance(blocks, dict):
+            return jsonify(error='blocks 必须是对象'), 400
+        unknown = set(blocks) - set(_prompts.BLOCK_PARAM_RANGES)
+        if unknown:
+            return jsonify(error=f'不支持的块参数: {sorted(unknown)[0]}'), 400
+        for key, value in blocks.items():
+            low, high = _prompts.BLOCK_PARAM_RANGES[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return jsonify(error=f'{key} 必须是数字'), 400
+            if not math.isfinite(value) or not low <= value <= high:
+                return jsonify(error=f'{key} 必须在 {low}-{high} 之间'), 400
+
+    result = {}
+    if kind is not None:
+        try:
+            result = _save_user_prompt(kind, text)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    if blocks is not None:
+        path = _prompts_path()
+        lock_fh = _locked_file(path)
+        try:
+            doc = _read_json_file(path, 'prompts.json')
+            merged = dict(doc.get('blocks') or {})
+            merged.update({k: int(v) for k, v in blocks.items()})
+            doc['version'] = 1
+            doc['blocks'] = merged
+            _atomic_write_json(path, doc)
+        finally:
+            lock_fh.close()
+
+    return jsonify(ok=True, **result)
+
+
+@app.route("/api/prompts/reset", methods=["POST"])
+@_auth.login_required
+def reset_prompts():
+    """恢复默认 = 删除自定义键，默认模板本身在代码里，不可能丢。"""
+    body = request.get_json(silent=True) or {}
+    kind = body.get('kind')
+    kinds = list(_prompts.TEMPLATE_KINDS) if kind in (None, 'all') else [kind]
+    for item in kinds:
+        if item not in _prompts.DEFAULT_TEMPLATES:
+            return jsonify(error='未知的提示词类型'), 400
+    for item in kinds:
+        _save_user_prompt(item, None)
+    return jsonify(ok=True, reset=kinds)
+
+
+@app.route("/api/prompts/history")
+@_auth.login_required
+def get_prompts_history():
+    """只返回条目元信息，正文按需另取，避免列表接口驮着几十 KB 文本。"""
+    doc = _read_json_file(_prompts_history_path(), 'prompts_history.json')
+    history = doc.get('history') if isinstance(doc.get('history'), dict) else {}
+    out = {}
+    for kind in _prompts.TEMPLATE_KINDS:
+        entries = [e for e in (history.get(kind) or []) if isinstance(e, dict)]
+        out[kind] = [
+            {
+                'rev':   int(e.get('rev') or 0),
+                'ts':    int(e.get('ts') or 0),
+                'chars': int(e.get('chars') or 0),
+            }
+            for e in entries
+        ]
+    return jsonify(history=out)
+
+
+@app.route("/api/prompts/history/<kind>/<int:rev>")
+@_auth.login_required
+def get_prompt_history_entry(kind: str, rev: int):
+    if kind not in _prompts.DEFAULT_TEMPLATES:
+        return jsonify(error='未知的提示词类型'), 400
+    doc = _read_json_file(_prompts_history_path(), 'prompts_history.json')
+    history = doc.get('history') if isinstance(doc.get('history'), dict) else {}
+    for entry in (history.get(kind) or []):
+        if isinstance(entry, dict) and int(entry.get('rev') or 0) == rev:
+            return jsonify(
+                rev=rev, ts=int(entry.get('ts') or 0), text=str(entry.get('text') or ''),
+            )
+    return jsonify(error='版本不存在'), 404
+
+
+@app.route("/api/prompts/preview", methods=["POST"])
+@_auth.login_required
+def preview_prompt():
+    """用样本数据渲染草稿模板。走 _render_kind 同一条装配路径，
+    因此预览结果与真正发给模型的内容一致。"""
+    body = request.get_json(silent=True) or {}
+    too_large = _reject_large_json(body, _prompts.MAX_TEMPLATE_CHARS * 2)
+    if too_large:
+        return too_large
+
+    kind = body.get('kind')
+    if kind not in _prompts.DEFAULT_TEMPLATES:
+        return jsonify(error='未知的提示词类型'), 400
+    template = body.get('template')
+    if template is not None and not isinstance(template, str):
+        return jsonify(error='template 必须是字符串'), 400
+    if isinstance(template, str) and len(template) > _prompts.MAX_TEMPLATE_CHARS:
+        return jsonify(error=f'模板长度不能超过 {_prompts.MAX_TEMPLATE_CHARS} 字符'), 400
+
+    try:
+        text, warnings = _render_kind(kind, _sample_payload(kind), template_override=template)
+    except Exception as e:
+        logging.warning('提示词预览失败 (%s): %s', kind, e)
+        return jsonify(error=f'预览失败: {e}'), 500
+
+    return jsonify(
+        text=text,
+        warnings=warnings,
+        chars=len(text),
+        # 中文约 1 字 ≈ 1 token，英文约 4 字符 ≈ 1 token，取粗略中间值
+        est_tokens=round(len(text) / 1.6),
+    )
 
 
 if __name__ == "__main__":
