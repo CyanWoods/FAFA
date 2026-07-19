@@ -129,6 +129,7 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `parser.py` | `parse_fit()` → `FitData`/`Record`. `Decoder.read()` must keep `apply_scale_and_offset=True`, `merge_heart_rates=False`, `expand_sub_fields=True`. Also `decode_lr_balance()` (bit 7 = side flag, raw `0` = no reading). |
 | `stats.py` | `compute_km_stats` / `compute_dist_stats(step_m=100)` / `compute_time_stats(step_s=60)` / `compute_summary`. `_check_fit_limits` rejects >200 000 records or >24 h span. `compute_time_stats` gap-fills paused intervals with zero segments so index *i* always maps to real clock time. |
 | `gcj02.py` | WGS-84 ↔ GCJ-02 math + `needs_wgs84_conversion()`. |
+| `prompts.py` | AI 提示词默认模板、变量目录、渲染器。See "Prompt templates" below. |
 | `db.py` | Per-user SQLite (WAL). Tables `activity_meta`, `tags`, `activity_tags`; 5 preset tags seeded. |
 | `auth.py` | `users.db`, password hashing, `login_required`, exponential login lockout. |
 | `onelap.py` | OneLap: request signing, API/browser login, list, download, Magene renaming. |
@@ -172,6 +173,48 @@ All AI endpoints stream Server-Sent Events through `_llm_stream()`, which POSTs 
 - `/api/ai/calendar` — 7 d / 30 d training suggestions
 - `/api/ai/chat` — multi-turn, max 100 messages / 200 000 chars
 
+### Prompt templates (`fafa/prompts.py`)
+
+The four `_build_*_prompt()` functions in `app.py` no longer assemble strings — they gather values and hand them to `_prompts.render()`. Five templates: `evaluate`, `compare`, `pmc`, `calendar_7d`, `calendar_30d`.
+
+**Never render user templates with Jinja2 or any evaluating engine.** Flask already ships Jinja2, so `render_template_string` is one import away — and it is SSTI → RCE. In server mode that reads every other user's `config.json` (API keys) and `users.db`. The renderer is a whitelist lookup driven by a **single `re.sub` pass**; because block output is never re-scanned, recursive expansion is structurally impossible. Keep it that way.
+
+Three rules the renderer implements, all load-bearing for output parity with the pre-refactor builders:
+
+- Scalar values **carry their own unit** (`"82.4 km"`), because `None` must render `无数据`, not `无数据 km`.
+- A line containing ≥1 placeholder where **all** placeholders render empty is **deleted entirely**. This reproduces every `if filename: lines.append(...)` conditional the old builders had.
+- Runs of blank lines collapse to one, so a block that renders empty leaves no hole.
+
+Defaults live in `DEFAULT_TEMPLATES` as module constants and are **never written to disk**. A user file stores only the templates that were actually customized, so a missing key transparently falls back — which also means unedited templates pick up improvements on upgrade, and a corrupt or deleted `prompts.json` degrades to defaults instead of failing. `resolve_template()` treats whitespace-only custom text as absent, and falls back for anything over `MAX_TEMPLATE_CHARS` (a hand-edited file bypasses the save-time check).
+
+`build_*` helpers own the table formatting and take a row-cap parameter (`km_table_rows`, `time_table_rows`, …), clamped by `BLOCK_PARAM_RANGES` in `resolve_blocks()`. Note the `max(1, max_rows // 2)` in `build_km_table` — with a bare `max_rows // 2`, `max_rows=1` yields `km_stats[-0:]`, which is the *entire* list rather than nothing.
+
+Ask `references(template, 'note', 'tags')` before doing work that only a placeholder needs — `_activity_meta_scalars()` uses it to skip SQLite entirely on the default path. It matches via `_TOKEN_RE`, not substring: `{{ note }}` with spaces is a valid reference, and a substring check silently misses it, producing empty data with no error.
+
+Equivalence with the pre-refactor builders was verified over 180 prompts from 60 real FIT files: `compare` is byte-identical; `evaluate` differs only by the deliberate fix below.
+
+> Fixed while extracting: when wind data was present, the old builder appended `### 8. 风力影响评估` *inside the data section*, ahead of `### 1`, and pushed the `- 左右功率平衡` data bullet in among the instruction text. Section 8 is now a normal always-present section with conditional wording, matching how `### 3`/`### 5` already worked.
+
+### Ride comparison (chart-based)
+
+Select ≥2 rides in the activities view → **图表对比** (`_actBulkChartCompare`) opens `#compare-modal`. Entirely client-side — no comparison endpoint exists. Rides are sorted by `start_time` ascending so the earliest acts as the "before" baseline; same-day rides get `HH:MM` appended to disambiguate ECharts series names.
+
+Data comes from `_actActivities` (`summary`, `peak_power`, `zone_time_s` — already cached, no fetch) plus `_fetchActivityData()` per ride for `km_stats` (`/api/load`) and wind (`/api/weather`). Three tabs:
+
+| Tab | Content | Alignment |
+|---|---|---|
+| 聚合指标 | metric table with Δ% vs baseline, peak-power curve, stacked power-zone bars | none — scalars |
+| 逐公里 | per-km line chart, metric switcher, `dataZoom` | absolute km, truncated to the shortest ride |
+| 行程 % | per-km resampled to 50 points, y = ratio to each ride's own mean | normalized 0–100 % of ride |
+
+`_cmpWindNormalize()` mirrors `fafa.prompts.wind_normalize_speed()` exactly (0.25 km/h per 1 km/h effective headwind) — **keep the two in sync**. Zone bars normalize each ride against its own pedaling time so ride length doesn't skew the comparison.
+
+Comparison lines are drawn unsmoothed (`smooth` omitted) — the raw per-km shape is the signal, interpolation invents data. The peak-power x-axis is a **category** axis, not log: a log axis picks 10/100/1000 as ticks and drops the 1m/5m/20m labels.
+
+Two teardown invariants, both easy to break:
+- `_disposeCompareCharts()` must run on close **and** on theme toggle — ECharts instances capture their theme at `init`, so a themed redraw requires disposing first.
+- `_cmpLoadToken` guards the async load. `closeCompareModal()` and each new `_actBulkChartCompare()` bump it; the loader discards its result when the token moved. Without this, closing mid-load builds charts into a hidden modal that nothing ever disposes.
+
 ### Weather / wind
 
 `/api/weather/<filename>` computes headwind / tailwind / crosswind percentages by comparing each GPS segment's bearing against hourly wind direction (head = ±45°, tail = 135°–225°, else cross).
@@ -192,7 +235,7 @@ High-resolution forecast models only cover ~2022–present. When the chosen sour
 
 `static/app.js` (~5800 lines, no bundler) is organized as ordered section blocks — keep related code inside its block:
 
-ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
+ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
 
 Six sidebar views (`switchSidebarView`): `activities` (default) · `map` · `pmc` · `calendar` · `files` · `about`. PMC and calendar share `#analytics-view` and are switched by `switchAnalyticsTab`.
 
@@ -223,7 +266,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
 | 2100 | `#export-modal`, `#sync-modal`, `#strava-modal`, `#settings-modal` |
-| 2200 | `#act-ai-modal` |
+| 2200 | `#act-ai-modal`, `#compare-modal` (mutually exclusive — never open together) |
 
 ## Configuration
 

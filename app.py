@@ -39,6 +39,7 @@ from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats,
 import fafa.strava as _strava
 import fafa.db as _db
 import fafa.auth as _auth
+import fafa.prompts as _prompts
 
 SERVER_MODE = "--server" in sys.argv or os.environ.get("FAFA_SERVER") == "1"
 _auth.set_server_mode(SERVER_MODE)
@@ -1636,253 +1637,127 @@ def _wind_stats(
     }
 
 
+def _load_user_prompts() -> tuple[dict, dict]:
+    """读取用户自定义模板与块参数；文件不存在或损坏时静默回退到默认值。"""
+    path = _user_input_dir() / 'prompts.json'
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(data, dict):
+                return data.get('templates') or {}, data.get('blocks') or {}
+    except Exception as e:
+        logging.warning('prompts.json 读取失败，使用默认提示词: %s', e)
+    return {}, {}
+
+
+def _summary_scalars(summary: dict) -> dict:
+    """把 summary 铺成占位符值。含单位，None → 无数据（与改造前 fmt() 一致）。"""
+    fmt = _prompts.fmt_value
+    np_val = summary.get('normalized_power')
+    ap_val = summary.get('avg_power')
+    hr_val = summary.get('avg_hr')
+    vi = np_val / ap_val if (np_val and ap_val) else None
+    ef = np_val / hr_val if (np_val and hr_val) else None
+    return {
+        'total_dist_km':          fmt(summary.get('total_dist_km'), ' km', 1),
+        'total_duration_min':     fmt((summary.get('total_duration_s') or 0) / 60, ' 分钟', 0),
+        'moving_time_min':        fmt((summary.get('moving_time_s') or 0) / 60, ' 分钟', 0),
+        'avg_speed_kmh':          fmt(summary.get('avg_speed_kmh'), ' km/h', 1),
+        'max_speed_kmh':          fmt(summary.get('max_speed_kmh'), ' km/h', 1),
+        'total_elevation_gain_m': fmt(summary.get('total_elevation_gain_m'), ' m', 0),
+        'total_elevation_loss_m': fmt(summary.get('total_elevation_loss_m'), ' m', 0),
+        'avg_hr':                 fmt(hr_val, ' bpm', 0),
+        'max_hr':                 fmt(summary.get('max_hr'), ' bpm', 0),
+        'avg_cadence':            fmt(summary.get('avg_cadence'), ' rpm', 0),
+        'max_cadence':            fmt(summary.get('max_cadence'), ' rpm', 0),
+        'avg_power':              fmt(ap_val, ' W', 0),
+        'max_power':              fmt(summary.get('max_power'), ' W', 0),
+        'normalized_power':       fmt(np_val, ' W', 0),
+        'intensity_factor':       fmt(summary.get('intensity_factor'), '', 2),
+        'ftp_w':                  fmt(summary.get('ftp_w'), ' W', 0),
+        'tss':                    fmt(summary.get('tss'), '', 0),
+        'total_calories_kcal':    fmt(summary.get('total_calories_kcal'), ' kcal', 0),
+        'total_work_kj':          fmt(summary.get('total_work_kj'), ' kJ', 1),
+        'avg_temp_c':             fmt(summary.get('avg_temp_c'), ' °C', 1),
+        'max_temp_c':             fmt(summary.get('max_temp_c'), ' °C', 0),
+        'avg_torque_eff':         fmt(summary.get('avg_torque_eff'), '%', 1),
+        'avg_pedal_smooth':       fmt(summary.get('avg_pedal_smooth'), '%', 1),
+        'left_pct':               fmt(summary.get('left_pct'), '%', 0),
+        'vi':                     fmt(vi, '', 2),
+        'ef':                     fmt(ef, '', 2),
+    }
+
+
+def _wind_scalars(wind_data: dict | None) -> dict:
+    """风况占位符。无数据时全部为空串，引用它们的行会整行消失。"""
+    if not wind_data or not wind_data.get('available'):
+        return {name: '' for name in (
+            'wind_speed_avg_kmh', 'gust_max_kmh', 'wind_dir_deg', 'wind_dir_label',
+            'headwind_pct', 'tailwind_pct', 'crosswind_pct', 'wind_source_label',
+        )}
+    return {
+        'wind_speed_avg_kmh': f"{wind_data.get('wind_speed_avg_kmh')} km/h",
+        'gust_max_kmh':       f"{wind_data.get('gust_max_kmh')} km/h",
+        'wind_dir_deg':       f"{wind_data.get('wind_dir_deg')}°",
+        'wind_dir_label':     str(wind_data.get('wind_dir_label') or ''),
+        'headwind_pct':       f"{wind_data.get('headwind_pct')}%",
+        'tailwind_pct':       f"{wind_data.get('tailwind_pct')}%",
+        'crosswind_pct':      f"{wind_data.get('crosswind_pct')}%",
+        'wind_source_label':  str(wind_data.get('source_label') or ''),
+    }
+
+
+def _activity_meta_scalars(template: str, filename: str) -> dict:
+    """备注与标签。仅在模板真的引用时才查库，未自定义模板时零开销。"""
+    if not filename or not _prompts.references(template, 'note', 'tags'):
+        return {'note': '', 'tags': ''}
+    try:
+        meta = _db.get_activity_meta(filename, db_path=_user_db_path())
+    except Exception as e:
+        logging.warning('读取活动备注失败 (%s): %s', filename, e)
+        return {'note': '', 'tags': ''}
+    return {
+        'note': (meta.get('note') or '').strip(),
+        'tags': '、'.join(t['name'] for t in (meta.get('tags') or [])),
+    }
+
+
 def _build_eval_prompt(summary: dict, km_stats: list, filename: str, start_time: str,
                        time_stats: list | None = None,
                        wind_data: dict | None = None) -> str:
-    def fmt(v, unit="", digits=1):
-        return "无数据" if v is None else f"{round(v, digits)}{unit}"
+    templates, block_cfg = _load_user_prompts()
+    template = _prompts.resolve_template('evaluate', templates)
+    blocks_cfg = _prompts.resolve_blocks(block_cfg)
 
-    lines = [
-        "你是一名专业公路自行车训练教练，请根据以下骑行数据进行全面分析，输出结构化中文评估报告。",
-        "",
-        "## 骑行基本信息",
-    ]
-    if start_time:
-        lines.append(f"- 骑行开始时间：{start_time}")
-    if filename:
-        lines.append(f"- 文件名：{filename}")
-
-    lines += [
-        "",
-        "## 骑行汇总数据",
-        f"- 总距离：{fmt(summary.get('total_dist_km'), ' km')}",
-        f"- 总时长：{fmt((summary.get('total_duration_s') or 0) / 60, ' 分钟', 0)}",
-        f"- 移动时长：{fmt((summary.get('moving_time_s') or 0) / 60, ' 分钟', 0)}",
-        f"- 平均速度：{fmt(summary.get('avg_speed_kmh'), ' km/h')}",
-        f"- 最大速度：{fmt(summary.get('max_speed_kmh'), ' km/h')}",
-        f"- 总爬升：{fmt(summary.get('total_elevation_gain_m'), ' m', 0)}",
-        f"- 总下降：{fmt(summary.get('total_elevation_loss_m'), ' m', 0)}",
-        f"- 平均心率：{fmt(summary.get('avg_hr'), ' bpm', 0)}",
-        f"- 最大心率：{fmt(summary.get('max_hr'), ' bpm', 0)}",
-        f"- 平均踏频：{fmt(summary.get('avg_cadence'), ' rpm', 0)}",
-        f"- 平均功率：{fmt(summary.get('avg_power'), ' W', 0)}",
-        f"- 最大功率：{fmt(summary.get('max_power'), ' W', 0)}",
-        f"- 归一化功率 (NP)：{fmt(summary.get('normalized_power'), ' W', 0)}",
-        f"- 卡路里消耗：{fmt(summary.get('total_calories_kcal'), ' kcal', 0)}",
-        f"- 平均气温：{fmt(summary.get('avg_temp_c'), ' °C')}",
-    ]
-    if wind_data and wind_data.get("available"):
-        w = wind_data
-        lines += [
-            "",
-            "## 气象条件（来源：Open-Meteo 历史天气）",
-            f"- 平均风速：{w['wind_speed_avg_kmh']} km/h，阵风最大：{w['gust_max_kmh']} km/h",
-            f"- 主导风向：{w['wind_dir_label']}（{w['wind_dir_deg']}°）",
-            f"- 全程逆风：{w['headwind_pct']}%  顺风：{w['tailwind_pct']}%  侧风：{w['crosswind_pct']}%",
-        ]
-        if w["headwind_pct"] > 30:
-            lines.append("（逆风比例偏高，速度表现可能受明显影响，分析时请结合考虑）")
-        lines += [
-            "",
-            "### 8. 风力影响评估（仅当逆风 > 30% 时输出，否则跳过）",
-            "说明风力对本次骑行均速的影响程度，估算去除风力因素后的实际能力水平。",
-        ]
-    if summary.get("left_pct") is not None:
-        r = 100 - summary["left_pct"]
-        lines.append(f"- 左右功率平衡：左 {summary['left_pct']:.0f}% / 右 {r:.0f}%")
-
-    if km_stats:
-        lines.append("")
-        lines.append(f"## 逐公里分段数据（共 {len(km_stats)} 段）")
-        lines.append("公里段 | 时长(s) | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm) | 爬升(m) | 均坡度(%)")
-        lines.append("------|--------|-----------|------------|---------|-----------|--------|--------")
-
-        def _v(s, key, d=0):
-            val = s.get(key)
-            return "—" if val is None else str(round(val, d))
-
-        def km_row(s):
-            return (f"第{s.get('km','?')}km | {_v(s,'duration_s',0)}s | "
-                    f"{_v(s,'avg_speed_kmh',1)} | {_v(s,'avg_hr',0)} | "
-                    f"{_v(s,'avg_power',0)} | {_v(s,'avg_cadence',0)} | "
-                    f"{_v(s,'elevation_gain_m',0)} | {_v(s,'avg_grade_pct',1)}")
-
-        show = km_stats if len(km_stats) <= 15 else (km_stats[:7] + [None] + km_stats[-7:])
-        for s in show:
-            lines.append("…（中间段省略）" if s is None else km_row(s))
-
-    if time_stats:
-        lines.append("")
-        lines.append(f"## 逐分钟数据（共 {len(time_stats)} 分钟，用于识别节奏/疲劳变化）")
-        lines.append("分钟 | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm)")
-        lines.append("-----|-----------|------------|---------|----------")
-
-        def _v(s, key, d=0):
-            val = s.get(key)
-            return "—" if val is None else str(round(val, d))
-
-        def t_row(s):
-            return (f"{s.get('km','?')} | {_v(s,'avg_speed_kmh',1)} | "
-                    f"{_v(s,'avg_hr',0)} | {_v(s,'avg_power',0)} | {_v(s,'avg_cadence',0)}")
-
-        step = max(1, len(time_stats) // 40)
-        sampled = time_stats[::step]
-        for s in sampled:
-            lines.append(t_row(s))
-
-    lines += [
-        "",
-        "## 评估报告章节（仅输出数据充分的章节，无相关数据的章节跳过）",
-        "",
-        "### 1. 骑行概览",
-        "一段话总结本次骑行的场景（距离/地形/强度定性）。",
-        "",
-        "### 2. 速度与配速分析",
-        "评估均速水平、逐公里速度稳定性（变异幅度）、是否存在明显掉速。",
-        "",
-        "### 3. 心率分析（如有心率数据）",
-        "评估有氧强度区间、心率漂移情况、有氧效率（如同时有功率：EF = NP / 均心率）。",
-        "",
-        "### 4. 功率分析（如有功率数据）",
-        "分析 AP/NP 差距（变异系数 VI = NP/AP，越接近1越匀速）、功率输出水平定性评价。",
-        "",
-        "### 5. 爬升表现（如爬升 > 50 m）",
-        "评估爬坡段速度/心率/功率的响应，以及整体爬升效率。",
-        "",
-        "### 6. 综合评分",
-        "给出本次训练质量评分（1–10分），列出2–3个亮点和1–2个改进方向。",
-        "",
-        "### 7. 训练建议",
-        "基于本次骑行数据，给出1–3条具体可执行的下次训练建议。",
-        "",
-        "格式要求：Markdown，## 做章节标题，**加粗**关键数值，- 做列表。语言简洁专业。",
-    ]
-    return "\n".join(lines)
-
-
-def _wind_normalize_speed(v_avg: float | None, wind_data: dict | None) -> tuple:
-    """Returns (v_normalized, effective_headwind_kmh). Linear approximation:
-    v_norm = v_avg + eff_headwind × 0.25  (0.25 km/h per 1 km/h effective headwind)."""
-    if not wind_data or not wind_data.get("available") or not v_avg:
-        return v_avg, 0.0
-    wind_speed   = wind_data.get("wind_speed_avg_kmh", 0) or 0
-    headwind_pct = wind_data.get("headwind_pct", 0) or 0
-    tailwind_pct = wind_data.get("tailwind_pct", 0) or 0
-    eff_headwind = wind_speed * (headwind_pct - tailwind_pct) / 100
-    return round(v_avg + eff_headwind * 0.25, 1), round(eff_headwind, 1)
+    scalars = {
+        'filename':   filename or '',
+        'start_time': start_time or '',
+        **_summary_scalars(summary),
+        **_wind_scalars(wind_data),
+        **_activity_meta_scalars(template, filename),
+    }
+    source_label = (wind_data or {}).get('source_label') or 'Open-Meteo 历史天气'
+    blocks = {
+        'left_right': _prompts.build_left_right(summary.get('left_pct')),
+        'wind':       _prompts.build_wind_block(wind_data, source_label),
+        'km_table':   _prompts.build_km_table(km_stats or [], blocks_cfg['km_table_rows']),
+        'time_table': _prompts.build_time_table(time_stats or [], blocks_cfg['time_table_rows']),
+    }
+    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
+    return text
 
 
 def _build_compare_prompt(activities: list) -> str:
-    def fmt(v, unit="", digits=1):
-        return "无数据" if v is None else f"{round(v, digits)}{unit}"
-
-    def _v(seg, key, d=0):
-        val = seg.get(key)
-        return "—" if val is None else str(round(val, d))
-
-    lines = [
-        "你是一名专业公路自行车训练教练，请根据以下多次骑行数据进行横向对比分析，输出结构化中文对比报告。",
-        "",
-        "## 骑行对比汇总表",
-        "| 编号 | 日期 | 距离(km) | 均速(km/h) | 归一化均速(km/h) | 有效逆风(km/h) | 均功率(W) | NP(W) | 均心率(bpm) | 爬升(m) |",
-        "|------|------|---------|-----------|----------------|--------------|---------|-------|-----------|--------|",
-    ]
-
-    for i, act in enumerate(activities, 1):
-        s  = act.get("summary") or {}
-        wd = act.get("wind_data") or {}
-        v_avg = s.get("avg_speed_kmh")
-        v_norm, eff_hw = _wind_normalize_speed(v_avg, wd if wd.get("available") else None)
-        date_str = (act.get("start_time") or "")[:10] or "未知"
-        eff_str  = fmt(eff_hw if wd.get("available") else None, "", 1)
-        lines.append(
-            f"| {i} | {date_str} | {fmt(s.get('total_dist_km'), '', 1)} | "
-            f"{fmt(v_avg, '', 1)} | {fmt(v_norm, '', 1)} | {eff_str} | "
-            f"{fmt(s.get('avg_power'), '', 0)} | {fmt(s.get('normalized_power'), '', 0)} | "
-            f"{fmt(s.get('avg_hr'), '', 0)} | {fmt(s.get('total_elevation_gain_m'), '', 0)} |"
-        )
-
-    lines.append("")
-
-    for i, act in enumerate(activities, 1):
-        s   = act.get("summary") or {}
-        wd  = act.get("wind_data") or {}
-        kms = act.get("km_stats") or []
-        fn  = act.get("filename", f"骑行{i}")
-        st  = act.get("start_time", "")
-        v_avg = s.get("avg_speed_kmh")
-        v_norm, eff_hw = _wind_normalize_speed(v_avg, wd if wd.get("available") else None)
-
-        lines.append(f"## 骑行 {i} — {fn}" + (f"（{st[:16]}）" if st else ""))
-
-        if wd.get("available"):
-            lines.append(
-                f"**风况**：均风速 {wd.get('wind_speed_avg_kmh')} km/h，"
-                f"逆风 {wd.get('headwind_pct')}%，顺风 {wd.get('tailwind_pct')}%，"
-                f"侧风 {wd.get('crosswind_pct')}%"
-            )
-            lines.append(
-                f"**有效逆风**：{eff_hw} km/h → **归一化均速**：{v_norm} km/h"
-                f"（原 {fmt(v_avg, '', 1)} km/h）"
-            )
-        else:
-            lines.append("**风况**：无数据（均速未作风力归一化）")
-
-        lines += [
-            "",
-            f"**汇总**：距离 {fmt(s.get('total_dist_km'), ' km')}，"
-            f"移动时长 {fmt((s.get('moving_time_s') or 0) / 60, ' 分钟', 0)}，"
-            f"爬升 {fmt(s.get('total_elevation_gain_m'), ' m', 0)}，"
-            f"均踏频 {fmt(s.get('avg_cadence'), ' rpm', 0)}，"
-            f"均功率 {fmt(s.get('avg_power'), ' W', 0)}，"
-            f"NP {fmt(s.get('normalized_power'), ' W', 0)}，"
-            f"均心率 {fmt(s.get('avg_hr'), ' bpm', 0)}",
-            "",
-        ]
-
-        if kms:
-            lines.append(f"**逐公里分段（共 {len(kms)} 段）**")
-            lines.append("公里段 | 时长(s) | 均速(km/h) | 均心率(bpm) | 均功率(W) | 均踏频(rpm) | 爬升(m)")
-            lines.append("------|--------|-----------|------------|---------|-----------|-------")
-            for seg in kms:
-                lines.append(
-                    f"第{seg.get('km','?')}km | {_v(seg,'duration_s',0)}s | "
-                    f"{_v(seg,'avg_speed_kmh',1)} | {_v(seg,'avg_hr',0)} | "
-                    f"{_v(seg,'avg_power',0)} | {_v(seg,'avg_cadence',0)} | "
-                    f"{_v(seg,'elevation_gain_m',0)}"
-                )
-        else:
-            lines.append("**逐公里数据**：无")
-
-        lines.append("")
-
-    lines += [
-        "## 对比分析要求",
-        "",
-        "请依次输出以下章节（无充分数据的章节可跳过）：",
-        "",
-        "### 1. 速度效率对比",
-        "以**归一化均速**为主要指标，说明风力调整是否合理，哪次骑行速度效率最高。",
-        "",
-        "### 2. 配速策略对比",
-        "分析各骑行逐公里速度/功率节奏的稳定性（变异幅度），谁的配速更均匀。",
-        "",
-        "### 3. 有氧效率对比（如有心率 + 功率数据）",
-        "对比各骑行的 EF（= NP / 均心率），数值越高说明有氧效率越好。",
-        "",
-        "### 4. 爬坡表现对比（如爬升 > 50 m）",
-        "对比各骑行在爬升段的速度/功率/心率响应及整体爬升效率。",
-        "",
-        "### 5. 综合评定",
-        "明确指出哪次骑行综合表现最优，给出具体理由（引用关键数值）。",
-        "",
-        "### 6. 训练建议",
-        "基于对比结果，给出 1–3 条针对性的训练建议。",
-        "",
-        "格式：Markdown，## 做章节标题，**加粗**关键对比数值，重要对比用表格呈现。语言简洁专业。",
-    ]
-
-    return "\n".join(lines)
+    templates, block_cfg = _load_user_prompts()
+    template = _prompts.resolve_template('compare', templates)
+    blocks_cfg = _prompts.resolve_blocks(block_cfg)
+    blocks = {
+        'compare_table':  _prompts.build_compare_table(activities),
+        'compare_detail': _prompts.build_compare_detail(
+            activities, blocks_cfg['compare_km_rows']),
+    }
+    text, _warnings = _prompts.render(template, scalars={}, blocks=blocks)
+    return text
 
 
 @app.route("/api/ai/config")
@@ -2478,86 +2353,46 @@ def parse_status():
 
 # ── AI PMC 体能分析 ───────────────────────────────────────────────────────────
 def _build_pmc_prompt(data: dict) -> str:
-    cur    = data.get("current", {})
-    trend  = data.get("trend", {})
-    rides  = data.get("recent_rides", [])
-    cfg_u  = data.get("settings", {})
+    templates, block_cfg = _load_user_prompts()
+    template = _prompts.resolve_template('pmc', templates)
+    blocks_cfg = _prompts.resolve_blocks(block_cfg)
+
+    cur   = data.get("current", {})
+    trend = data.get("trend", {})
+    rides = data.get("recent_rides", [])
+    cfg_u = data.get("settings", {})
 
     ctl = cur.get("ctl", 0)
     atl = cur.get("atl", 0)
     tsb = cur.get("tsb", 0)
-
-    if tsb > 10:
-        form_str = "新鲜（Fresh）— 体力充沛，适合比赛或高强度训练"
-    elif tsb > -5:
-        form_str = "最佳区间（Optimal）— 训练与恢复平衡，黄金训练期"
-    elif tsb > -20:
-        form_str = "疲劳（Tired）— 有训练负荷积累，建议控制强度"
-    elif tsb > -40:
-        form_str = "较疲劳（Very Tired）— 需要主动恢复"
-    else:
-        form_str = "过度疲劳（Overreached）— 建议安排休息日"
-
-    lines = [
-        "你是一名专业公路自行车训练教练，请根据以下训练管理图（PMC）数据进行体能状态分析，给出恢复与训练建议，用中文输出。",
-        "",
-        "## 当前 PMC 状态",
-        f"- 体能 CTL（42天慢性训练负荷）：**{ctl:.1f}**",
-        f"- 疲劳 ATL（7天急性训练负荷）：**{atl:.1f}**",
-        f"- 状态 TSB（今日形态 = 昨日CTL − 昨日ATL）：**{tsb:+.1f}**",
-        f"- 形态判定：**{form_str}**",
-    ]
-
-    if cfg_u.get("ftp"):
-        lines.append(f"- FTP：{cfg_u['ftp']} W")
-    if cfg_u.get("weight_kg"):
-        lines.append(f"- 体重：{cfg_u['weight_kg']} kg")
-    if cfg_u.get("wkg"):
-        lines.append(f"- 功重比：{cfg_u['wkg']} W/kg")
-
-    ctl_7d = trend.get("ctl_7d_ago", ctl)
+    ctl_7d  = trend.get("ctl_7d_ago", ctl)
     ctl_30d = trend.get("ctl_30d_ago", ctl)
-    lines += [
-        f"- CTL 7天前：{ctl_7d:.1f}（变化 {ctl - ctl_7d:+.1f}）",
-        f"- CTL 30天前：{ctl_30d:.1f}（变化 {ctl - ctl_30d:+.1f}）",
-        f"- 数据覆盖：{data.get('total_activities', 0)} 次骑行，最早记录 {data.get('first_date', '—')}",
-    ]
-    if data.get("zone_distribution"):
-        lines += ["", f"## 训练区间分布（骑行时间占比）", data["zone_distribution"]]
-    if data.get("power_curve_alltime"):
-        lines += ["", "## 峰值功率曲线", f"- 历史最佳：{data['power_curve_alltime']}"]
-        if data.get("power_curve_90d"):
-            lines.append(f"- 近90天最佳：{data['power_curve_90d']}")
 
-    if rides:
-        lines += ["", f"## 近期骑行记录（最近 {len(rides)} 次）",
-                  "日期 | 距离 | 时长 | TSS | 均心率 | 均功率"]
-        lines.append("-----|------|------|-----|-------|------")
-        for r in rides:
-            def _rv(k, fmt="{:.0f}", fb="—"):
-                v = r.get(k)
-                return fb if v is None else fmt.format(v)
-            lines.append(
-                f"{r.get('date','?')} | {_rv('dist_km','{:.1f}')} km | "
-                f"{_rv('dur_min')} min | {_rv('tss')} | "
-                f"{_rv('avg_hr')} bpm | {_rv('avg_power')} W"
-            )
-
-    lines += [
-        "",
-        "## 请输出以下分析（Markdown格式，简洁专业）：",
-        "### 1. 当前状态解读",
-        "解读CTL/ATL/TSB数值，说明当前体能与疲劳水平。",
-        "### 2. 疲劳与恢复评估",
-        "当前是否过度训练？需要休息还是可以继续？",
-        "### 3. 近期训练模式分析",
-        "从近期数据看训练规律、强度分布、是否有明显规律或问题。",
-        "### 4. 近期建议（1-2周）",
-        "具体的训练安排：强度、量、休息日。",
-        "### 5. 中期目标（1-3个月）",
-        "如何合理提升CTL？建议目标区间和提升节奏（每周CTL增幅不超过3-5）。",
-    ]
-    return "\n".join(lines)
+    scalars = {
+        'ctl':               f'{ctl:.1f}',
+        'atl':               f'{atl:.1f}',
+        'tsb':               f'{tsb:+.1f}',
+        'form_label':        _prompts.pmc_form_label(tsb),
+        'ctl_7d_ago':        f'{ctl_7d:.1f}',
+        'ctl_7d_delta':      f'{ctl - ctl_7d:+.1f}',
+        'ctl_30d_ago':       f'{ctl_30d:.1f}',
+        'ctl_30d_delta':     f'{ctl - ctl_30d:+.1f}',
+        'total_activities':  str(data.get('total_activities', 0)),
+        'first_date':        str(data.get('first_date') or '—'),
+        # 未设置时为空串 → 引用它们的行整行消失（与改造前的 if 判断一致）
+        'pmc_ftp':           f"{cfg_u['ftp']} W" if cfg_u.get('ftp') else '',
+        'pmc_weight':        f"{cfg_u['weight_kg']} kg" if cfg_u.get('weight_kg') else '',
+        'pmc_wkg':           f"{cfg_u['wkg']} W/kg" if cfg_u.get('wkg') else '',
+    }
+    blocks = {
+        'zone_distribution': _prompts.build_zone_distribution(data.get('zone_distribution')),
+        'power_curve':       _prompts.build_power_curve(
+            data.get('power_curve_alltime'), data.get('power_curve_90d')),
+        'recent_rides':      _prompts.build_recent_rides(
+            rides, blocks_cfg['recent_rides_rows']),
+    }
+    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
+    return text
 
 
 @app.route("/api/ai/pmc", methods=["POST"])
@@ -2575,71 +2410,27 @@ def ai_pmc():
 
 
 def _build_calendar_prompt(data: dict) -> str:
-    period       = data.get("period", "30d")
-    current_date = data.get("current_date", "")
-    acts         = data.get("activities", [])
-    period_label = "过去7天" if period == "7d" else "过去30天"
+    templates, block_cfg = _load_user_prompts()
+    period = data.get("period", "30d")
+    kind = 'calendar_7d' if period == '7d' else 'calendar_30d'
+    template = _prompts.resolve_template(kind, templates)
 
-    def fmt(v, unit="", digits=1):
-        return "无数据" if v is None else f"{round(v, digits)}{unit}"
-
+    acts = data.get("activities", [])
     total_dist = sum((a.get("dist_km") or 0) for a in acts)
     total_dur  = sum((a.get("dur_min") or 0) for a in acts)
     total_elev = sum((a.get("elevation_m") or 0) for a in acts)
 
-    lines = [
-        f"你是一名专业公路自行车训练教练，请根据用户{period_label}的骑行数据，给出个性化的训练建议，用中文输出。",
-        "",
-        "## 训练概况",
-        f"- 当前日期：{current_date}",
-        f"- 统计范围：{period_label}",
-        f"- 骑行次数：{len(acts)} 次",
-        f"- 总距离：{total_dist:.1f} km",
-        f"- 总时长：{total_dur:.0f} 分钟",
-        f"- 总爬升：{total_elev:.0f} m",
-    ]
-
-    if acts:
-        lines += [
-            "",
-            "## 骑行记录",
-            "日期 | 距离 | 时长 | 均心率 | 均功率 | 爬升",
-            "-----|------|------|-------|-------|------",
-        ]
-        def _rv(v, f="{:.0f}", fb="—"):
-            return fb if v is None else f.format(v)
-        for a in sorted(acts, key=lambda x: x.get("date", "")):
-            lines.append(
-                f"{a.get('date','?')} | {_rv(a.get('dist_km'), '{:.1f}')} km | "
-                f"{_rv(a.get('dur_min'))} min | {_rv(a.get('avg_hr'))} bpm | "
-                f"{_rv(a.get('avg_power'))} W | {_rv(a.get('elevation_m'))} m"
-            )
-    else:
-        lines.append("（该时间段内无骑行记录）")
-
-    lines += ["", "## 请输出以下分析（Markdown格式，简洁专业）："]
-
-    if period == "7d":
-        lines += [
-            "### 1. 本周训练总结",
-            "评估本周训练量、强度、频率是否合理。",
-            "### 2. 恢复状态",
-            "根据本周负荷判断疲劳程度，是否需要安排恢复日。",
-            "### 3. 下周训练建议",
-            "给出具体的下周训练安排（哪几天训练、休息日、重点训练类型）。",
-        ]
-    else:
-        lines += [
-            "### 1. 过去一个月训练回顾",
-            "总结训练量、强度分布、训练规律性。",
-            "### 2. 进步与不足",
-            "从数据中找出亮点和需要改进的地方。",
-            "### 3. 接下来四周训练建议",
-            "给出分周的具体训练建议（量、强度、重点训练类型）。",
-            "### 4. 短期目标",
-            "基于当前水平，设定合理可达的月度目标。",
-        ]
-    return "\n".join(lines)
+    scalars = {
+        'current_date':   str(data.get('current_date') or ''),
+        'period_label':   '过去7天' if period == '7d' else '过去30天',
+        'ride_count':     str(len(acts)),
+        'period_dist_km': f'{total_dist:.1f}',
+        'period_dur_min': f'{total_dur:.0f}',
+        'period_elev_m':  f'{total_elev:.0f}',
+    }
+    blocks = {'calendar_rides': _prompts.build_calendar_rides(acts)}
+    text, _warnings = _prompts.render(template, scalars=scalars, blocks=blocks)
+    return text
 
 
 @app.route("/api/ai/calendar", methods=["POST"])
