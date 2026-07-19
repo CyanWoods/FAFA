@@ -76,6 +76,8 @@ input/<username>/               server mode: per-user isolation (0700)
   .cache/<name>.fit.parse.lock  per-file flock, prevents duplicate parses
   fafa.db                       SQLite: activity_meta / tags / activity_tags (0600)
   config.json                   per-user AI + sync credentials (0600)
+  prompts.json                  customized AI prompt templates + block params (0600)
+  prompts_history.json          rolling prompt revisions, 5 per template (0600)
   download_state.json           OneLap incremental sync state
   .sync_state.json              sync progress (readable across gunicorn workers)
   .strava_upload_state.json     Strava upload progress
@@ -116,6 +118,7 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `/api/weather/<filename>` | wind analysis from Open-Meteo (see below) |
 | `/api/ai/config`, `/api/ai/evaluate`, `/api/ai/chat`, `/api/ai/pmc`, `/api/ai/calendar`, `/api/ai/compare` | SSE streams via `_llm_stream()` |
 | `/api/config/raw` GET/POST | settings modal; secrets masked on read, Strava tokens read-only on write |
+| `/api/prompts` GET/POST, `/api/prompts/reset`, `/api/prompts/history`, `/api/prompts/preview` | user-editable AI prompt templates (see below) |
 | `/api/sync/start`, `/api/sync/status` | unified sync (`platform`: `onelap` \| `igpsport`) |
 | `/api/onelap/sync`, `/api/onelap/status` | legacy OneLap-only aliases |
 | `/api/strava/status`, `/api/strava/auth_url`, `/strava/callback`, `/api/strava/diff`, `/api/strava/upload`, `/api/strava/upload/status` | Strava OAuth + diff + upload |
@@ -191,6 +194,33 @@ Defaults live in `DEFAULT_TEMPLATES` as module constants and are **never written
 
 Ask `references(template, 'note', 'tags')` before doing work that only a placeholder needs — `_activity_meta_scalars()` uses it to skip SQLite entirely on the default path. It matches via `_TOKEN_RE`, not substring: `{{ note }}` with spaces is a valid reference, and a substring check silently misses it, producing empty data with no error.
 
+**Storage and versioning.** `input/<user>/prompts.json` holds `{version, templates, blocks}` — only customized keys. History lives in a *separate* `prompts_history.json`, because `_load_user_prompts()` runs on every AI request and must not drag several hundred KB of old revisions along.
+
+`_save_user_prompt()` normalizes before writing: text equal to the current value is a no-op (no history entry), and text equal to the default deletes the key rather than storing a duplicate — otherwise that copy would freeze while the shipped default improves. Restoring an old revision is just a normal save, so the value it replaces enters history too and a rollback can itself be rolled back.
+
+History entries are keyed by a monotonic **`rev`**, never by `ts`. Second-resolution timestamps collide when saves land in the same second, and a `ts`-keyed lookup then returns the same entry for every colliding revision. `ts` is for display only.
+
+Writes go **history first, then current**. If the process dies between them, history holds one redundant entry identical to the live value — harmless. The reverse order could lose the text being replaced.
+
+`POST /api/prompts` must validate the template *and* the block params before writing anything. The editor sends both in one request, so validating as it writes means an out-of-range block param reports 400 only after the template has already been saved and pushed to history — the user sees "保存失败", retries, and adds a second spurious revision.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/prompts` | customized templates + blocks + defaults + catalog + limits |
+| `POST /api/prompts` | save one template (`kind`/`text`) and/or `blocks` — **validates both before writing either** |
+| `POST /api/prompts/reset` | `{kind}` or `all` — deletes keys |
+| `GET /api/prompts/history` | metadata only (`rev`, `ts`, `chars`), no bodies |
+| `GET /api/prompts/history/<kind>/<rev>` | one revision's text |
+| `POST /api/prompts/preview` | render a draft against sample data |
+
+Preview goes through `_render_kind()` with a `template_override`, i.e. the same assembly path as a live request, so what the editor shows is what the model receives. Sample data is the newest real activity for `evaluate`/`compare`; `pmc` and `calendar_*` use built-in samples because their payloads are computed in the browser and the backend cannot reconstruct them.
+
+**Editor UI.** Settings → AI 配置 → 编辑提示词模板… opens `#prompts-modal` (`openPromptsModal`), which sits at z-index **2300** because the settings modal (2100) stays open behind it. Five tabs, a variable palette that inserts at the cursor, per-template block params, a preview pane, and a history dropdown.
+
+The textarea is **prefilled with the default text** rather than left empty. An empty box gives the user nothing to edit and hides what the prompt actually says; prefilling is safe precisely because the server normalizes text-equal-to-default into a key deletion, so no redundant copy is stored. `_pmtSavedText()` is what drafts are diffed against — comparing against `templates[kind] ?? ''` instead would mark every untouched tab dirty.
+
+Picking a history revision loads it into the editor as a draft; it is not committed until 保存, so the user can preview first. Unsaved drafts survive tab switches and prompt a confirm on close.
+
 Equivalence with the pre-refactor builders was verified over 180 prompts from 60 real FIT files: `compare` is byte-identical; `evaluate` differs only by the deliberate fix below.
 
 > Fixed while extracting: when wind data was present, the old builder appended `### 8. 风力影响评估` *inside the data section*, ahead of `### 1`, and pushed the `- 左右功率平衡` data bullet in among the instruction text. Section 8 is now a normal always-present section with conditional wording, matching how `### 3`/`### 5` already worked.
@@ -235,7 +265,7 @@ High-resolution forecast models only cover ~2022–present. When the chosen sour
 
 `static/app.js` (~5800 lines, no bundler) is organized as ordered section blocks — keep related code inside its block:
 
-ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
+ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → **prompt editor** → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
 
 Six sidebar views (`switchSidebarView`): `activities` (default) · `map` · `pmc` · `calendar` · `files` · `about`. PMC and calendar share `#analytics-view` and are switched by `switchAnalyticsTab`.
 
@@ -267,6 +297,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 | 2000 | `.toast` |
 | 2100 | `#export-modal`, `#sync-modal`, `#strava-modal`, `#settings-modal` |
 | 2200 | `#act-ai-modal`, `#compare-modal` (mutually exclusive — never open together) |
+| 2300 | `#prompts-modal` (opens from `#settings-modal`, which stays visible behind it) |
 
 ## Configuration
 

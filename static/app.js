@@ -3596,7 +3596,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      if (document.getElementById('compare-modal').style.display === 'flex') closeCompareModal();
+      if (document.getElementById('prompts-modal').style.display === 'flex') closePromptsModal();
+      else if (document.getElementById('compare-modal').style.display === 'flex') closeCompareModal();
       else if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
       else if (aiTrackId != null) closeAiView();
       else if (detailTrackId != null) closeDetailView();
@@ -4637,6 +4638,287 @@ async function saveSettingsModal() {
     }
     if (detailTrackId != null) openDetailView(detailTrackId);
   } catch { toast('保存失败'); }
+}
+
+/* ── AI 提示词编辑器 ──────────────────────────────────────────────────────── */
+
+let _pmtData    = null;   // GET /api/prompts 的响应
+let _pmtHistory = {};     // kind → [{rev, ts, chars}]
+let _pmtKind    = null;
+let _pmtDrafts  = {};     // kind → 编辑中但未保存的文本，切 tab 不丢
+
+async function openPromptsModal() {
+  document.getElementById('prompts-modal').style.display = 'flex';
+  document.getElementById('prompts-preview-wrap').style.display = 'none';
+  document.getElementById('prompts-hint').textContent = '正在加载…';
+  _pmtDrafts = {};
+  try {
+    const [cfg, hist] = await Promise.all([
+      fetch('/api/prompts').then(r => r.json()),
+      fetch('/api/prompts/history').then(r => r.json()),
+    ]);
+    if (cfg.error) throw new Error(cfg.error);
+    _pmtData = cfg;
+    _pmtHistory = hist.history || {};
+  } catch (e) {
+    document.getElementById('prompts-hint').textContent = '加载失败：' + e.message;
+    return;
+  }
+  document.getElementById('prompts-hint').textContent = '';
+  _pmtRenderTabs();
+  _pmtRenderBlocks();
+  _pmtRenderCatalog();
+  const ta = document.getElementById('prompts-text');
+  ta.oninput = () => {
+    _pmtDrafts[_pmtKind] = ta.value;
+    _pmtUpdateMeta();
+    _pmtMarkTabs();
+  };
+  _pmtSwitchKind(_pmtData.kinds[0]);
+}
+
+function closePromptsModal() {
+  if (_pmtDirtyKinds().length &&
+      !confirm('有未保存的提示词修改，确定关闭吗？')) return;
+  document.getElementById('prompts-modal').style.display = 'none';
+  _pmtDrafts = {};
+}
+
+// 已保存的自定义，没有则用默认原文。预填默认而不是留空，用户一打开就能看到
+// 并直接改；后端会把「内容等于默认」归一化为删键，所以不会存下冗余副本。
+function _pmtSavedText(kind) {
+  return _pmtData.templates[kind] ?? _pmtData.defaults[kind] ?? '';
+}
+
+function _pmtCurrentText(kind) {
+  return (kind in _pmtDrafts) ? _pmtDrafts[kind] : _pmtSavedText(kind);
+}
+
+function _pmtDirtyKinds() {
+  return Object.keys(_pmtDrafts).filter(k => _pmtDrafts[k] !== _pmtSavedText(k));
+}
+
+function _pmtRenderTabs() {
+  const wrap = document.getElementById('prompts-tabs');
+  wrap.innerHTML = _pmtData.kinds.map(k =>
+    `<button class="pmt-tab" data-kind="${k}">${_escapeHtml(_pmtData.labels[k] || k)}` +
+    `<i class="pmt-dot" style="display:none"></i></button>`).join('');
+  wrap.querySelectorAll('.pmt-tab').forEach(btn => {
+    btn.onclick = () => _pmtSwitchKind(btn.dataset.kind);
+  });
+}
+
+function _pmtMarkTabs() {
+  const dirty = new Set(_pmtDirtyKinds());
+  document.querySelectorAll('#prompts-tabs .pmt-tab').forEach(btn => {
+    const k = btn.dataset.kind;
+    btn.classList.toggle('active', k === _pmtKind);
+    btn.querySelector('.pmt-dot').style.display = dirty.has(k) ? '' : 'none';
+  });
+}
+
+function _pmtSwitchKind(kind) {
+  if (_pmtKind) _pmtDrafts[_pmtKind] = document.getElementById('prompts-text').value;
+  _pmtKind = kind;
+  document.getElementById('prompts-text').value = _pmtCurrentText(kind);
+  document.getElementById('prompts-preview-wrap').style.display = 'none';
+  _pmtRenderHistory();
+  _pmtUpdateMeta();
+  _pmtMarkTabs();
+}
+
+function _pmtRenderHistory() {
+  const sel = document.getElementById('prompts-history-sel');
+  const entries = _pmtHistory[_pmtKind] || [];
+  const opts = ['<option value="">历史版本…</option>'];
+  for (const e of entries) {
+    const when = new Date(e.ts * 1000).toLocaleString('zh-CN', { hour12: false });
+    opts.push(`<option value="${e.rev}">${when} · ${e.chars} 字符</option>`);
+  }
+  opts.push('<option value="__default__">— 默认提示词 —</option>');
+  sel.innerHTML = opts.join('');
+  sel.disabled = false;
+  sel.onchange = () => _pmtLoadVersion(sel.value);
+}
+
+async function _pmtLoadVersion(value) {
+  const sel = document.getElementById('prompts-history-sel');
+  if (!value) return;
+  let text;
+  if (value === '__default__') {
+    text = _pmtData.defaults[_pmtKind] || '';
+  } else {
+    try {
+      const r = await fetch(`/api/prompts/history/${_pmtKind}/${value}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || '读取失败');
+      text = d.text;
+    } catch (e) {
+      toast('读取历史版本失败：' + e.message);
+      sel.value = '';
+      return;
+    }
+  }
+  // 载入编辑器作为草稿，需再点保存才生效，便于先预览确认
+  document.getElementById('prompts-text').value = text;
+  _pmtDrafts[_pmtKind] = text;
+  sel.value = '';
+  _pmtUpdateMeta();
+  _pmtMarkTabs();
+  toast('已载入到编辑器，点「保存」生效');
+}
+
+function _pmtUpdateMeta() {
+  const text = document.getElementById('prompts-text').value;
+  const limit = _pmtData.limits.max_template_chars;
+  const saved = _pmtData.templates[_pmtKind];
+  const isDefault = !text.trim() || text === _pmtData.defaults[_pmtKind];
+  document.getElementById('prompts-status').textContent =
+    isDefault ? '当前：默认提示词' : (saved ? '当前：已自定义' : '当前：草稿未保存');
+  const over = text.length > limit;
+  const meta = document.getElementById('prompts-meta');
+  meta.textContent = `${text.length} / ${limit} 字符`;
+  meta.classList.toggle('pmt-over', over);
+  document.getElementById('prompts-reset-btn').disabled = !saved;
+}
+
+function _pmtRenderBlocks() {
+  const wrap = document.getElementById('prompts-blocks');
+  const params = _pmtData.catalog.block_params || [];
+  wrap.innerHTML = params.map(p => `
+    <div class="pmt-block-row">
+      <label>${_escapeHtml(p.name)}</label>
+      <input type="number" data-key="${p.name}" min="${p.min}" max="${p.max}"
+             value="${_pmtData.blocks[p.name] ?? p.default}">
+    </div>`).join('');
+}
+
+function _pmtRenderCatalog() {
+  const wrap = document.getElementById('prompts-catalog');
+  const cat = _pmtData.catalog;
+  const byGroup = {};
+  for (const s of cat.scalars) (byGroup[s.group] ||= []).push(s);
+
+  const chip = (token, label, title) =>
+    `<button class="pmt-var" data-token="${_escapeHtml(token)}" ` +
+    `title="${_escapeHtml(title)}">${_escapeHtml(label)}</button>`;
+
+  const parts = [];
+  parts.push('<div class="pmt-var-group"><div class="pmt-var-group-title">数据块</div>' +
+    cat.blocks.map(b => chip(`{{#${b.name}}}`, b.label, `{{#${b.name}}} — ${b.note}`)).join('') +
+    '</div>');
+  for (const g of cat.groups) {
+    const items = byGroup[g.key];
+    if (!items || !items.length) continue;
+    parts.push(`<div class="pmt-var-group"><div class="pmt-var-group-title">${_escapeHtml(g.label)}</div>` +
+      items.map(s => chip(`{{${s.name}}}`, s.label,
+        `{{${s.name}}}${s.unit ? ' — ' + s.unit : ''}`)).join('') + '</div>');
+  }
+  wrap.innerHTML = parts.join('');
+  wrap.querySelectorAll('.pmt-var').forEach(btn => {
+    btn.onclick = () => _pmtInsert(btn.dataset.token);
+  });
+}
+
+function _pmtInsert(token) {
+  const ta = document.getElementById('prompts-text');
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? start;
+  ta.value = ta.value.slice(0, start) + token + ta.value.slice(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + token.length;
+  _pmtDrafts[_pmtKind] = ta.value;
+  _pmtUpdateMeta();
+  _pmtMarkTabs();
+}
+
+function _pmtCollectBlocks() {
+  const out = {};
+  document.querySelectorAll('#prompts-blocks input[data-key]').forEach(inp => {
+    const v = parseInt(inp.value, 10);
+    if (!isNaN(v)) out[inp.dataset.key] = v;
+  });
+  return out;
+}
+
+async function _pmtPreview() {
+  const hint = document.getElementById('prompts-hint');
+  hint.textContent = '正在渲染预览…';
+  try {
+    const r = await fetch('/api/prompts/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: _pmtKind,
+        template: document.getElementById('prompts-text').value,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || '预览失败');
+    document.getElementById('prompts-preview-wrap').style.display = '';
+    document.getElementById('prompts-preview-text').textContent = d.text;
+    const warn = d.warnings.length
+      ? ` · ⚠ ${d.warnings.map(_escapeHtml).join('；')}` : '';
+    document.getElementById('prompts-preview-meta').innerHTML =
+      `${d.chars} 字符 · 约 ${d.est_tokens} tokens${warn}`;
+    hint.textContent = '';
+  } catch (e) {
+    hint.textContent = '预览失败：' + e.message;
+  }
+}
+
+async function _pmtSave() {
+  const hint = document.getElementById('prompts-hint');
+  const text = document.getElementById('prompts-text').value;
+  if (text.length > _pmtData.limits.max_template_chars) {
+    hint.textContent = `模板超过 ${_pmtData.limits.max_template_chars} 字符上限`;
+    return;
+  }
+  hint.textContent = '保存中…';
+  try {
+    const r = await fetch('/api/prompts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: _pmtKind, text, blocks: _pmtCollectBlocks() }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || '保存失败');
+    await _pmtReload();
+    hint.textContent = '';
+    toast(d.is_default ? '已恢复为默认提示词' : (d.changed ? '提示词已保存' : '内容无变化'));
+  } catch (e) {
+    hint.textContent = '保存失败：' + e.message;
+  }
+}
+
+async function _pmtResetKind() {
+  if (!confirm(`确定把「${_pmtData.labels[_pmtKind]}」恢复为默认提示词吗？\n当前内容会存入历史版本。`)) return;
+  try {
+    const r = await fetch('/api/prompts/reset', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: _pmtKind }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || '恢复失败');
+    delete _pmtDrafts[_pmtKind];
+    await _pmtReload();
+    toast('已恢复默认');
+  } catch (e) {
+    toast('恢复失败：' + e.message);
+  }
+}
+
+async function _pmtReload() {
+  const [cfg, hist] = await Promise.all([
+    fetch('/api/prompts').then(r => r.json()),
+    fetch('/api/prompts/history').then(r => r.json()),
+  ]);
+  _pmtData = cfg;
+  _pmtHistory = hist.history || {};
+  delete _pmtDrafts[_pmtKind];
+  document.getElementById('prompts-text').value = _pmtCurrentText(_pmtKind);
+  _pmtRenderBlocks();
+  _pmtRenderHistory();
+  _pmtUpdateMeta();
+  _pmtMarkTabs();
 }
 
 /* ── Theme toggle ───────────────────────────────────────────────────────── */

@@ -646,6 +646,48 @@
   </div>
 
   <!-- 活动列表单条 AI 分析弹窗 -->
+  <!-- AI 提示词编辑器 -->
+  <div id="prompts-modal" style="display:none">
+    <div id="prompts-modal-overlay" onclick="closePromptsModal()"></div>
+    <div id="prompts-modal-box">
+      <div id="prompts-modal-header">
+        <span>AI 提示词模板</span>
+        <button onclick="closePromptsModal()">✕</button>
+      </div>
+      <div id="prompts-tabs"></div>
+      <div id="prompts-body">
+        <div id="prompts-editor-col">
+          <div id="prompts-toolbar">
+            <span id="prompts-status"></span>
+            <div style="flex:1"></div>
+            <select id="prompts-history-sel" title="历史版本"></select>
+            <button id="prompts-reset-btn" onclick="_pmtResetKind()">恢复默认</button>
+          </div>
+          <textarea id="prompts-text" spellcheck="false"
+                    placeholder="留空表示使用默认提示词"></textarea>
+          <div id="prompts-meta"></div>
+        </div>
+        <div id="prompts-side-col">
+          <div class="prompts-side-title">块参数</div>
+          <div id="prompts-blocks"></div>
+          <div class="prompts-side-title">变量（点击插入）</div>
+          <div id="prompts-catalog"></div>
+        </div>
+      </div>
+      <div id="prompts-preview-wrap" style="display:none">
+        <div id="prompts-preview-meta"></div>
+        <pre id="prompts-preview-text"></pre>
+      </div>
+      <div id="prompts-modal-footer">
+        <span id="prompts-hint"></span>
+        <div style="flex:1"></div>
+        <button class="modal-cancel" onclick="_pmtPreview()">预览</button>
+        <button class="modal-export" onclick="_pmtSave()">保存</button>
+        <button class="modal-cancel" onclick="closePromptsModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 骑行图表对比 -->
   <div id="compare-modal" style="display:none">
     <div id="compare-modal-overlay" onclick="closeCompareModal()"></div>
@@ -841,6 +883,10 @@
         <div class="settings-row">
           <label class="settings-label">最大 Token</label>
           <input id="cfg-max-tokens" type="number" min="256" max="16000" placeholder="2500">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">提示词</label>
+          <button class="settings-link-btn" onclick="openPromptsModal()">编辑提示词模板…</button>
         </div>
       </div>
 
