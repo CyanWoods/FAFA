@@ -76,11 +76,15 @@
       <span class="act-list-title">骑行轨迹</span>
       <div id="map-actions">
         <select id="tile-select">
-          <option value="dark">深色地图</option>
-          <option value="dark-nolabels" selected>深色路网</option>
-          <option value="light">浅色地图</option>
-          <option value="light-nolabels">浅色路网</option>
-          <option value="amap">高德地图</option>
+          <optgroup label="CARTO">
+            <option value="dark">深色地图</option>
+            <option value="dark-nolabels" selected>深色路网</option>
+            <option value="light">浅色地图</option>
+            <option value="light-nolabels">浅色路网</option>
+          </optgroup>
+          <optgroup label="国内地图">
+            <option value="amap">高德地图</option>
+          </optgroup>
         </select>
         <button id="export-all-btn" onclick="exportAllJson()">全量导出</button>
         <button id="export-btn"     onclick="openExportModal()">导出图片</button>
@@ -786,6 +790,25 @@
     <div class="modal-overlay" onclick="closeSettingsModal()"></div>
     <div class="modal-box settings-box">
       <div class="modal-title">设置</div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">地图</div>
+        <div class="settings-row">
+          <label class="settings-label">默认底图</label>
+          <select id="cfg-map-tile">
+            <optgroup label="CARTO">
+              <option value="dark-nolabels">深色路网（默认）</option>
+              <option value="dark">深色地图</option>
+              <option value="light-nolabels">浅色路网</option>
+              <option value="light">浅色地图</option>
+            </optgroup>
+            <optgroup label="国内地图">
+              <option value="amap">高德地图</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="settings-hint">地图页上方的切换只在当前会话生效；保存后的默认底图会在下次打开时自动加载。</div>
+      </div>
 
       <div class="settings-section">
         <div class="settings-section-title">PMC 参数</div>

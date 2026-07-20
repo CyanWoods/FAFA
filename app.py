@@ -1901,6 +1901,10 @@ _CONFIG_NUMBER_RANGES = {
 }
 _CONFIG_ENUM_VALUES = {
     'wind_source': frozenset({'auto', 'ecmwf', 'gfs', 'icon', 'era5'}),
+    'map_tile': frozenset({
+        'dark', 'dark-nolabels', 'light', 'light-nolabels',
+        'amap',
+    }),
 }
 _CONFIG_ALLOWED_KEYS = (
     frozenset(_CONFIG_STRING_LIMITS)

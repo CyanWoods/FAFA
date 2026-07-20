@@ -14,22 +14,28 @@ const _CARTO_OPTS = {
 };
 const TILES = {
   amap: {
+    label: '高德地图', provider: 'amap',
     url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
     opts: { subdomains: '1234', maxZoom: 19, attribution: '&copy; 高德地图', keepBuffer: 4, updateWhenZooming: false },
+    probeUrl: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=13&y=6&z=4',
   },
   'dark-nolabels': {
+    label: '深色路网', provider: 'carto',
     url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png',
     opts: _CARTO_OPTS,
   },
   'light-nolabels': {
+    label: '浅色路网', provider: 'carto',
     url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png',
     opts: _CARTO_OPTS,
   },
   dark: {
+    label: '深色地图', provider: 'carto',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
     opts: _CARTO_OPTS,
   },
   light: {
+    label: '浅色地图', provider: 'carto',
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
     opts: _CARTO_OPTS,
   },
@@ -156,6 +162,8 @@ function decryptCoords(raw) { return raw.map(([a, b]) => gcj02ToWgs84(a, b)); }
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 let map, tileLayer, currentTile = 'dark-nolabels';
+let _tileLayerLoadToken = 0;
+let _detailTileLayerLoadToken = 0;
 const tracks = new Map();
 let trackCounter = 0;
 const exportState = { tile: 'dark-nolabels', colorMode: 'heatmap', uniformColor: '#e74c3c', ratio: '16:9', resolution: '2K', watermark: false, username: '', groupThreshold: 500 };
@@ -167,6 +175,7 @@ let detailCharts = [];
 let detailChartResizeObservers = [];
 let detailRouteMap = null;
 let detailRouteTileLayer = null;
+let detailRouteTileKey = null;
 let detailRouteLayers = [];
 let _detailZoomDrag = null;
 let _detailZoomActive = false;
@@ -237,7 +246,7 @@ function switchSidebarView(name) {
     // 启动时地图视图是隐藏的（默认停在骑行记录），#map 高度为 0，minZoom 只能算成 0。
     // ResizeObserver 虽然也会补一次，但触发时机不保证，这里显式重算才是确定的。
     _applyMinZoom();
-    _refreshCdnStatus();
+    if (!tileLayer) void setTiles(currentTile);
   } else {
     mapView.classList.remove('active');
   }
@@ -418,6 +427,7 @@ function _actSelectAll() {
 async function _actBulkLoad() {
   if (!_actSelected.size) { toast('请先选择活动'); return; }
   const filenames = [..._actSelected];
+  let loaded = false;
   _exitSelectMode();
   switchSidebarView('map');
   for (const filename of filenames) {
@@ -428,9 +438,11 @@ async function _actBulkLoad() {
       const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
       if (!res.ok) continue;
       const data = await res.json();
-      addTrack(data);
+      addTrack(data, { fit: false });
+      loaded = true;
     } catch (e) { console.warn('[loadFromLibrary] 加载失败:', e); }
   }
+  if (loaded) mapFitAll();
 }
 
 async function _actBulkDelete() {
@@ -980,6 +992,7 @@ function _renderCmpPercent() {
 async function _actLoadAllVisible() {
   const list = _actFilteredList();
   if (!list.length) { toast('当前列表没有活动'); return; }
+  let loaded = false;
   switchSidebarView('map');
   for (const act of list) {
     let already = false;
@@ -989,9 +1002,11 @@ async function _actLoadAllVisible() {
       const res  = await fetch('/api/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: act.filename }) });
       if (!res.ok) continue;
       const data = await res.json();
-      addTrack(data);
+      addTrack(data, { fit: false });
+      loaded = true;
     } catch (e) { console.warn('[loadAllTracks] 加载失败:', e); }
   }
+  if (loaded) mapFitAll();
 }
 
 async function openActivitiesView() {
@@ -1278,7 +1293,6 @@ function initMap() {
     zoomSnap: 0,
     maxBoundsViscosity: 1.0,     // 硬边界，不做橡皮筋回弹
   });
-  setTiles('dark-nolabels');
   _applyMinZoom();
   _applyPanBounds();
   // 容器尺寸受窗口、侧栏切换、底部轨迹面板拖拽影响，统一用 ResizeObserver 兜住
@@ -1289,33 +1303,89 @@ function initMap() {
   setTimeout(() => { map.invalidateSize(); _applyMinZoom(); }, 200);
 }
 
-function setTiles(name) {
-  currentTile = name;
-  if (tileLayer) map.removeLayer(tileLayer);
+function _isCartoTile(name) {
+  return TILES[name]?.provider === 'carto';
+}
+
+function _tileLayerOptions(name) {
   const tileCfg = TILES[name];
-  tileLayer = L.tileLayer(tileCfg.url, tileCfg.opts).addTo(map);
-  tileLayer.on('tileerror', function (err) {
+  const opts = { ...tileCfg.opts };
+  if (_isCartoTile(name)) opts.subdomains = [..._cartoCdnAvail];
+  else if (Array.isArray(tileCfg.opts.subdomains)) opts.subdomains = [...tileCfg.opts.subdomains];
+  return opts;
+}
+
+function _attachTileRetry(layer) {
+  layer.on('tileerror', function (err) {
     const tile = err.tile;
     const retries = +(tile.dataset.retries || 0);
-    if (retries < 4) {
-      tile.dataset.retries = retries + 1;
-      const subs = Array.from(tileLayer.options.subdomains);
-      const { x, y } = err.coords;
-      // Leaflet assigns subdomains by |x+y| % n, so a diagonal stripe all hits the same server.
-      // On each retry, rotate to the next subdomain to avoid the same failing host.
-      const origIdx = Math.abs(x + y) % subs.length;
-      const nextIdx = (origIdx + retries + 1) % subs.length;
-      const baseUrl = tileLayer.getTileUrl(err.coords);
-      const retryUrl = baseUrl.replace(`//${subs[origIdx]}.`, `//${subs[nextIdx]}.`);
-      const delay = 1000 * Math.pow(2, retries); // 1s 2s 4s 8s
-      setTimeout(() => {
-        if (tile.parentNode) {
-          tile.src = retryUrl + (retryUrl.includes('?') ? '&' : '?') + '_r=' + Date.now();
-        }
-      }, delay);
-    }
+    const subs = Array.from(layer.options.subdomains || []);
+    if (retries >= 4 || subs.length < 2) return;
+
+    tile.dataset.retries = retries + 1;
+    const { x, y } = err.coords;
+    // Leaflet assigns subdomains by |x+y| % n, so a diagonal stripe all hits the same server.
+    // On each retry, rotate to the next subdomain to avoid the same failing host.
+    const origIdx = Math.abs(x + y) % subs.length;
+    const nextIdx = (origIdx + retries + 1) % subs.length;
+    const baseUrl = layer.getTileUrl(err.coords);
+    const retryUrl = baseUrl.replace(`//${subs[origIdx]}.`, `//${subs[nextIdx]}.`);
+    const delay = 1000 * Math.pow(2, retries); // 1s 2s 4s 8s
+    setTimeout(() => {
+      if (tile.parentNode) {
+        tile.src = retryUrl;
+      }
+    }, delay);
   });
+}
+
+async function setTiles(name) {
+  const loadToken = ++_tileLayerLoadToken;
+  const tileCfg = TILES[name];
+  if (!tileCfg) return;
+
+  const available = await _checkTileAvailability(name, { retryUnavailable: true });
+  if (loadToken !== _tileLayerLoadToken) return;
+  if (!available) {
+    toast(`${tileCfg.label} 服务不可用，请切换其他底图`);
+    const fallback = 'dark-nolabels';
+    if (!tileLayer && !_isCartoTile(name)) {
+      document.getElementById('tile-select').value = fallback;
+      return setTiles(fallback);
+    }
+    document.getElementById('tile-select').value = currentTile;
+    return;
+  }
+
+  if (loadToken !== _tileLayerLoadToken) return;
+  currentTile = name;
   for (const track of tracks.values()) renderTrack(track);
+
+  if (tileLayer) map.removeLayer(tileLayer);
+  const layer = L.tileLayer(tileCfg.url, _tileLayerOptions(name)).addTo(map);
+  _attachTileRetry(layer);
+  tileLayer = layer;
+}
+
+async function _setDetailTiles(name) {
+  const loadToken = ++_detailTileLayerLoadToken;
+  if (!detailRouteMap) return;
+
+  const tileCfg = TILES[name];
+  if (!tileCfg) return;
+  const available = await _checkTileAvailability(name, { retryUnavailable: true });
+  if (loadToken !== _detailTileLayerLoadToken || !detailRouteMap) return;
+  if (!available) {
+    toast(`${tileCfg.label} 服务不可用，请切换其他底图`);
+    return;
+  }
+
+  if (loadToken !== _detailTileLayerLoadToken || !detailRouteMap) return;
+  if (detailRouteTileLayer) detailRouteMap.removeLayer(detailRouteTileLayer);
+  detailRouteTileKey = name;
+  const layer = L.tileLayer(tileCfg.url, _tileLayerOptions(name)).addTo(detailRouteMap);
+  _attachTileRetry(layer);
+  detailRouteTileLayer = layer;
 }
 
 /* ── Track coords ────────────────────────────────────────────────────────── */
@@ -1332,7 +1402,7 @@ function renderTrack(track) {
 }
 
 /* ── Add / remove tracks ─────────────────────────────────────────────────── */
-function addTrack(data) {
+function addTrack(data, { fit = true } = {}) {
   const id = ++trackCounter;
   const color     = PALETTE[(id - 1) % PALETTE.length];
   const raw       = data.coords;
@@ -1349,9 +1419,7 @@ function addTrack(data) {
 
   renderTrack(track);
 
-  const allBounds = L.latLngBounds([]);
-  for (const t of tracks.values()) allBounds.extend(t.polyline.getBounds());
-  map.fitBounds(allBounds, { padding: [32, 32], maxZoom: 16 });
+  if (fit) mapFitAll();
 
   addTrackRow(track);
   syncBadge();
@@ -1655,10 +1723,10 @@ function stopFlash(id) {
 }
 
 /* ── File upload ─────────────────────────────────────────────────────────── */
-async function uploadFile(file) {
+async function uploadFile(file, { fit = true } = {}) {
   if (!file.name.toLowerCase().endsWith('.fit')) {
     toast(`跳过 ${file.name}：不是 .fit 文件`);
-    return;
+    return null;
   }
   const form = new FormData();
   form.append('file', file);
@@ -1667,12 +1735,13 @@ async function uploadFile(file) {
     res = await fetch('/api/upload', { method: 'POST', body: form });
   } catch {
     toast('上传失败：网络错误');
-    return;
+    return null;
   }
   const data = await res.json();
-  if (!res.ok) { toast(`${file.name}：${data.error}`); return; }
-  addTrack(data);
+  if (!res.ok) { toast(`${file.name}：${data.error}`); return null; }
+  const id = addTrack(data, { fit });
   _actActivities = null; // invalidate cache so list refreshes
+  return id;
 }
 
 /* ── Drag-and-drop ───────────────────────────────────────────────────────── */
@@ -1687,7 +1756,11 @@ function setupDragDrop() {
     e.preventDefault();
     depth = 0;
     overlay.classList.remove('show');
-    for (const file of e.dataTransfer.files) await uploadFile(file);
+    let loaded = false;
+    for (const file of e.dataTransfer.files) {
+      if (await uploadFile(file, { fit: false }) != null) loaded = true;
+    }
+    if (loaded) mapFitAll();
     if (_sidebarView === 'activities') openActivitiesView();
   });
 }
@@ -2019,25 +2092,98 @@ async function _loadTileImg(url, retries = 3) {
   return null;
 }
 
-let _cartoCdnAvail = ['a', 'b', 'c', 'd']; // 可用子域，由 _refreshCdnStatus 动态更新
+const _CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'];
+const _CARTO_PROBE_TIMEOUT_MS = 3000;
+let _cartoCdnAvail = [];
+let _cartoCdnChecked = false;
+let _cartoCdnProbePromise = null;
+const _tileProbeResults = new Map();
+const _tileProbePromises = new Map();
 let _tileSubIdx = 0;
 
-async function _refreshCdnStatus() {
-  const probe = s => fetch(
-    `https://${s}.basemaps.cartocdn.com/dark_nolabels/1/0/0.png`,
-    { method: 'HEAD', cache: 'no-store' }
-  ).then(r => r.ok).catch(() => false);
-
-  const results = await Promise.all(['a', 'b', 'c', 'd'].map(probe));
-  const avail = ['a', 'b', 'c', 'd'].filter((_, i) => results[i]);
-  _cartoCdnAvail = avail.length > 0 ? avail : ['a', 'b', 'c', 'd'];
-  if (avail.length === 0) toast('地图服务不可用，瓦片加载可能失败');
-  _CARTO_OPTS.subdomains = _cartoCdnAvail;
-  if (tileLayer) tileLayer.options.subdomains = _cartoCdnAvail;
-  if (detailRouteTileLayer) detailRouteTileLayer.options.subdomains = _cartoCdnAvail;
+function _probeTileImage(url) {
+  return new Promise(resolve => {
+    const image = new Image();
+    const timer = setTimeout(() => {
+      image.onload = null;
+      image.onerror = null;
+      image.src = '';
+      resolve(false);
+    }, _CARTO_PROBE_TIMEOUT_MS);
+    const finish = available => {
+      clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      resolve(available);
+    };
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    image.src = url;
+  });
 }
 
-// zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
+async function _checkTileAvailability(name, { retryUnavailable = false } = {}) {
+  const tileCfg = TILES[name];
+  if (!tileCfg) return false;
+  if (_isCartoTile(name)) {
+    return (await _refreshCdnStatus({ retryUnavailable })).length > 0;
+  }
+
+  const provider = tileCfg.provider;
+  if (_tileProbeResults.get(provider) === true) return true;
+  if (_tileProbeResults.get(provider) === false && !retryUnavailable) return false;
+  if (_tileProbePromises.has(provider)) return _tileProbePromises.get(provider);
+
+  const promise = _probeTileImage(tileCfg.probeUrl)
+    .then(available => {
+      _tileProbeResults.set(provider, available);
+      return available;
+    })
+    .finally(() => { _tileProbePromises.delete(provider); });
+  _tileProbePromises.set(provider, promise);
+  return promise;
+}
+
+async function _refreshCdnStatus({ retryUnavailable = false } = {}) {
+  if (_cartoCdnChecked && (_cartoCdnAvail.length || !retryUnavailable)) return _cartoCdnAvail;
+  if (_cartoCdnProbePromise) return _cartoCdnProbePromise;
+
+  const probe = async s => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _CARTO_PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(
+        `https://${s}.basemaps.cartocdn.com/dark_nolabels/1/0/0.png`,
+        { method: 'HEAD', cache: 'no-store', signal: controller.signal }
+      );
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  _cartoCdnProbePromise = Promise.all(_CARTO_SUBDOMAINS.map(probe))
+    .then(results => {
+      _cartoCdnAvail = _CARTO_SUBDOMAINS.filter((_, i) => results[i]);
+      _cartoCdnChecked = true;
+      if (_cartoCdnAvail.length) {
+        _CARTO_OPTS.subdomains = [..._cartoCdnAvail];
+        if (_isCartoTile(currentTile) && tileLayer) {
+          tileLayer.options.subdomains = [..._cartoCdnAvail];
+        }
+        if (_isCartoTile(detailRouteTileKey) && detailRouteTileLayer) {
+          detailRouteTileLayer.options.subdomains = [..._cartoCdnAvail];
+        }
+      }
+      return _cartoCdnAvail;
+    })
+    .finally(() => { _cartoCdnProbePromise = null; });
+
+  return _cartoCdnProbePromise;
+}
+
 // zoom: integer tile zoom; scaleFactor: 2^(zoomExact-zoom) scales tiles to match decimal zoom
 async function _drawTiles(ctx, zoom, scaleFactor, originX, originY, W, H, urlTemplate, onProgress) {
   const TILE = 256;
@@ -2345,6 +2491,8 @@ async function doExport() {
   console.time('[export] 总耗时');
 
   try {
+    const avail = await _refreshCdnStatus();
+    if (!avail.length) throw new Error('Carto 地图服务不可用');
     const [W, H] = EXPORT_RESOLUTIONS[exportState.resolution][exportState.ratio];
     const tileTemplate = EXPORT_TILE_URLS[exportState.tile];
     const allTracks = [...tracks.values()];
@@ -2380,9 +2528,10 @@ async function openDetailView(id) {
   if (!t) return;
   stopFlash(id);
   detailTrackId = id;
-  _refreshCdnStatus();
 
+  _detailTileLayerLoadToken++;
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
+  detailRouteTileKey = null;
   detailRouteLayers = [];
 
   document.getElementById('detail-filename-label').textContent = t.name;
@@ -2440,7 +2589,9 @@ function closeDetailView() {
   _detailZoomActive = false;
   const resetBtn = document.getElementById('detail-zoom-reset-btn');
   if (resetBtn) resetBtn.style.display = 'none';
+  _detailTileLayerLoadToken++;
   if (detailRouteMap) { detailRouteMap.remove(); detailRouteMap = null; detailRouteTileLayer = null; }
+  detailRouteTileKey = null;
   detailRouteLayers = [];
   if (_detailRouteHideTimer) { clearTimeout(_detailRouteHideTimer); _detailRouteHideTimer = null; }
   _detailRouteMarker = null;
@@ -3485,8 +3636,7 @@ function _renderDetailRoute() {
   if (!detailRouteMap) {
     detailRouteMap = L.map('detail-route-map', { zoomControl: true });
     const tileKey = document.getElementById('tile-select').value || 'dark-nolabels';
-    const tile = TILES[tileKey];
-    detailRouteTileLayer = L.tileLayer(tile.url, tile.opts).addTo(detailRouteMap);
+    void _setDetailTiles(tileKey);
   }
 
   for (const layer of detailRouteLayers) detailRouteMap.removeLayer(layer);
@@ -3621,7 +3771,9 @@ function _renderDetailRoute() {
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 
 document.addEventListener('DOMContentLoaded', () => {
+  _initTheme();
   initMap();
+  void _loadDefaultTile();
   setupDragDrop();
   initZoomSlider();
   initPanelResize();
@@ -3635,7 +3787,7 @@ document.addEventListener('DOMContentLoaded', () => {
   switchSidebarView('activities');
 
   document.getElementById('tile-select').addEventListener('change', e => {
-    setTiles(e.target.value);
+    void setTiles(e.target.value);
   });
 
   _setupOptGroup('ex-tile-group', 'tile');
@@ -3710,16 +3862,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (group) _applyDistPeriod(group.dataset.distId, Number(btn.dataset.distPeriod));
   });
 
-  // 初始加载文件库计数 & AI 配置 & 主题
+  // 初始加载文件库计数 & AI 配置
   refreshLibraryCount();
   _initAiConfig();
   _loadPmcConfig();
-  _initTheme();
   _loadAllTags();
   _initDetailNoteButtons();
 
   document.getElementById('act-upload-input')?.addEventListener('change', async e => {
-    for (const file of e.target.files) await uploadFile(file);
+    let loaded = false;
+    for (const file of e.target.files) {
+      if (await uploadFile(file, { fit: false }) != null) loaded = true;
+    }
+    if (loaded) mapFitAll();
     e.target.value = '';
     _actActivities = null;
     if (_sidebarView === 'activities') openActivitiesView();
@@ -4635,6 +4790,7 @@ async function openSettingsModal() {
   document.getElementById('settings-modal').style.display = 'flex';
   try {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
+    document.getElementById('cfg-map-tile').value          = TILES[cfg.map_tile] ? cfg.map_tile : 'dark-nolabels';
     document.getElementById('cfg-pmc-ftp').value           = cfg.pmc_ftp              ?? '';
     document.getElementById('cfg-pmc-rest-hr').value       = cfg.pmc_rest_hr          ?? '';
     document.getElementById('cfg-pmc-max-hr').value        = cfg.pmc_max_hr           ?? '';
@@ -4666,6 +4822,7 @@ async function saveSettingsModal() {
   const val = id => document.getElementById(id).value.trim();
   const num = id => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? null : v; };
   const cfg = {
+    map_tile:            val('cfg-map-tile')      || 'dark-nolabels',
     pmc_ftp:              num('cfg-pmc-ftp'),
     pmc_rest_hr:          num('cfg-pmc-rest-hr'),
     pmc_max_hr:           num('cfg-pmc-max-hr'),
@@ -4693,6 +4850,8 @@ async function saveSettingsModal() {
     if (!r.ok) throw new Error();
     closeSettingsModal();
     toast('设置已保存');
+    document.getElementById('tile-select').value = cfg.map_tile;
+    await setTiles(cfg.map_tile);
     _initAiConfig();
     await _loadPmcConfig();
     if (_analyticsOpen && _analyticsTab === 'pmc') {
@@ -4985,18 +5144,29 @@ async function _pmtReload() {
 }
 
 /* ── Theme toggle ───────────────────────────────────────────────────────── */
+async function _loadDefaultTile() {
+  let tile = 'dark-nolabels';
+  try {
+    const cfg = await fetch('/api/config/raw').then(r => r.json());
+    if (TILES[cfg.map_tile]) tile = cfg.map_tile;
+  } catch {}
+  document.getElementById('tile-select').value = tile;
+  await setTiles(tile);
+}
+
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light-theme');
   localStorage.setItem('theme', isLight ? 'light' : 'dark');
   document.getElementById('theme-toggle-icon').textContent = '◑';
   document.getElementById('theme-toggle-label').textContent = isLight ? '浅色' : '深色';
-  const tile = isLight ? 'light-nolabels' : 'dark-nolabels';
-  document.getElementById('tile-select').value = tile;
-  if (map) setTiles(tile);
-  if (detailRouteMap && detailRouteTileLayer) {
-    detailRouteMap.removeLayer(detailRouteTileLayer);
-    const t = TILES[tile];
-    detailRouteTileLayer = L.tileLayer(t.url, t.opts).addTo(detailRouteMap);
+  if (_isCartoTile(currentTile)) {
+    const withLabels = currentTile === 'dark' || currentTile === 'light';
+    const tile = isLight
+      ? (withLabels ? 'light' : 'light-nolabels')
+      : (withLabels ? 'dark' : 'dark-nolabels');
+    document.getElementById('tile-select').value = tile;
+    if (map) void setTiles(tile);
+    if (detailRouteMap) void _setDetailTiles(tile);
   }
   if (_analyticsOpen && _analyticsTab === 'pmc' && _pmcAllData) {
     _loadAndRenderPmc();
@@ -5012,8 +5182,6 @@ function _initTheme() {
     document.body.classList.add('light-theme');
     document.getElementById('theme-toggle-icon').textContent = '◑';
     document.getElementById('theme-toggle-label').textContent = '浅色';
-    document.getElementById('tile-select').value = 'light-nolabels';
-    setTiles('light-nolabels');
   }
 }
 
