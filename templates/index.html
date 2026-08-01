@@ -144,6 +144,7 @@
       <button onclick="_stravaUploadSelected()">上传 Strava</button>
       <button onclick="_actBulkLoad()">加载轨迹</button>
       <button id="act-bulk-tag-btn" onclick="_openBulkTagPicker(this)">标签</button>
+      <button id="act-bulk-poster-btn" onclick="_actBulkPoster()" disabled>汇总海报</button>
       <button id="act-bulk-chart-btn" onclick="_actBulkChartCompare()" disabled>图表对比</button>
       <button id="act-bulk-ai-btn" onclick="_actBulkAiCompare()" disabled>AI 对比</button>
       <button class="danger-btn" onclick="_actBulkDelete()">删除</button>
@@ -397,6 +398,7 @@
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
       <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
+      <button class="det-export-btn" id="detail-poster-btn" onclick="openDetailPoster()">生成海报</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
     <div id="detail-meta">
@@ -688,6 +690,78 @@
         <button class="modal-cancel" onclick="_pmtPreview()">预览</button>
         <button class="modal-export" onclick="_pmtSave()">保存</button>
         <button class="modal-cancel" onclick="closePromptsModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 骑行分享海报 -->
+  <div id="poster-modal" style="display:none">
+    <div id="poster-modal-overlay" onclick="closePosterModal()"></div>
+    <div id="poster-modal-box">
+      <div id="poster-modal-header">
+        <div>
+          <div id="poster-modal-title">骑行分享海报</div>
+          <div id="poster-modal-kind"></div>
+        </div>
+        <button onclick="closePosterModal()" aria-label="关闭">✕</button>
+      </div>
+      <div id="poster-modal-body">
+        <div id="poster-controls">
+          <label class="poster-field poster-field-wide">
+            <span>标题</span>
+            <input id="poster-title-input" maxlength="40" oninput="_posterTextChanged()">
+          </label>
+          <label class="poster-field poster-field-wide">
+            <span>副标题</span>
+            <input id="poster-subtitle-input" maxlength="60" oninput="_posterTextChanged()">
+          </label>
+
+          <div class="poster-control-group">
+            <span class="poster-control-label">海报主题</span>
+            <div class="poster-option-row" id="poster-theme-options">
+              <button class="active" data-val="dark" onclick="_posterSetOption('theme', 'dark')">深色</button>
+              <button data-val="light" onclick="_posterSetOption('theme', 'light')">浅色</button>
+            </div>
+          </div>
+
+          <div class="poster-control-group">
+            <span class="poster-control-label">图片比例</span>
+            <div class="poster-option-row" id="poster-ratio-options">
+              <button class="active" data-val="3:4" onclick="_posterSetOption('ratio', '3:4')">3:4</button>
+              <button data-val="9:16" onclick="_posterSetOption('ratio', '9:16')">9:16</button>
+            </div>
+          </div>
+
+          <div class="poster-control-group poster-control-group-wide">
+            <span class="poster-control-label">展示数据</span>
+            <div id="poster-field-options">
+              <label><input type="checkbox" value="distance" checked onchange="_posterFieldsChanged()">距离</label>
+              <label><input type="checkbox" value="duration" checked onchange="_posterFieldsChanged()">时长</label>
+              <label><input type="checkbox" value="speed" checked onchange="_posterFieldsChanged()">均速</label>
+              <label><input type="checkbox" value="elevation" checked onchange="_posterFieldsChanged()">爬升</label>
+              <label><input type="checkbox" value="power" checked onchange="_posterFieldsChanged()">功率</label>
+              <label><input type="checkbox" value="hr" checked onchange="_posterFieldsChanged()">心率</label>
+              <label><input type="checkbox" value="cadence" onchange="_posterFieldsChanged()">踏频</label>
+            </div>
+          </div>
+
+          <label class="poster-privacy-row">
+            <input id="poster-privacy-check" type="checkbox" checked onchange="_posterPrivacyChanged()">
+            <span>隐藏每条路线起终点附近约 800 米</span>
+          </label>
+          <div id="poster-control-hint">海报仅在浏览器中生成，不会上传或保存到服务器。</div>
+        </div>
+
+        <div id="poster-preview-wrap">
+          <div id="poster-preview-status">正在准备海报…</div>
+          <canvas id="poster-canvas" width="1440" height="1920"></canvas>
+        </div>
+      </div>
+      <div id="poster-modal-footer">
+        <span id="poster-export-hint">高清 PNG · 1440 × 1920</span>
+        <div class="poster-footer-spacer"></div>
+        <button class="modal-cancel" onclick="closePosterModal()">取消</button>
+        <button class="modal-export" id="poster-download-btn" onclick="downloadPoster()">下载 PNG</button>
       </div>
     </div>
   </div>

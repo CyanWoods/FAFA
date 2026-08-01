@@ -251,6 +251,17 @@ Two teardown invariants, both easy to break:
 - `_disposeCompareCharts()` must run on close **and** on theme toggle — ECharts instances capture their theme at `init`, so a themed redraw requires disposing first.
 - `_cmpLoadToken` guards the async load. `closeCompareModal()` and each new `_actBulkChartCompare()` bump it; the loader discards its result when the token moved. Without this, closing mid-load builds charts into a hidden modal that nothing ever disposes.
 
+### Ride posters
+
+Single-ride detail → **生成海报** (`openDetailPoster`) and activity multi-select → **汇总海报** (`_actBulkPoster`) open `#poster-modal`. The feature is entirely client-side: it loads library coordinates through `/api/load`, renders CARTO tiles and routes to `#poster-canvas`, and downloads a PNG without uploading or persisting poster content.
+
+- Formats: 3:4 at 1440×1920 and 9:16 at 1080×1920; dark and light poster themes are independent of the application theme.
+- Single posters show one route and its metrics. Summary posters accept 1–50 selected rides, load in batches of four, draw each route in a palette color, and aggregate distance, total duration, moving-speed average, elevation, power, heart rate and cadence.
+- Privacy is enabled by default. `_posterVisibleSegments()` removes every contiguous run within 800 m of either endpoint, so the canvas must draw a list of segments rather than reconnecting hidden points.
+- `_posterDownsampleSegments()` runs after privacy splitting and preserves each segment's endpoints. Single posters cap at 20 000 points; summaries divide an approximately 100 000-point budget across rides (minimum 1 500 each) to prevent large selections from freezing Canvas rendering.
+- `_posterState.renderToken` invalidates closed or superseded async tile renders. The map canvas is cached separately from text / metric overlays so title and field edits do not reload tiles.
+- Poster maps must use `EXPORT_TILE_URLS` CARTO layers. Amap tiles are not canvas-safe; if CARTO is unavailable the route is drawn over a plain fallback background.
+
 ### Weather / wind
 
 `/api/weather/<filename>` computes headwind / tailwind / crosswind percentages by comparing each GPS segment's bearing against hourly wind direction (head = ±45°, tail = 135°–225°, else cross).
@@ -269,9 +280,9 @@ High-resolution forecast models only cover ~2022–present. When the chosen sour
 
 ## Frontend
 
-`static/app.js` (~5800 lines, no bundler) is organized as ordered section blocks — keep related code inside its block:
+`static/app.js` (~7200 lines, no bundler) is organized as ordered section blocks — keep related code inside its block:
 
-ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → **prompt editor** → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
+ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → **ride posters** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → **prompt editor** → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
 
 Six sidebar views (`switchSidebarView`): `activities` (default) · `map` · `pmc` · `calendar` · `files` · `about`. PMC and calendar share `#analytics-view` and are switched by `switchAnalyticsTab`.
 
@@ -315,7 +326,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
 | 2100 | `#export-modal`, `#sync-modal`, `#strava-modal`, `#settings-modal` |
-| 2200 | `#act-ai-modal`, `#compare-modal` (mutually exclusive — never open together) |
+| 2200 | `#act-ai-modal`, `#compare-modal`, `#poster-modal` (not opened together through normal UI flows) |
 | 2300 | `#prompts-modal` (opens from `#settings-modal`, which stays visible behind it) |
 
 ## Configuration

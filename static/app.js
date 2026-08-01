@@ -411,6 +411,8 @@ function _updateSelectBar() {
   if (aiBtn) aiBtn.disabled = (_actSelected.size < 2 || !_aiModel);
   const chartBtn = document.getElementById('act-bulk-chart-btn');
   if (chartBtn) chartBtn.disabled = (_actSelected.size < 2);
+  const posterBtn = document.getElementById('act-bulk-poster-btn');
+  if (posterBtn) posterBtn.disabled = (_actSelected.size < 1);
 }
 
 function _actSelectAll() {
@@ -987,6 +989,485 @@ function _renderCmpPercent() {
     },
     series,
   });
+}
+
+/* ── 骑行分享海报 ─────────────────────────────────────────────────────────── */
+
+const _POSTER_SIZE = {
+  '3:4':  [1440, 1920],
+  '9:16': [1080, 1920],
+};
+const _POSTER_THEMES = {
+  dark: {
+    bg: '#0b0e14', panel: '#141a24', mapFallback: '#18212d',
+    text: '#f4f7fb', muted: '#98a5b7', subtle: '#5f6c7d', accent: '#55a8ff',
+    routeHalo: 'rgba(5,8,13,0.72)', start: '#47d78f', end: '#ff6f78',
+    tile: EXPORT_TILE_URLS['dark-nolabels'],
+  },
+  light: {
+    bg: '#f3f5f8', panel: '#ffffff', mapFallback: '#e5ebf1',
+    text: '#18212c', muted: '#657184', subtle: '#98a1ad', accent: '#2479c9',
+    routeHalo: 'rgba(255,255,255,0.82)', start: '#168a55', end: '#d8434f',
+    tile: EXPORT_TILE_URLS['light-nolabels'],
+  },
+};
+const _POSTER_FONT = '"PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif';
+const _POSTER_PRIVACY_KM = 0.8;
+
+const _posterState = {
+  rides: [], kind: 'single', theme: 'dark', ratio: '3:4',
+  title: '', subtitle: '', hideEndpoints: true,
+  fields: new Set(['distance', 'duration', 'speed', 'elevation', 'power', 'hr']),
+  revision: 0, renderToken: 0, renderTimer: null, renderPromise: null,
+  mapCanvas: null, mapKey: '',
+};
+
+function _posterDateLabel(value) {
+  if (!value) return '';
+  const dt = new Date(value.replace(' ', 'T'));
+  if (Number.isNaN(dt.getTime())) return value.slice(0, 10);
+  return dt.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function _posterDefaultSubtitle(rides, kind) {
+  const dates = rides.map(r => r.startTime || '').filter(Boolean).sort();
+  if (kind === 'single') return _posterDateLabel(dates[0]);
+  if (!dates.length) return `${rides.length} 次骑行`;
+  const first = dates[0].slice(0, 10).replaceAll('-', '.');
+  const last = dates[dates.length - 1].slice(0, 10).replaceAll('-', '.');
+  return `${first}${first === last ? '' : ` — ${last}`} · ${rides.length} 次骑行`;
+}
+
+function _posterRideFromTrack(track) {
+  const act = (_actActivities || []).find(a => a.filename === track.filename);
+  return {
+    filename: track.filename || track.name || '',
+    startTime: act?.start_time || track.timeStatsStart || '',
+    summary: track.summary || act?.summary || {},
+    coords: track.raw || [],
+  };
+}
+
+function _posterOpen(rides, kind) {
+  if (!rides.length) { toast('没有可生成海报的骑行记录'); return; }
+  _posterState.rides = rides;
+  _posterState.kind = kind;
+  _posterState.theme = 'dark';
+  _posterState.ratio = '3:4';
+  _posterState.title = kind === 'single' ? '骑行记录' : '骑行合集';
+  _posterState.subtitle = _posterDefaultSubtitle(rides, kind);
+  _posterState.hideEndpoints = true;
+  _posterState.fields = new Set(['distance', 'duration', 'speed', 'elevation']);
+  if (rides.some(r => r.summary?.avg_power != null)) _posterState.fields.add('power');
+  if (rides.some(r => r.summary?.avg_hr != null)) _posterState.fields.add('hr');
+  _posterState.revision++;
+  _posterState.mapCanvas = null;
+  _posterState.mapKey = '';
+
+  document.getElementById('poster-title-input').value = _posterState.title;
+  document.getElementById('poster-subtitle-input').value = _posterState.subtitle;
+  document.getElementById('poster-privacy-check').checked = true;
+  document.getElementById('poster-modal-kind').textContent =
+    kind === 'single' ? '单条路线海报' : `${rides.length} 条骑行 · 汇总海报`;
+  document.querySelectorAll('#poster-theme-options button').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.val === _posterState.theme));
+  document.querySelectorAll('#poster-ratio-options button').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.val === _posterState.ratio));
+  document.querySelectorAll('#poster-field-options input').forEach(input => {
+    const available = _posterFieldAvailable(input.value, rides);
+    input.disabled = !available;
+    input.checked = available && _posterState.fields.has(input.value);
+  });
+  document.getElementById('poster-modal').style.display = 'flex';
+  _posterUpdateSizeHint();
+  _posterScheduleRender(true);
+}
+
+function openDetailPoster() {
+  const track = tracks.get(detailTrackId);
+  if (!track) { toast('当前骑行尚未加载'); return; }
+  _posterOpen([_posterRideFromTrack(track)], 'single');
+}
+
+async function _actBulkPoster() {
+  if (!_actSelected.size) { toast('请先选择活动'); return; }
+  if (_actSelected.size > 50) { toast('一次最多生成 50 条骑行的汇总海报'); return; }
+  const acts = [..._actSelected]
+    .map(fn => (_actActivities || []).find(a => a.filename === fn))
+    .filter(Boolean)
+    .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+  if (!acts.length) { toast('获取记录信息失败'); return; }
+
+  const modal = document.getElementById('poster-modal');
+  const status = document.getElementById('poster-preview-status');
+  const loadToken = ++_posterState.renderToken;
+  _posterState.rides = [];
+  document.getElementById('poster-modal-kind').textContent = `${acts.length} 条骑行 · 正在加载轨迹`;
+  status.textContent = `正在加载轨迹 0 / ${acts.length}…`;
+  modal.style.display = 'flex';
+
+  const rides = [];
+  for (let offset = 0; offset < acts.length; offset += 4) {
+    const batch = acts.slice(offset, offset + 4);
+    const results = await Promise.all(batch.map(async act => {
+      try {
+        const res = await fetch('/api/load', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: act.filename }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return {
+          filename: act.filename || '', startTime: act.start_time || data.time_stats_start || '',
+          summary: act.summary || data.summary || {}, coords: data.coords || [],
+        };
+      } catch (_) { return null; }
+    }));
+    if (loadToken !== _posterState.renderToken || modal.style.display !== 'flex') return;
+    rides.push(...results.filter(Boolean));
+    status.textContent = `正在加载轨迹 ${Math.min(offset + batch.length, acts.length)} / ${acts.length}…`;
+  }
+  if (!rides.length) { closePosterModal(); toast('轨迹加载失败，无法生成海报'); return; }
+  if (rides.length < acts.length) toast(`${acts.length - rides.length} 条轨迹加载失败，已跳过`);
+  _posterOpen(rides, rides.length === 1 ? 'single' : 'summary');
+}
+
+function closePosterModal() {
+  _posterState.renderToken++;
+  if (_posterState.renderTimer) clearTimeout(_posterState.renderTimer);
+  _posterState.renderTimer = null;
+  _posterState.renderPromise = null;
+  document.getElementById('poster-modal').style.display = 'none';
+}
+
+function _posterSetOption(key, value) {
+  _posterState[key] = value;
+  const group = document.getElementById(key === 'theme' ? 'poster-theme-options' : 'poster-ratio-options');
+  group.querySelectorAll('button').forEach(btn => btn.classList.toggle('active', btn.dataset.val === value));
+  _posterState.mapCanvas = null;
+  _posterUpdateSizeHint();
+  _posterScheduleRender(true);
+}
+
+function _posterTextChanged() {
+  _posterState.title = document.getElementById('poster-title-input').value.trim();
+  _posterState.subtitle = document.getElementById('poster-subtitle-input').value.trim();
+  _posterScheduleRender(false);
+}
+
+function _posterFieldsChanged() {
+  _posterState.fields = new Set(
+    [...document.querySelectorAll('#poster-field-options input:checked')].map(input => input.value)
+  );
+  _posterScheduleRender(false);
+}
+
+function _posterPrivacyChanged() {
+  _posterState.hideEndpoints = document.getElementById('poster-privacy-check').checked;
+  _posterState.mapCanvas = null;
+  _posterScheduleRender(true);
+}
+
+function _posterUpdateSizeHint() {
+  const [w, h] = _POSTER_SIZE[_posterState.ratio];
+  document.getElementById('poster-export-hint').textContent = `高清 PNG · ${w} × ${h}`;
+  document.getElementById('poster-canvas').classList.toggle('poster-canvas-story', _posterState.ratio === '9:16');
+}
+
+function _posterScheduleRender(mapChanged) {
+  if (mapChanged) _posterState.mapCanvas = null;
+  if (_posterState.renderTimer) clearTimeout(_posterState.renderTimer);
+  _posterState.renderTimer = setTimeout(() => {
+    _posterState.renderTimer = null;
+    _posterState.renderPromise = _posterRender();
+  }, 120);
+}
+
+function _posterFieldAvailable(key, rides) {
+  const summaries = rides.map(r => r.summary || {});
+  if (key === 'distance') return summaries.some(s => s.total_dist_km != null);
+  if (key === 'duration') return summaries.some(s => s.total_duration_s != null || s.moving_time_s != null);
+  if (key === 'speed') return summaries.some(s => s.avg_speed_kmh != null);
+  if (key === 'elevation') return summaries.some(s => s.total_elevation_gain_m != null);
+  if (key === 'power') return summaries.some(s => s.avg_power != null);
+  if (key === 'hr') return summaries.some(s => s.avg_hr != null);
+  if (key === 'cadence') return summaries.some(s => s.avg_cadence != null);
+  return false;
+}
+
+function _posterWeightedAverage(rides, field) {
+  let weighted = 0, weights = 0;
+  for (const ride of rides) {
+    const value = ride.summary?.[field];
+    if (value == null) continue;
+    const weight = ride.summary?.moving_time_s || ride.summary?.total_duration_s || 1;
+    weighted += value * weight;
+    weights += weight;
+  }
+  return weights ? weighted / weights : null;
+}
+
+function _posterMetrics() {
+  const rides = _posterState.rides;
+  const sum = field => rides.reduce((total, ride) => total + (ride.summary?.[field] || 0), 0);
+  const totalDistance = sum('total_dist_km');
+  const totalDuration = rides.reduce((total, ride) => total +
+    (ride.summary?.total_duration_s ?? ride.summary?.moving_time_s ?? 0), 0);
+  const movingDuration = rides.reduce((total, ride) => total +
+    (ride.summary?.moving_time_s ?? ride.summary?.total_duration_s ?? 0), 0);
+  const aggregateSpeed = movingDuration > 0 ? totalDistance / movingDuration * 3600 : null;
+  const defs = {
+    distance:  { label: rides.length > 1 ? '总距离' : '距离', value: totalDistance, digits: 1, unit: 'km' },
+    duration:  { label: rides.length > 1 ? '总时长' : '时长', text: _fmtDur(totalDuration) || '—', unit: '' },
+    speed:     { label: '均速', value: rides.length > 1 ? aggregateSpeed : rides[0]?.summary?.avg_speed_kmh, digits: 1, unit: 'km/h' },
+    elevation: { label: rides.length > 1 ? '累计爬升' : '爬升', value: sum('total_elevation_gain_m'), digits: 0, unit: 'm' },
+    power:     { label: '均功率', value: _posterWeightedAverage(rides, 'avg_power'), digits: 0, unit: 'W' },
+    hr:        { label: '均心率', value: _posterWeightedAverage(rides, 'avg_hr'), digits: 0, unit: 'bpm' },
+    cadence:   { label: '均踏频', value: _posterWeightedAverage(rides, 'avg_cadence'), digits: 0, unit: 'rpm' },
+  };
+  return [..._posterState.fields]
+    .map(key => defs[key])
+    .filter(metric => metric && (metric.text || metric.value != null));
+}
+
+function _posterVisibleSegments(coords) {
+  if (!coords || coords.length < 2) return [];
+  if (!_posterState.hideEndpoints) return [coords];
+  const start = coords[0], end = coords[coords.length - 1];
+  const segments = [];
+  let current = [];
+  for (const point of coords) {
+    const hidden = _haversineKm(point[0], point[1], start[0], start[1]) < _POSTER_PRIVACY_KM ||
+      _haversineKm(point[0], point[1], end[0], end[1]) < _POSTER_PRIVACY_KM;
+    if (hidden) {
+      if (current.length > 1) segments.push(current);
+      current = [];
+    } else {
+      current.push(point);
+    }
+  }
+  if (current.length > 1) segments.push(current);
+  return segments;
+}
+
+function _posterDownsampleSegments(segments, maxPoints) {
+  const totalPoints = segments.reduce((total, segment) => total + segment.length, 0);
+  if (totalPoints <= maxPoints) return segments;
+  const ratio = maxPoints / totalPoints;
+  return segments.map(segment => {
+    const target = Math.max(2, Math.round(segment.length * ratio));
+    if (segment.length <= target) return segment;
+    const last = segment.length - 1;
+    return Array.from({ length: target }, (_, index) =>
+      segment[Math.round(index / (target - 1) * last)]
+    );
+  });
+}
+
+async function _posterBuildMap(width, height, theme, token) {
+  const mapCanvas = document.createElement('canvas');
+  mapCanvas.width = width;
+  mapCanvas.height = height;
+  const ctx = mapCanvas.getContext('2d');
+  ctx.fillStyle = theme.mapFallback;
+  ctx.fillRect(0, 0, width, height);
+
+  const pointsPerRide = _posterState.rides.length === 1
+    ? 20000
+    : Math.max(1500, Math.floor(100000 / _posterState.rides.length));
+  const rideSegments = _posterState.rides.map(ride =>
+    _posterDownsampleSegments(_posterVisibleSegments(ride.coords), pointsPerRide)
+  );
+  const allCoords = rideSegments.flat(2);
+  if (allCoords.length < 2) {
+    ctx.fillStyle = theme.muted;
+    ctx.font = `28px ${_POSTER_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('隐私保护后无可展示路线', width / 2, height / 2);
+    return mapCanvas;
+  }
+
+  const inset = Math.round(Math.min(width, height) * 0.09);
+  const fit = _calcZoom(allCoords, width - inset * 2, height - inset * 2);
+  const zoomExact = fit.zoom;
+  const zoomInt = Math.floor(zoomExact);
+  const scaleFactor = Math.pow(2, zoomExact - zoomInt);
+  const origin = _calcOrigin(fit.minLat, fit.maxLat, fit.minLon, fit.maxLon, zoomExact, width, height);
+  const originX = Math.round(origin[0]), originY = Math.round(origin[1]);
+
+  const avail = await _refreshCdnStatus({ retryUnavailable: true });
+  if (token !== _posterState.renderToken) return null;
+  if (avail.length) {
+    await _drawTiles(ctx, zoomInt, scaleFactor, originX, originY, width, height, theme.tile);
+    if (token !== _posterState.renderToken) return null;
+  }
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  rideSegments.forEach((segments, rideIndex) => {
+    const color = _posterState.rides.length === 1 ? theme.accent : PALETTE[rideIndex % PALETTE.length];
+    ctx.strokeStyle = theme.routeHalo;
+    ctx.lineWidth = Math.max(12, width * 0.011);
+    segments.forEach(segment => _drawPath(ctx, segment, zoomExact, originX, originY));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(6, width * 0.0055);
+    segments.forEach(segment => _drawPath(ctx, segment, zoomExact, originX, originY));
+  });
+
+  if (!_posterState.hideEndpoints && _posterState.rides.length === 1) {
+    const coords = _posterState.rides[0].coords || [];
+    for (const [point, color] of [[coords[0], theme.start], [coords[coords.length - 1], theme.end]]) {
+      if (!point) continue;
+      const [x, y] = _lngLatToWorld(point[0], point[1], zoomExact);
+      ctx.beginPath();
+      ctx.arc(x - originX, y - originY, Math.max(10, width * 0.009), 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = Math.max(4, width * 0.003);
+      ctx.strokeStyle = theme.routeHalo;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  if (avail.length) {
+    ctx.fillStyle = theme.routeHalo;
+    ctx.fillRect(width - 132, height - 42, 132, 42);
+    ctx.font = `18px ${_POSTER_FONT}`;
+    ctx.fillStyle = theme.text;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('© CARTO', width - 14, height - 20);
+  }
+  return mapCanvas;
+}
+
+function _posterDrawMetric(ctx, metric, x, y, width, height, theme, scale) {
+  ctx.fillStyle = theme.panel;
+  _roundRect(ctx, x, y, width, height, Math.round(22 * scale));
+  ctx.fill();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = theme.muted;
+  ctx.font = `${Math.round(21 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText(metric.label, x + 28 * scale, y + 24 * scale);
+
+  const text = metric.text || Number(metric.value).toFixed(metric.digits);
+  const valueSize = Math.round((text.length > 7 ? 40 : 48) * scale);
+  ctx.font = `700 ${valueSize}px ${_POSTER_FONT}`;
+  ctx.fillStyle = theme.text;
+  const valueX = x + 28 * scale;
+  const valueY = y + 61 * scale;
+  ctx.fillText(text, valueX, valueY);
+  if (metric.unit) {
+    const valueWidth = ctx.measureText(text).width;
+    ctx.fillStyle = theme.muted;
+    ctx.font = `600 ${Math.round(19 * scale)}px ${_POSTER_FONT}`;
+    ctx.fillText(metric.unit, valueX + valueWidth + 10 * scale, valueY + 25 * scale);
+  }
+}
+
+async function _posterRender() {
+  if (!_posterState.rides.length || document.getElementById('poster-modal').style.display !== 'flex') return;
+  const token = ++_posterState.renderToken;
+  const status = document.getElementById('poster-preview-status');
+  const canvas = document.getElementById('poster-canvas');
+  const [width, height] = _POSTER_SIZE[_posterState.ratio];
+  const theme = _POSTER_THEMES[_posterState.theme];
+  const scale = width / 1440;
+  const pad = Math.round(width * 0.065);
+  const mapY = Math.round(292 * scale);
+  const mapHeight = _posterState.ratio === '9:16' ? 960 : 1030;
+  const mapWidth = width - pad * 2;
+  const mapKey = `${_posterState.revision}:${_posterState.theme}:${_posterState.ratio}:${_posterState.hideEndpoints}`;
+
+  canvas.width = width;
+  canvas.height = height;
+  status.style.display = '';
+  status.textContent = '正在绘制地图与路线…';
+
+  if (!_posterState.mapCanvas || _posterState.mapKey !== mapKey) {
+    const built = await _posterBuildMap(mapWidth, mapHeight, theme, token);
+    if (!built || token !== _posterState.renderToken) return;
+    _posterState.mapCanvas = built;
+    _posterState.mapKey = mapKey;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(0, 0, width, height);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = theme.accent;
+  ctx.font = `700 ${Math.round(20 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText(_posterState.kind === 'single' ? 'SINGLE RIDE' : 'RIDE COLLECTION', pad, 66 * scale);
+  ctx.fillStyle = theme.text;
+  ctx.font = `700 ${Math.round(64 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText(_posterState.title || '骑行记录', pad, 105 * scale, mapWidth);
+  ctx.fillStyle = theme.muted;
+  ctx.font = `${Math.round(27 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText(_posterState.subtitle, pad, 202 * scale, mapWidth);
+
+  ctx.save();
+  _roundRect(ctx, pad, mapY, mapWidth, mapHeight, Math.round(28 * scale));
+  ctx.clip();
+  ctx.drawImage(_posterState.mapCanvas, pad, mapY);
+  ctx.restore();
+
+  const metrics = _posterMetrics();
+  const columns = _posterState.ratio === '9:16' ? 2 : 4;
+  const gap = Math.round(18 * scale);
+  const cardWidth = (mapWidth - gap * (columns - 1)) / columns;
+  const cardHeight = Math.round(144 * scale);
+  const statsY = mapY + mapHeight + Math.round(54 * scale);
+  metrics.forEach((metric, index) => {
+    const col = index % columns, row = Math.floor(index / columns);
+    _posterDrawMetric(ctx, metric, pad + col * (cardWidth + gap), statsY + row * (cardHeight + gap),
+      cardWidth, cardHeight, theme, scale);
+  });
+
+  const footerY = height - Math.round(78 * scale);
+  ctx.fillStyle = theme.text;
+  ctx.font = `800 ${Math.round(29 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText('FAFA', pad, footerY);
+  ctx.fillStyle = theme.subtle;
+  ctx.font = `${Math.round(18 * scale)}px ${_POSTER_FONT}`;
+  ctx.fillText('骑行数据海报', pad + Math.round(92 * scale), footerY + Math.round(8 * scale));
+  ctx.textAlign = 'right';
+  ctx.fillText(_posterState.rides.length === 1 ? '1 RIDE' : `${_posterState.rides.length} RIDES`, width - pad, footerY + Math.round(8 * scale));
+
+  status.style.display = 'none';
+}
+
+async function downloadPoster() {
+  const btn = document.getElementById('poster-download-btn');
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+  try {
+    if (_posterState.renderTimer) {
+      clearTimeout(_posterState.renderTimer);
+      _posterState.renderTimer = null;
+      _posterState.renderPromise = _posterRender();
+    }
+    if (_posterState.renderPromise) await _posterState.renderPromise;
+    const canvas = document.getElementById('poster-canvas');
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG 编码失败');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    const safeTitle = (_posterState.title || '骑行海报').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40);
+    link.download = `${safeTitle}_${_posterState.ratio.replace(':', '-')}.png`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    toast('海报已生成');
+  } catch (error) {
+    toast('海报生成失败：' + error.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '下载 PNG';
+  }
 }
 
 async function _actLoadAllVisible() {
@@ -3812,6 +4293,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       if (document.getElementById('prompts-modal').style.display === 'flex') closePromptsModal();
+      else if (document.getElementById('poster-modal').style.display === 'flex') closePosterModal();
       else if (document.getElementById('compare-modal').style.display === 'flex') closeCompareModal();
       else if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
       else if (aiTrackId != null) closeAiView();
@@ -3823,7 +4305,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('mousedown', e => {
     if (e.button !== 3) return;
     e.preventDefault();
-    if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
+    if (document.getElementById('poster-modal').style.display === 'flex') closePosterModal();
+    else if (document.getElementById('cal-act-modal').classList.contains('active')) calCloseActivityModal();
     else if (aiTrackId != null) closeAiView();
     else if (detailTrackId != null) closeDetailView();
     else if (_analyticsOpen) closeAnalyticsView();
