@@ -100,13 +100,13 @@ Cache key is the **file signature** `mtime_ns:ctime_ns:size`, not just mtime. A 
 
 `_parse_and_build_direct` produces: `coords`, `is_gcj02`, `summary`, `km_stats`, `dist_stats` (100 m), `time_stats` (60 s), `time_stats_start` (local), `start_time_utc`, `peak_power` (5/60/300/1200/3600 s), `zone_time_s` (Coggan 7 zones). Add new parse-derived fields here when more than one route needs them.
 
-Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLOTS` (4), `FAFA_AI_SLOTS` (8), `FAFA_SYNC_SLOTS` (2). Exhaustion returns 429/`ValueError`, never a queue.
+Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLOTS` (4), `FAFA_AI_SLOTS` (8), `FAFA_SYNC_SLOTS` (2). AI additionally has a per-user in-memory cap `FAFA_AI_USER_SLOTS` (3) layered on top of the process-wide AI slots, so one user cannot starve the others. Exhaustion returns 429/`ValueError`, never a queue.
 
 ### Backend routes (`app.py`)
 
 | Route | Purpose |
 |---|---|
-| `/login`, `/logout` | session auth; rate-limited per user **and** per IP |
+| `/login`, `/logout` | session auth; rate-limited per user **and** per IP. `POST /login` is AJAX: JSON body → **200** `{ok}` on success / **403** bad creds / **429** rate-limited; form body (no-JS fallback) → 302 redirect. Already-authenticated `GET /login` → **302**. |
 | `/api/upload` | parse an uploaded FIT to a temp file; never persisted |
 | `/api/load` | parse one library file; returns `source="library"` |
 | `/api/files`, `/api/files/delete`, `/api/files/delete_all`, `/api/files/export` | library management; export streams a ZIP |
@@ -117,8 +117,10 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `/api/parse/status` | parse progress for the activities-view loading bar |
 | `/api/weather/<filename>` | wind analysis from Open-Meteo (see below) |
 | `/api/ai/config`, `/api/ai/evaluate`, `/api/ai/chat`, `/api/ai/pmc`, `/api/ai/calendar`, `/api/ai/compare` | SSE streams via `_llm_stream()` |
-| `/api/config/raw` GET/POST | settings modal; secrets masked on read, Strava tokens read-only on write |
+| `/api/config/raw` GET/POST | settings view; secrets masked on read, Strava tokens read-only on write |
 | `/api/prompts` GET/POST, `/api/prompts/reset`, `/api/prompts/history`, `/api/prompts/preview` | user-editable AI prompt templates (see below) |
+| `/api/tokens` GET/POST, `/api/tokens/<id>/revoke` POST | personal API 授权码 CRUD (session-only); plaintext returned **once** on create, only sha256 stored |
+| `/api/v1/activities`, `/api/v1/activities/<filename>`, `/api/v1/records/<filename>` | read-only public API; authenticates via session **or** `Authorization: Bearer <token>` (Bearer accepted only under `/api/v1/`) |
 | `/api/sync/start`, `/api/sync/status` | unified sync (`platform`: `onelap` \| `igpsport`) |
 | `/api/onelap/sync`, `/api/onelap/status` | legacy OneLap-only aliases |
 | `/api/strava/status`, `/api/strava/auth_url`, `/strava/callback`, `/api/strava/diff`, `/api/strava/upload`, `/api/strava/upload/status` | Strava OAuth + diff + upload |
@@ -134,7 +136,7 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `gcj02.py` | WGS-84 ↔ GCJ-02 math + `needs_wgs84_conversion()`. |
 | `prompts.py` | AI 提示词默认模板、变量目录、渲染器。See "Prompt templates" below. |
 | `db.py` | Per-user SQLite (WAL). Tables `activity_meta`, `tags`, `activity_tags`; 5 preset tags seeded. |
-| `auth.py` | `users.db`, password hashing, `login_required`, exponential login lockout. |
+| `auth.py` | `users.db`, password hashing, `login_required`, exponential login lockout, `last_login_at`. Personal API 授权码 (`api_tokens` table, sha256-hashed, `hmac.compare_digest`): `create/verify/list/revoke_api_token`. `login_required` authorizes a valid `g.user_id` set from **either** session or Bearer token. |
 | `onelap.py` | OneLap: request signing, API/browser login, list, download, Magene renaming. |
 | `igpsport.py` | iGPSport: token login, paged activity list, FIT download. SSRF-guarded redirect handler, 32 MB cap. |
 | `strava.py` | OAuth, token refresh, activity diff, upload polling. |
@@ -221,7 +223,7 @@ Writes go **history first, then current**. If the process dies between them, his
 
 Preview goes through `_render_kind()` with a `template_override`, i.e. the same assembly path as a live request, so what the editor shows is what the model receives. Sample data is the newest real activity for `evaluate`/`compare`; `pmc` and `calendar_*` use built-in samples because their payloads are computed in the browser and the backend cannot reconstruct them.
 
-**Editor UI.** Settings → AI 配置 → 编辑提示词模板… opens `#prompts-modal` (`openPromptsModal`), which sits at z-index **2300** because the settings modal (2100) stays open behind it. Five tabs, a variable palette that inserts at the cursor, per-template block params, a preview pane, and a history dropdown.
+**Editor UI.** 设置 view → AI 配置 → 编辑提示词模板… opens `#prompts-modal` (`openPromptsModal`), which sits at z-index **2300** (above the settings view at 500). Five tabs, a variable palette that inserts at the cursor, per-template block params, a preview pane, and a history dropdown.
 
 The textarea is **prefilled with the default text** rather than left empty. An empty box gives the user nothing to edit and hides what the prompt actually says; prefilling is safe precisely because the server normalizes text-equal-to-default into a key deletion, so no redundant copy is stored. `_pmtSavedText()` is what drafts are diffed against — comparing against `templates[kind] ?? ''` instead would mark every untouched tab dirty.
 
@@ -282,9 +284,9 @@ High-resolution forecast models only cover ~2022–present. When the chosen sour
 
 `static/app.js` (~7200 lines, no bundler) is organized as ordered section blocks — keep related code inside its block:
 
-ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → **ride posters** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings modal → **prompt editor** → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
+ECharts injection → tile configs → detail constants → export constants → GCJ-02 helpers → state → sidebar nav → activities view → **ride comparison** → **ride posters** → map init → track coords → add/remove tracks → coord transform → stats helpers → track list UI → panel focus / flash → upload / drag-drop → toast → panel toggle & resize → zoom slider → PNG export → detail view (meta, tags, notes) → detail route heatmap → boot → file library → JSON export → OneLap/iGPSport sync → Strava upload → AI evaluation → PMC → settings view + 授权码 → **prompt editor** → theme toggle → analytics controller → power distribution → power curve → shared AI modal → per-activity AI → calendar AI → calendar.
 
-Six sidebar views (`switchSidebarView`): `activities` (default) · `map` · `pmc` · `calendar` · `files` · `about`. PMC and calendar share `#analytics-view` and are switched by `switchAnalyticsTab`.
+Seven sidebar views (`switchSidebarView`): `activities` (default) · `map` · `pmc` · `calendar` · `files` · `settings` · `about`. Settings is a full sidebar view (`#settings-view`, `loadSettingsView`) — a function-grouped card grid, not a modal — replacing the old bottom-left `#settings-modal`. PMC and calendar share `#analytics-view` and are switched by `switchAnalyticsTab`.
 
 Frontend notes:
 - ECharts only — do not add Chart.js. Detail charts use the SVG renderer to avoid DPR blur.
@@ -315,7 +317,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 |---|---|
 | 1 | `#map` |
 | 10 | `#map-header`, `.detail-zoom-sel` |
-| 500 | `#map-view`, `#activities-view`, `#files-view`, `#about-view` |
+| 500 | `#map-view`, `#activities-view`, `#files-view`, `#settings-view`, `#about-view` |
 | 800 | `#sidebar` |
 | 900 | `#track-panel`, `#zoom-slider-wrap`, `#map-fit-btn` |
 | 950 | `#detail-view`, `#analytics-view` |
@@ -325,9 +327,9 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 | 1500 | `#cal-act-modal` |
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
-| 2100 | `#export-modal`, `#sync-modal`, `#strava-modal`, `#settings-modal` |
+| 2100 | `#export-modal`, `#sync-modal`, `#strava-modal`, `#token-reveal-modal` |
 | 2200 | `#act-ai-modal`, `#compare-modal`, `#poster-modal` (not opened together through normal UI flows) |
-| 2300 | `#prompts-modal` (opens from `#settings-modal`, which stays visible behind it) |
+| 2300 | `#prompts-modal` (opens from the `#settings-view` AI card) |
 
 ## Configuration
 
@@ -351,7 +353,8 @@ Secret fields are returned masked as `••••••••`; posting the mas
 | `FAFA_ALLOW_INSECURE_REMOTE` | `0` | allow non-loopback bind in local mode |
 | `FAFA_USER_STORAGE_MB` | `10240` | per-user FIT storage cap (floor 32 MB) |
 | `FAFA_PARSE_SLOTS` | `4` | concurrent FIT parse workers |
-| `FAFA_AI_SLOTS` | `8` | concurrent AI streams |
+| `FAFA_AI_SLOTS` | `8` | concurrent AI streams (process-wide) |
+| `FAFA_AI_USER_SLOTS` | `3` | concurrent AI streams **per user** |
 | `FAFA_SYNC_SLOTS` | `2` | concurrent sync / Strava upload jobs |
 | `FLASK_DEBUG` | `0` | debug mode + verbose logging |
 

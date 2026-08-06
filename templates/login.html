@@ -131,11 +131,9 @@
     <div class="login-title">FAFA</div>
     <div class="login-subtitle">FIT 骑行数据分析平台</div>
 
-    {% if error %}
-    <div class="login-error">{{ error }}</div>
-    {% endif %}
+    <div id="login-error" class="login-error"{% if not error %} style="display:none"{% endif %}>{{ error or '' }}</div>
 
-    <form method="post" action="/login">
+    <form id="login-form" method="post" action="/login">
       <div class="field">
         <label>用户名</label>
         <input type="text" name="username" placeholder="输入用户名" autocomplete="username" autofocus required>
@@ -144,8 +142,9 @@
         <label>密码</label>
         <input type="password" name="password" placeholder="输入密码" autocomplete="current-password" required>
       </div>
-      <button type="submit" class="login-btn">登录</button>
+      <button type="submit" id="login-btn" class="login-btn">登录</button>
     </form>
   </div>
+  <script src="/static/login.js"></script>
 </body>
 </html>

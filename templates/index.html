@@ -47,6 +47,10 @@
         <span class="sb-icon sb-icon--lg">⊞</span>
         <span class="sb-label">文件管理 <span id="lib-count" class="sb-badge"></span></span>
       </button>
+      <button class="sb-item" data-view="settings" onclick="switchSidebarView('settings')">
+        <span class="sb-icon sb-icon--lg">⚙</span>
+        <span class="sb-label">设置</span>
+      </button>
       <button class="sb-item" data-view="about" onclick="switchSidebarView('about')">
         <span class="sb-icon">ⓘ</span>
         <span class="sb-label">关于</span>
@@ -56,10 +60,6 @@
       <button class="sb-bottom-btn" id="theme-toggle-btn" onclick="toggleTheme()">
         <span class="sb-bottom-icon" id="theme-toggle-icon">◑</span>
         <span class="sb-bottom-label" id="theme-toggle-label">深色</span>
-      </button>
-      <button class="sb-bottom-btn" onclick="openSettingsModal()">
-        <span class="sb-bottom-icon sb-bottom-icon--lg">⚙</span>
-        <span class="sb-bottom-label">设置</span>
       </button>
     </div>
     <div id="user-bar">
@@ -859,14 +859,16 @@
     </div>
   </div>
 
-  <!-- ── 设置弹窗 ───────────────────────────────────────────────────────── -->
-  <div id="settings-modal" style="display:none">
-    <div class="modal-overlay" onclick="closeSettingsModal()"></div>
-    <div class="modal-box settings-box">
-      <div class="modal-title">设置</div>
+  <!-- ── 界面：设置 ─────────────────────────────────────────────────────── -->
+  <div id="settings-view">
+    <div id="settings-header">
+      <span class="act-list-title">设置</span>
+      <button id="settings-save-btn" class="modal-export" onclick="saveSettings()">保存</button>
+    </div>
+    <div class="settings-grid">
 
-      <div class="settings-section">
-        <div class="settings-section-title">地图</div>
+      <div class="settings-card">
+        <div class="settings-section-title">外观与地图</div>
         <div class="settings-row">
           <label class="settings-label">默认底图</label>
           <select id="cfg-map-tile">
@@ -884,7 +886,7 @@
         <div class="settings-hint">地图页上方的切换只在当前会话生效；保存后的默认底图会在下次打开时自动加载。</div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-card">
         <div class="settings-section-title">PMC 参数</div>
         <div class="settings-row">
           <label class="settings-label">FTP</label>
@@ -916,7 +918,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-card">
         <div class="settings-section-title">路线热图范围</div>
         <div class="settings-row">
           <label class="settings-label">坡度下限</label>
@@ -948,7 +950,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-card">
         <div class="settings-section-title">风向数据源</div>
         <div class="settings-row">
           <label class="settings-label">数据源</label>
@@ -963,7 +965,7 @@
         <div class="settings-hint">高精模式查不到的老骑行（约 2022 年前）自动回退 ERA5 再分析。</div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-card">
         <div class="settings-section-title">AI 配置</div>
         <div class="settings-row">
           <label class="settings-label">API 地址</label>
@@ -987,8 +989,9 @@
         </div>
       </div>
 
-      <div class="settings-section">
-        <div class="settings-section-title">顽鹿同步</div>
+      <div class="settings-card">
+        <div class="settings-section-title">同步账号</div>
+        <div class="settings-subtitle">顽鹿</div>
         <div class="settings-row">
           <label class="settings-label">用户名</label>
           <input id="cfg-onelap-user" type="text" placeholder="">
@@ -997,10 +1000,7 @@
           <label class="settings-label">密码</label>
           <input id="cfg-onelap-pass" type="password" placeholder="">
         </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">iGPSport 同步</div>
+        <div class="settings-subtitle">iGPSport</div>
         <div class="settings-row">
           <label class="settings-label">用户名</label>
           <input id="cfg-igp-user" type="text" placeholder="">
@@ -1009,10 +1009,7 @@
           <label class="settings-label">密码</label>
           <input id="cfg-igp-pass" type="password" placeholder="">
         </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Strava</div>
+        <div class="settings-subtitle">Strava</div>
         <div class="settings-row">
           <label class="settings-label">Client ID</label>
           <input id="cfg-strava-id" type="text" placeholder="">
@@ -1027,9 +1024,32 @@
         </div>
       </div>
 
+      {% if server_mode %}
+      <div class="settings-card settings-card--wide">
+        <div class="settings-section-title">授权码（API）</div>
+        <div class="settings-hint">授权码用于以编程方式访问 <code>/api/v1</code> 只读接口，请求头带上 <code>Authorization: Bearer &lt;授权码&gt;</code>。授权码只在生成时完整显示一次，请妥善保存。</div>
+        <div class="token-create-row">
+          <input id="token-name" type="text" maxlength="64" placeholder="用途备注，如 my-script">
+          <input id="token-expires" type="number" min="1" max="3650" placeholder="有效期(天，可空)">
+          <button class="settings-link-btn" onclick="createToken()">生成授权码</button>
+        </div>
+        <div id="token-list" class="token-list"></div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+
+  <!-- ── 授权码生成结果弹窗（一次性明文）───────────────────────────────────── -->
+  <div id="token-reveal-modal" style="display:none">
+    <div class="modal-overlay" onclick="closeTokenReveal()"></div>
+    <div class="modal-box">
+      <div class="modal-title">授权码已生成</div>
+      <div class="settings-hint">请立即复制并妥善保存，关闭后将无法再次查看完整授权码。</div>
+      <div class="token-reveal-value" id="token-reveal-value"></div>
       <div class="modal-actions">
-        <button class="modal-cancel" onclick="closeSettingsModal()">取消</button>
-        <button class="modal-export" onclick="saveSettingsModal()">保存</button>
+        <button class="modal-export" onclick="copyTokenReveal()">复制</button>
+        <button class="modal-cancel" onclick="closeTokenReveal()">关闭</button>
       </div>
     </div>
   </div>

@@ -160,9 +160,22 @@ docker run -d \
 | 导入 FIT | 点击按钮上传本地 `.fit` 文件 |
 | FIT 同步 | 触发顽鹿（OneLap）或 iGPSport 增量下载 |
 
+### 设置视图
+
+侧边栏第六个视图，将原先左下角的设置弹窗提升为独立分页，按功能分栏卡片布局：外观与地图、PMC 参数、路线热图范围、风向数据源、AI 配置、同步账号（顽鹿 / iGPSport / Strava）。服务器模式下额外提供「授权码 (API)」栏。
+
+**授权码（API）** —— 仅服务器模式可用，为以后对外 API 打基础：
+
+- 在设置视图生成命名授权码，明文**仅生成时显示一次**，服务端只保存 sha256 哈希；可设可选有效期、随时撤销。
+- 用于以编程方式访问只读接口 `/api/v1`（`/api/v1/activities`、`/api/v1/activities/<文件名>`、`/api/v1/records/<文件名>`），请求头带 `Authorization: Bearer <授权码>`。
+
+```bash
+curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activities
+```
+
 ### 关于视图
 
-侧边栏第六个视图，展示当前版本号（来自项目根目录 `version` 文件）和五个功能视图的简要说明。
+侧边栏第七个视图，展示当前版本号（来自项目根目录 `version` 文件）和各功能视图的简要说明。
 
 ### 骑行详情视图（全屏覆盖）
 

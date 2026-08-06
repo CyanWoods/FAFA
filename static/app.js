@@ -216,7 +216,7 @@ let _calYear  = new Date().getFullYear();
 let _calMonth = new Date().getMonth(); // 0-indexed
 let _calActivities = null; // cached from /api/activities
 
-let _sidebarView = 'activities'; // 'activities' | 'map' | 'pmc' | 'calendar' | 'files'
+let _sidebarView = 'activities'; // 'activities' | 'map' | 'pmc' | 'calendar' | 'files' | 'settings' | 'about'
 
 function switchSidebarView(name) {
   // Dismiss full-screen overlays first (z-index 950+) so they don't block new view
@@ -231,6 +231,7 @@ function switchSidebarView(name) {
   document.getElementById('activities-view').classList.remove('active');
   document.getElementById('files-view').classList.remove('active');
   document.getElementById('about-view').classList.remove('active');
+  document.getElementById('settings-view').classList.remove('active');
   closeAnalyticsView(false);
 
   // Update sidebar button active state
@@ -261,6 +262,9 @@ function switchSidebarView(name) {
   } else if (name === 'files') {
     document.getElementById('files-view').classList.add('active');
     refreshLibrary();
+  } else if (name === 'settings') {
+    document.getElementById('settings-view').classList.add('active');
+    loadSettingsView();
   } else if (name === 'about') {
     document.getElementById('about-view').classList.add('active');
   }
@@ -482,7 +486,7 @@ async function _fetchActivityData(act) {
 
 async function _actBulkAiCompare() {
   if (_actSelected.size < 2) { toast('请至少选择 2 条记录'); return; }
-  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击侧栏「设置」进行配置'); return; }
 
   const filenames = [..._actSelected];
   const acts = filenames
@@ -4805,7 +4809,7 @@ function _setSyncUI(msg, pct, total) {
 /* ── Strava 上传 ─────────────────────────────────────────────────────────── */
 let _stravaPollTimer = null;
 
-const STRAVA_AUTH_MSG_DEFAULT = '需要先完成 Strava 授权。请点击左下角「设置」按钮填写 Strava 凭据，然后点击授权。';
+const STRAVA_AUTH_MSG_DEFAULT = '需要先完成 Strava 授权。请点击侧栏「设置」填写 Strava 凭据，然后点击授权。';
 
 function openStravaModal() {
   document.getElementById('strava-modal').style.display = 'flex';
@@ -4902,7 +4906,7 @@ async function _stravaStartUpload(filenames) {
 async function _stravaUploadSingle(filename) {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请点击左下角「设置」按钮配置 Strava 凭据');
+    toast('请点击侧栏「设置」配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -4957,7 +4961,7 @@ async function _stravaConfirmDiff() {
 async function _stravaUploadAllVisible() {
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请点击左下角「设置」按钮配置 Strava 凭据');
+    toast('请点击侧栏「设置」配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -4969,7 +4973,7 @@ async function _stravaUploadSelected() {
   const filenames = [..._actSelected];
   const status = await _stravaCheckStatus();
   if (!status.configured) {
-    toast('请点击左下角「设置」按钮配置 Strava 凭据');
+    toast('请点击侧栏「设置」配置 Strava 凭据');
     return;
   }
   if (!status.has_tokens) { openStravaModal(); return; }
@@ -5062,7 +5066,7 @@ async function openAiView() {
   const id = detailTrackId;
   const t  = tracks.get(id);
   if (!t) return;
-  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击侧栏「设置」进行配置'); return; }
   aiTrackId = id;
 
   const chips = _statChips(t.summary || {});
@@ -5118,7 +5122,7 @@ async function startAiEval() {
     loading.style.display = 'none';
     result.innerHTML = `<div class="ai-unconfigured">
       <strong>AI 评估未配置</strong><br>
-      请点击左下角「设置」按钮填入 API Key 进行配置。
+      请点击侧栏「设置」填入 API Key 进行配置。
     </div>`;
     return;
   }
@@ -5142,7 +5146,7 @@ async function startAiEval() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       loading.style.display = 'none';
-      _setErrorHtml(result, d.error || '请求失败，请点击左下角「设置」按钮检查配置');
+      _setErrorHtml(result, d.error || '请求失败，请点击侧栏「设置」检查配置');
       return;
     }
 
@@ -5195,7 +5199,7 @@ function _setErrorHtml(el, message) {
   el.innerHTML = '';
   const div = document.createElement('div');
   div.className = 'ai-error';
-  div.textContent = message || '请求失败，请点击左下角「设置」按钮检查配置';
+  div.textContent = message || '请求失败，请点击侧栏「设置」检查配置';
   el.appendChild(div);
 }
 
@@ -5268,9 +5272,9 @@ function _pmcChartTheme(sourceEl = null) {
   };
 }
 
-/* ── Settings modal ─────────────────────────────────────────────────────── */
-async function openSettingsModal() {
-  document.getElementById('settings-modal').style.display = 'flex';
+/* ── Settings view ──────────────────────────────────────────────────────── */
+async function loadSettingsView() {
+  loadTokens();
   try {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
     document.getElementById('cfg-map-tile').value          = TILES[cfg.map_tile] ? cfg.map_tile : 'dark-nolabels';
@@ -5297,11 +5301,8 @@ async function openSettingsModal() {
   } catch { toast('加载配置失败'); }
 }
 
-function closeSettingsModal() {
-  document.getElementById('settings-modal').style.display = 'none';
-}
-
-async function saveSettingsModal() {
+async function saveSettings() {
+  const btn = document.getElementById('settings-save-btn');
   const val = id => document.getElementById(id).value.trim();
   const num = id => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? null : v; };
   const cfg = {
@@ -5328,10 +5329,10 @@ async function saveSettingsModal() {
     strava_redirect_port: num('cfg-strava-port'),
   };
   Object.keys(cfg).forEach(k => { if (cfg[k] === null) delete cfg[k]; });
+  if (btn) btn.disabled = true;
   try {
     const r = await fetch('/api/config/raw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
     if (!r.ok) throw new Error();
-    closeSettingsModal();
     toast('设置已保存');
     document.getElementById('tile-select').value = cfg.map_tile;
     await setTiles(cfg.map_tile);
@@ -5343,6 +5344,81 @@ async function saveSettingsModal() {
     }
     if (detailTrackId != null) openDetailView(detailTrackId);
   } catch { toast('保存失败'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+/* ── 授权码 / API token ─────────────────────────────────────────────────── */
+async function loadTokens() {
+  const box = document.getElementById('token-list');
+  if (!box) return;   // 本地模式无授权码卡片
+  try {
+    const d = await fetch('/api/tokens').then(r => r.json());
+    const toks = d.tokens || [];
+    if (!toks.length) { box.innerHTML = '<div class="token-empty">尚无授权码</div>'; return; }
+    box.innerHTML = toks.map(t => {
+      const revoked = t.revoked ? ' token-row--revoked' : '';
+      const expired = t.expires_at && new Date(t.expires_at.replace(' ', 'T') + 'Z') <= new Date();
+      let status = '有效';
+      if (t.revoked) status = '已撤销';
+      else if (expired) status = '已过期';
+      const last = t.last_used_at ? t.last_used_at : '从未使用';
+      const exp  = t.expires_at ? t.expires_at : '永不过期';
+      const action = t.revoked ? '' :
+        `<button class="token-revoke-btn" onclick="revokeToken(${t.id})">撤销</button>`;
+      return `<div class="token-row${revoked}">
+        <div class="token-row-main">
+          <span class="token-row-name">${_escapeHtml(t.name)}</span>
+          <span class="token-row-prefix">fafa_${_escapeHtml(t.token_prefix)}…</span>
+          <span class="token-row-status">${status}</span>
+        </div>
+        <div class="token-row-meta">创建 ${_escapeHtml(t.created_at || '')} · 最后使用 ${_escapeHtml(last)} · ${_escapeHtml(exp)}</div>
+        ${action}
+      </div>`;
+    }).join('');
+  } catch { box.innerHTML = '<div class="token-empty">加载授权码失败</div>'; }
+}
+
+async function createToken() {
+  const nameEl = document.getElementById('token-name');
+  const expEl  = document.getElementById('token-expires');
+  const name = nameEl.value.trim();
+  if (!name) { toast('请填写授权码名称'); return; }
+  const body = { name };
+  const days = parseInt(expEl.value, 10);
+  if (!isNaN(days)) body.expires_days = days;
+  try {
+    const r = await fetch('/api/tokens', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '生成失败'); return; }
+    nameEl.value = ''; expEl.value = '';
+    _showTokenReveal(d.token);
+    loadTokens();
+  } catch { toast('生成失败'); }
+}
+
+async function revokeToken(id) {
+  if (!confirm('撤销后使用该授权码的调用将立即失效，确定撤销吗？')) return;
+  try {
+    const r = await fetch('/api/tokens/' + id + '/revoke', { method: 'POST' });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); toast(d.error || '撤销失败'); return; }
+    toast('已撤销');
+    loadTokens();
+  } catch { toast('撤销失败'); }
+}
+
+function _showTokenReveal(token) {
+  document.getElementById('token-reveal-value').textContent = token;
+  document.getElementById('token-reveal-modal').style.display = 'flex';
+}
+function closeTokenReveal() {
+  document.getElementById('token-reveal-modal').style.display = 'none';
+  document.getElementById('token-reveal-value').textContent = '';
+}
+function copyTokenReveal() {
+  const v = document.getElementById('token-reveal-value').textContent;
+  navigator.clipboard.writeText(v).then(() => toast('已复制到剪贴板'), () => toast('复制失败，请手动选择'));
 }
 
 /* ── AI 提示词编辑器 ──────────────────────────────────────────────────────── */
@@ -6631,7 +6707,7 @@ async function _openAndStreamModal(title, summaryHtml, fetchFn, systemMsg) {
     loading.style.display = 'none';
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      _setErrorHtml(resultEl, d.error || '请求失败，请点击左下角「设置」按钮检查配置');
+      _setErrorHtml(resultEl, d.error || '请求失败，请点击侧栏「设置」检查配置');
       return;
     }
     const reader = res.body.getReader();
@@ -6751,7 +6827,7 @@ function _windDirArrow(deg) {
 
 /* ── 活动列表单条 AI 分析 ──────────────────────────────────────────────────── */
 async function openActAiModal(act) {
-  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击侧栏「设置」进行配置'); return; }
   const chips = _statChips(act.summary || {});
   const { kmStats, windData } = await _fetchActivityData(act);
   let weatherHtml = '';
@@ -6772,7 +6848,7 @@ async function openActAiModal(act) {
 
 /* ── 训练日历 AI 建议 ──────────────────────────────────────────────────────── */
 async function startCalendarAi(period) {
-  if (!_aiModel) { toast('AI 未配置，请点击左下角「设置」按钮进行配置'); return; }
+  if (!_aiModel) { toast('AI 未配置，请点击侧栏「设置」进行配置'); return; }
   const acts    = _calActivities || [];
   const now     = new Date();
   const cutoff  = new Date(now);
@@ -6804,7 +6880,7 @@ async function startPmcAi() {
     return;
   }
   if (!_aiModel) {
-    toast('AI 未配置，请点击左下角「设置」按钮进行配置');
+    toast('AI 未配置，请点击侧栏「设置」进行配置');
     return;
   }
 

@@ -144,8 +144,29 @@ _TASK_STALE_S     = 15 * 60
 _PARSE_TIMEOUT_S  = 30
 _PARSE_SLOTS      = max(1, int(os.environ.get('FAFA_PARSE_SLOTS', '4')))
 _AI_SLOTS         = max(1, int(os.environ.get('FAFA_AI_SLOTS', '8')))
+# 每用户 AI 并发上限：防止单个用户占满全部进程级 AI 槽饿死他人
+_AI_USER_SLOTS    = max(1, int(os.environ.get('FAFA_AI_USER_SLOTS', '3')))
 _SYNC_SLOTS       = max(1, int(os.environ.get('FAFA_SYNC_SLOTS', '2')))
 _RUNTIME_LOCK_DIR = PROJECT_ROOT / '.runtime_locks'
+_ai_user_counts: dict[str, int] = {}
+_ai_user_lock = threading.Lock()
+
+
+def _acquire_ai_user_slot(username: str) -> bool:
+    with _ai_user_lock:
+        if _ai_user_counts.get(username, 0) >= _AI_USER_SLOTS:
+            return False
+        _ai_user_counts[username] = _ai_user_counts.get(username, 0) + 1
+        return True
+
+
+def _release_ai_user_slot(username: str) -> None:
+    with _ai_user_lock:
+        remaining = _ai_user_counts.get(username, 0) - 1
+        if remaining > 0:
+            _ai_user_counts[username] = remaining
+        else:
+            _ai_user_counts.pop(username, None)
 
 
 def _atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
@@ -293,6 +314,26 @@ def _user_db_path() -> Path:
     return _user_input_dir() / 'fafa.db'
 
 
+def _activate_user(user_id: int, username: str) -> None:
+    """把已鉴权的用户写入 g，并惰性初始化其数据目录与 SQLite。"""
+    g.user_id  = user_id
+    g.username = username
+    udir = PROJECT_ROOT / 'input' / username
+    udir.mkdir(parents=True, exist_ok=True)
+    udir_str = str(udir)
+    with _db_init_lock:
+        if udir_str not in _db_init_done:
+            _db.init_db(udir)
+            _db_init_done.add(udir_str)
+
+
+def _bearer_token() -> str | None:
+    header = request.headers.get('Authorization', '')
+    if header.startswith('Bearer '):
+        return header[7:].strip() or None
+    return None
+
+
 @app.before_request
 def _load_user():
     if not SERVER_MODE:
@@ -303,17 +344,18 @@ def _load_user():
     if user_id:
         user = _auth.get_user_by_id(user_id)
         if user:
-            g.user_id  = user['id']
-            g.username = user['username']
-            udir = PROJECT_ROOT / 'input' / g.username
-            udir.mkdir(parents=True, exist_ok=True)
-            udir_str = str(udir)
-            with _db_init_lock:
-                if udir_str not in _db_init_done:
-                    _db.init_db(udir)
-                    _db_init_done.add(udir_str)
+            _activate_user(user['id'], user['username'])
         else:
             session.clear()
+        return
+    # 授权码（Bearer token）仅对 /api/v1 生效，其余接口一律要求会话
+    if request.path.startswith('/api/v1/'):
+        token = _bearer_token()
+        if token:
+            info = _auth.verify_api_token(token)
+            if info:
+                g.api_scopes = info['scopes']
+                _activate_user(info['user_id'], info['username'])
 
 
 # ── Auth routes ────────────────────────────────────────────────────────────────
@@ -338,35 +380,52 @@ def _reset_login_fail(ip: str) -> None:
 
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
+    # 已登录：GET/POST 均视为无需再登录，重定向到首页（302）
     if 'user_id' in session:
+        if request.is_json:
+            return jsonify(ok=True), 200
         return redirect(url_for('index'))
-    error = None
-    if request.method == 'POST':
-        username = (request.form.get('username') or '').strip()
-        valid_username = bool(re.fullmatch(r'[A-Za-z0-9_-]{1,32}', username))
-        user_rk = f'u:{username.lower()}' if valid_username else None
-        # 限流键的兜底字符串，不是监听地址
-        ip_rk = f'ip:{request.remote_addr or "0.0.0.0"}'  # nosec B104
-        rate_keys = [key for key in (user_rk, ip_rk) if key]
-        if not all(_check_login_rate(key) for key in rate_keys):
-            error = '登录尝试过于频繁，请稍后再试'
-        else:
-            password = request.form.get('password') or ''
-            valid_password = len(password) <= _MAX_LOGIN_PASSWORD_CHARS
-            user = _auth.verify_user(username, password) if valid_username and valid_password else None
-            if user:
-                if user_rk:
-                    _reset_login_fail(user_rk)
-                session.clear()          # prevent session fixation
-                session.permanent = True
-                session['user_id']  = user['id']
-                session['username'] = user['username']
-                return redirect(url_for('index'))
-            if user_rk:
-                _record_login_fail(user_rk)
-            _record_login_fail(ip_rk, max_fails=50)
-            error = '用户名或密码错误'
-    return render_template('login.html', error=error)
+    if request.method == 'GET':
+        return render_template('login.html', error=None)
+
+    # POST：JSON 走状态码语义，表单（noscript 兜底）走整页重定向/重渲染
+    wants_json = request.is_json
+    payload = request.get_json(silent=True) if wants_json else request.form
+    payload = payload or {}
+    username = (payload.get('username') or '').strip()
+    valid_username = bool(re.fullmatch(r'[A-Za-z0-9_-]{1,32}', username))
+    user_rk = f'u:{username.lower()}' if valid_username else None
+    # 限流键的兜底字符串，不是监听地址
+    ip_rk = f'ip:{request.remote_addr or "0.0.0.0"}'  # nosec B104
+    rate_keys = [key for key in (user_rk, ip_rk) if key]
+
+    def _fail(error: str, status: int):
+        if wants_json:
+            return jsonify(error=error), status
+        return render_template('login.html', error=error), status
+
+    if not all(_check_login_rate(key) for key in rate_keys):
+        return _fail('登录尝试过于频繁，请稍后再试', 429)
+
+    password = payload.get('password') or ''
+    valid_password = len(password) <= _MAX_LOGIN_PASSWORD_CHARS
+    user = _auth.verify_user(username, password) if valid_username and valid_password else None
+    if user:
+        if user_rk:
+            _reset_login_fail(user_rk)
+        session.clear()          # prevent session fixation
+        session.permanent = True
+        session['user_id']  = user['id']
+        session['username'] = user['username']
+        _auth.update_last_login(user['id'])
+        if wants_json:
+            return jsonify(ok=True), 200
+        return redirect(url_for('index'))
+
+    if user_rk:
+        _record_login_fail(user_rk)
+    _record_login_fail(ip_rk, max_fails=50)
+    return _fail('用户名或密码错误', 403)
 
 
 @app.route('/logout', methods=['POST'])
@@ -1067,7 +1126,8 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
 @app.route("/")
 @_auth.login_required
 def index():
-    return render_template("index.html", username=g.username, version=FAFA_VERSION)
+    return render_template("index.html", username=g.username, version=FAFA_VERSION,
+                           server_mode=SERVER_MODE)
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -2152,9 +2212,24 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
         "stream":     True,
     }
 
+    username = g.username
+    if not _acquire_ai_user_slot(username):
+        return jsonify(error='你的 AI 请求过多，请等待正在进行的分析完成'), 429
     slot_fh = _try_acquire_slot('ai', _AI_SLOTS)
     if slot_fh is None:
+        _release_ai_user_slot(username)
         return jsonify(error='服务器 AI 请求繁忙，请稍后重试'), 429
+
+    _release_lock = threading.Lock()
+    _released = [False]
+
+    def _release_slots():
+        with _release_lock:
+            if _released[0]:
+                return
+            _released[0] = True
+        slot_fh.close()
+        _release_ai_user_slot(username)
 
     def generate():
         if prompt is not None:
@@ -2190,14 +2265,14 @@ def _llm_stream(cfg: dict, prompt: str | None = None, messages: list | None = No
         finally:
             if sess is not None:
                 sess.close()
-            slot_fh.close()
+            _release_slots()
 
     response = _Resp(
         stream_with_context(generate()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    response.call_on_close(slot_fh.close)
+    response.call_on_close(_release_slots)
     return response
 
 
@@ -2456,6 +2531,87 @@ def get_activities():
     for a in result:
         a["tags"] = all_tags.get(a["filename"], [])
     return jsonify(activities=result)
+
+
+# ── 对外 API（/api/v1）：授权码（Bearer）或会话均可访问的只读接口 ─────────────────
+# g.user_id 由 _load_user 依据 Bearer 授权码或会话填充；login_required 二者皆认。
+@app.route("/api/v1/activities")
+@_auth.login_required
+def api_v1_activities():
+    return get_activities()
+
+
+@app.route("/api/v1/activities/<path:filename>")
+@_auth.login_required
+def api_v1_activity_detail(filename):
+    input_dir = _user_input_dir()
+    path = _validate_filename_in_input(filename, input_dir)
+    if path is None:
+        return jsonify(error="invalid filename"), 400
+    if not path.exists():
+        return jsonify(error="not found"), 404
+    try:
+        data = _parse_and_build(str(path), path.name)
+    except Exception as e:
+        return jsonify(error=f"解析失败: {e}"), 422
+    return jsonify(
+        filename=path.name,
+        start_time=data.get("time_stats_start"),
+        start_time_utc=data.get("start_time_utc"),
+        summary=data.get("summary") or {},
+        km_stats=data.get("km_stats") or [],
+        peak_power=data.get("peak_power") or {},
+        zone_time_s=data.get("zone_time_s"),
+    )
+
+
+@app.route("/api/v1/records/<path:filename>")
+@_auth.login_required
+def api_v1_records(filename):
+    return get_records(filename)
+
+
+# ── 授权码管理（会话鉴权，仅供设置页调用）────────────────────────────────────────
+_MAX_TOKEN_NAME = 64
+
+
+@app.route("/api/tokens", methods=["GET"])
+@_auth.login_required
+def list_tokens():
+    if not SERVER_MODE:
+        return jsonify(tokens=[])
+    return jsonify(tokens=_auth.list_api_tokens(g.user_id))
+
+
+@app.route("/api/tokens", methods=["POST"])
+@_auth.login_required
+def create_token():
+    if not SERVER_MODE:
+        return jsonify(error="授权码功能仅在服务器模式下可用"), 400
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name or len(name) > _MAX_TOKEN_NAME:
+        return jsonify(error="授权码名称需为 1-64 位"), 400
+    expires_days = data.get("expires_days")
+    if expires_days is not None:
+        if isinstance(expires_days, bool) or not isinstance(expires_days, int):
+            return jsonify(error="有效期必须是整数天数"), 400
+    try:
+        token = _auth.create_api_token(g.user_id, name, expires_days)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(token=token), 201
+
+
+@app.route("/api/tokens/<int:token_id>/revoke", methods=["POST"])
+@_auth.login_required
+def revoke_token(token_id):
+    if not SERVER_MODE:
+        return jsonify(error="授权码功能仅在服务器模式下可用"), 400
+    ok = _auth.revoke_api_token(g.user_id, token_id)
+    if not ok:
+        return jsonify(error="授权码不存在或已撤销"), 404
+    return jsonify(ok=True)
 
 
 @app.route("/api/parse/status")
