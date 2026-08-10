@@ -1329,6 +1329,7 @@ def get_records(filename):
         cps = _pct(r.combined_pedal_smoothness)
         out.append({
             "t":                 ts_local.strftime("%H:%M:%S"),
+            "dist_m":            round(r.distance_m, 1),  # 累计距离，供分段对比按距离对齐
             "speed_kmh":         round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
             "hr":                r.heart_rate,
             "power":             r.power,

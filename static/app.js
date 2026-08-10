@@ -172,6 +172,7 @@ let panelExpandedHeight = 320;
 let detailTrackId = null;
 let detailMetric = 'speed';
 let detailCharts = [];
+let detailAuxCharts = [];   // 体力衰竭等独立图表，不参与主图 x 轴联动/框选缩放
 let detailChartResizeObservers = [];
 let detailRouteMap = null;
 let detailRouteTileLayer = null;
@@ -185,6 +186,14 @@ let _detailRouteCumDist = null;
 let _detailRouteStepM = 1000;
 let _detailChartIsRecords = false;
 let _detailChartDataLen = 0;
+let _detailRecordsRef = null;   // 详情页当前记录序列，供分段对比重渲染
+// 分段平行对比（手动框选 · 距离归零叠加）
+let _detailCompareMode = false;         // 框选模式：拖拽=添加对比段而非缩放
+let _detailCompareSegs = [];            // [{i0,i1}] 记录索引区间
+let _detailCompareMetric = 'speed';     // 叠加曲线当前指标 key
+let _detailCumDistM = null;             // 各记录累计距离(米)，距离对齐用
+let _segCmpChart = null, _segCmpChartEl = null, _segCmpChipsEl = null, _segCmpMetricBarEl = null, _segCmpToggleBtn = null;
+const COMPARE_COLORS = ['#2e86de', '#e74c3c', '#27ae60', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#3498db'];
 let _detailRouteMarker = null;
 let _detailRouteHideTimer = null;
 let _detailWindData = null;
@@ -3100,6 +3109,13 @@ function _disposeDetailCharts() {
     try { chart.dispose(); } catch {}
   }
   detailCharts = [];
+  for (const chart of detailAuxCharts) {
+    try { chart.dispose(); } catch {}
+  }
+  detailAuxCharts = [];
+  // 清除分段对比模块引用，避免关闭后指向已 dispose 的实例
+  _segCmpChart = null; _segCmpChartEl = null; _segCmpChipsEl = null; _segCmpMetricBarEl = null; _segCmpToggleBtn = null;
+  _detailCompareMode = false; _detailCompareSegs = [];
 }
 
 // ── detail meta: notes + tags ─────────────────────────────────────────────────
@@ -3529,7 +3545,10 @@ function _initDetailZoomHandlers() {
     overlay.style.display = 'none';
     const rect = canvas.getBoundingClientRect();
     const endPx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    if (Math.abs(endPx - startPx) > 8) {
+    if (Math.abs(endPx - startPx) <= 8) return;
+    if (_detailCompareMode) {
+      _addCompareSegment(chart, Math.min(startPx, endPx), Math.max(startPx, endPx));
+    } else {
       _applyDetailZoom(Math.min(startPx, endPx), Math.max(startPx, endPx), chart);
     }
   });
@@ -3675,6 +3694,387 @@ function _renderDetailDistributions(wrap, records) {
     row.appendChild(b);
   }
   wrap.appendChild(row);
+}
+
+// "HH:MM:SS" → 当日秒数（用于计算段时长，跨零点自动补 24h）
+function _tSec(t) {
+  if (!t) return null;
+  const p = t.split(':');
+  if (p.length !== 3) return null;
+  return (+p[0]) * 3600 + (+p[1]) * 60 + (+p[2]);
+}
+
+// ── 体力衰竭：有氧解耦（Pw:HR 或 速度:HR 前后半程漂移）───────────────────────
+function _renderDetailFatigue(wrap, records) {
+  if (!records || records.length < 120) return;   // 数据不足，跳过
+  const isDark = !document.body.classList.contains('light-theme');
+
+  const hasPower = records.some(r => r.power != null && r.power > 0);
+  const outField = hasPower ? 'power' : 'speed_kmh';
+  const outLabel = hasPower ? '功率' : '速度';
+  const outUnit  = hasPower ? 'W' : 'km/h';
+  const outColor = hasPower ? '#f39c12' : '#2e86de';
+
+  // 有效样本：心率 > 0 且有输出 > 0（视为运动中）
+  const efRaw = records.map(r => {
+    const out = r[outField], hr = r.hr;
+    if (hr == null || hr <= 0 || out == null || out <= 0) return null;
+    return out / hr;   // 效率因子：单位心跳产出
+  });
+  const validCount = efRaw.filter(v => v != null).length;
+  if (validCount < 60) return;
+
+  // 前后半程均值（按有效样本序列切半），用 均输出/均心率 更稳健
+  const moving = [];
+  for (let i = 0; i < records.length; i++) {
+    if (efRaw[i] == null) continue;
+    moving.push({ out: records[i][outField], hr: records[i].hr });
+  }
+  const half = Math.floor(moving.length / 2);
+  const _mean = (arr, k) => arr.reduce((a, b) => a + b[k], 0) / (arr.length || 1);
+  const first = moving.slice(0, half), second = moving.slice(half);
+  const out1 = _mean(first, 'out'),  hr1 = _mean(first, 'hr');
+  const out2 = _mean(second, 'out'), hr2 = _mean(second, 'hr');
+  const ratio1 = out1 / hr1, ratio2 = out2 / hr2;
+  const decouple = (ratio1 - ratio2) / ratio1 * 100;   // 正值 = 后半程效率下降 = 疲劳漂移
+
+  let level, levelColor;
+  if      (decouple < 5)  { level = '有氧耐力良好'; levelColor = '#27ae60'; }
+  else if (decouple < 8)  { level = '轻度衰竭';     levelColor = '#f1c40f'; }
+  else                    { level = '明显衰竭';     levelColor = '#e74c3c'; }
+
+  // 滚动平滑的效率因子曲线（±30 样本，忽略空值），供可视化漂移趋势
+  const W = 30;
+  const n = efRaw.length;
+  const pre = new Float64Array(n + 1), preCnt = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    pre[i + 1]    = pre[i]    + (efRaw[i] != null ? efRaw[i] : 0);
+    preCnt[i + 1] = preCnt[i] + (efRaw[i] != null ? 1 : 0);
+  }
+  const efSmooth = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (efRaw[i] == null) continue;
+    const lo = Math.max(0, i - W), hi = Math.min(n, i + W + 1);
+    const cnt = preCnt[hi] - preCnt[lo];
+    if (cnt > 0) efSmooth[i] = (pre[hi] - pre[lo]) / cnt;
+  }
+
+  const block = document.createElement('div');
+  block.className = 'detail-chart-block';
+
+  const subColor = isDark ? '#888' : '#999';
+  const lbl = document.createElement('div');
+  lbl.className = 'detail-chart-label';
+  lbl.innerHTML = `体力衰竭 · 有氧解耦` +
+    `  <span style="color:${subColor};font-weight:400">${outLabel}:心率效率因子</span>`;
+  block.appendChild(lbl);
+
+  // 指标行（解耦率 + 前后半程对比）
+  const chipStyle = `display:inline-block;padding:3px 9px;margin:2px 6px 2px 0;border-radius:6px;` +
+    `font-size:12px;background:${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'};color:${isDark ? '#ccc' : '#444'}`;
+  const chips = document.createElement('div');
+  chips.style.cssText = 'padding:6px 2px 2px;';
+  chips.innerHTML =
+    `<span style="${chipStyle};color:${levelColor};font-weight:600">解耦率 ${decouple >= 0 ? '+' : ''}${decouple.toFixed(1)}% · ${level}</span>` +
+    `<span style="${chipStyle}">前半程 ${out1.toFixed(hasPower ? 0 : 1)} ${outUnit} / ${hr1.toFixed(0)} bpm</span>` +
+    `<span style="${chipStyle}">后半程 ${out2.toFixed(hasPower ? 0 : 1)} ${outUnit} / ${hr2.toFixed(0)} bpm</span>`;
+  block.appendChild(chips);
+
+  const cw = document.createElement('div');
+  cw.className = 'detail-chart-canvas-wrap';
+  block.appendChild(cw);
+  wrap.appendChild(block);
+
+  const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
+  const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
+  const tickColor   = isDark ? '#555' : '#999';
+  const tooltipBg   = isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)';
+  const tooltipBorder = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
+  const tooltipTitle  = isDark ? '#888' : '#999';
+  const tooltipBody   = isDark ? '#ddd' : '#333';
+
+  const chart = echarts.init(cw, null, { renderer: 'svg' });
+  chart.setOption({
+    animation: false,
+    backgroundColor: 'transparent',
+    grid: { top: 6, bottom: 22, left: 44, right: 8, containLabel: false },
+    xAxis: {
+      type: 'category', data: records.map(r => r.t), boundaryGap: false,
+      axisLine: { lineStyle: { color: borderColor } }, axisTick: { show: false },
+      axisLabel: { color: tickColor, fontSize: 10, interval: 'auto' }, splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value', scale: true, axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: tickColor, fontSize: 10, formatter: v => v.toFixed(2) },
+      splitLine: { lineStyle: { color: gridColor } },
+    },
+    series: [{
+      type: 'line', data: efSmooth, symbol: 'none', connectNulls: false,
+      lineStyle: { color: outColor, width: 1.5 }, areaStyle: { color: outColor, opacity: 0.06 },
+      emphasis: { disabled: true },
+      markLine: {
+        silent: true, symbol: 'none',
+        lineStyle: { color: levelColor, type: 'dashed', width: 1, opacity: 0.7 },
+        label: { show: false },
+        data: [{ yAxis: ratio1 }, { yAxis: ratio2 }],
+      },
+    }],
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
+      backgroundColor: tooltipBg, borderColor: tooltipBorder, borderWidth: 1,
+      textStyle: { color: tooltipBody, fontSize: 11 },
+      formatter: params => {
+        const p = params[0];
+        const val = p.value != null ? p.value.toFixed(3) : '无数据';
+        return `<span style="color:${tooltipTitle}">${p.name}</span><br/>效率因子: ${val}`;
+      },
+    },
+  });
+  const ro = new ResizeObserver(() => { try { chart.resize(); } catch {} });
+  ro.observe(cw);
+  detailChartResizeObservers.push(ro);
+  detailAuxCharts.push(chart);
+}
+
+// ── 分段平行对比：手动框选任意 N 段，按距离归零叠加曲线 ─────────────────────
+// 各记录累计距离(米)：优先用后端 dist_m；缺失则由速度积分近似
+function _recordsCumDist(records) {
+  if (records.some(r => r.dist_m != null)) {
+    let last = 0;
+    return records.map(r => { if (r.dist_m != null) last = r.dist_m; return last; });
+  }
+  const cum = new Array(records.length);
+  let d = 0, prevT = null;
+  for (let i = 0; i < records.length; i++) {
+    const t = _tSec(records[i].t);
+    let dt = 1;
+    if (prevT != null && t != null) { dt = t - prevT; if (dt < 0) dt += 24 * 3600; if (dt <= 0 || dt > 60) dt = 1; }
+    prevT = t;
+    const v = records[i].speed_kmh;
+    if (v != null) d += (v / 3.6) * dt;
+    cum[i] = d;
+  }
+  return cum;
+}
+
+// 叠加曲线可选指标（仅保留 records 中有数据者）
+function _compareMetrics(records) {
+  return METRICS.filter(m => m.rField && !m.series &&
+    ['speed', 'hr', 'power', 'cadence', 'altitude'].includes(m.key) &&
+    records.some(r => r[m.rField] != null));
+}
+
+function _renderDetailSegments(wrap, records) {
+  if (!records || records.length < 60) return;
+  const isDark = !document.body.classList.contains('light-theme');
+
+  // 每次进入详情页重置对比状态
+  _detailCompareMode = false;
+  _detailCompareSegs = [];
+  _detailCumDistM = _recordsCumDist(records);
+  const metrics = _compareMetrics(records);
+  if (!metrics.length) return;
+  if (!metrics.find(m => m.key === _detailCompareMetric)) _detailCompareMetric = metrics[0].key;
+
+  const subColor = isDark ? '#888' : '#999';
+  const block = document.createElement('div');
+  block.className = 'detail-chart-block';
+  block.dataset.segBlock = '1';
+
+  // 标题 + 框选开关
+  const lbl = document.createElement('div');
+  lbl.className = 'detail-chart-label';
+  lbl.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+  const toggle = document.createElement('button');
+  toggle.textContent = '框选对比';
+  toggle.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
+    `background:transparent;color:${subColor}`;
+  _segCmpToggleBtn = toggle;
+  toggle.onclick = () => { _setCompareMode(!_detailCompareMode); };
+  const title = document.createElement('span');
+  title.textContent = '分段平行对比 · 距离叠加';
+  lbl.appendChild(title);
+  lbl.appendChild(toggle);
+  block.appendChild(lbl);
+
+  // 提示
+  const hint = document.createElement('div');
+  hint.style.cssText = `font-size:11px;color:${subColor};padding:4px 2px 0;`;
+  hint.textContent = '开启后在上方任意曲线按住拖拽选一段，可多选；各段起点距离归零后叠加对比。';
+  block.appendChild(hint);
+
+  // 指标切换条
+  const metricBar = document.createElement('div');
+  metricBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;padding:8px 2px 4px;';
+  _segCmpMetricBarEl = metricBar;
+  for (const m of metrics) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.dataset.mkey = m.key;
+    b.style.cssText = 'border:none;cursor:pointer;padding:2px 9px;border-radius:5px;font-size:11px;';
+    b.onclick = () => { _detailCompareMetric = m.key; _updateCompareMetricBar(isDark); _updateCompareChart(); };
+    metricBar.appendChild(b);
+  }
+  block.appendChild(metricBar);
+
+  // 已选段 chips
+  const chips = document.createElement('div');
+  chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:2px 2px 6px;min-height:4px;';
+  _segCmpChipsEl = chips;
+  block.appendChild(chips);
+
+  // 叠加图
+  const cw = document.createElement('div');
+  cw.className = 'detail-chart-canvas-wrap';
+  _segCmpChartEl = cw;
+  block.appendChild(cw);
+  wrap.appendChild(block);
+
+  _segCmpChart = echarts.init(cw, null, { renderer: 'svg' });
+  detailAuxCharts.push(_segCmpChart);
+  const ro = new ResizeObserver(() => { try { _segCmpChart.resize(); } catch {} });
+  ro.observe(cw);
+  detailChartResizeObservers.push(ro);
+
+  _updateCompareMetricBar(isDark);
+  _updateCompareChips();
+  _updateCompareChart();
+}
+
+function _setCompareMode(on) {
+  _detailCompareMode = on;
+  const isDark = !document.body.classList.contains('light-theme');
+  const btn = _segCmpToggleBtn;
+  if (btn) {
+    btn.style.background = on ? '#2e86de' : 'transparent';
+    btn.style.color = on ? '#fff' : (isDark ? '#888' : '#999');
+    btn.textContent = on ? '框选中 · 点此结束' : '框选对比';
+  }
+  // 框选模式下暂时关闭缩放态提示
+  if (on && _detailZoomActive) _resetDetailZoom();
+}
+
+function _updateCompareMetricBar(isDark) {
+  if (!_segCmpMetricBarEl) return;
+  _segCmpMetricBarEl.querySelectorAll('button[data-mkey]').forEach(b => {
+    const active = b.dataset.mkey === _detailCompareMetric;
+    b.style.background = active ? (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)') : 'transparent';
+    b.style.color = active ? (isDark ? '#eee' : '#222') : (isDark ? '#888' : '#999');
+    b.style.fontWeight = active ? '600' : '400';
+  });
+}
+
+function _addCompareSegment(chart, minPx, maxPx) {
+  const labels = chart.getOption().xAxis[0].data;
+  if (!labels || labels.length < 2) return;
+  let i0 = Math.round(chart.convertFromPixel({ xAxisIndex: 0 }, minPx));
+  let i1 = Math.round(chart.convertFromPixel({ xAxisIndex: 0 }, maxPx));
+  if (i0 > i1) [i0, i1] = [i1, i0];
+  i0 = Math.max(0, i0);
+  i1 = Math.min(labels.length - 1, i1);
+  if (i1 - i0 < 5) { toast('选区太短'); return; }
+  if (_detailCompareSegs.length >= COMPARE_COLORS.length) { toast('最多 ' + COMPARE_COLORS.length + ' 段'); return; }
+  _detailCompareSegs.push({ i0, i1 });
+  _updateCompareChips();
+  _updateCompareChart();
+}
+
+function _updateCompareChips() {
+  if (!_segCmpChipsEl) return;
+  const recs = _detailRecordsRef;
+  _segCmpChipsEl.innerHTML = '';
+  if (!_detailCompareSegs.length) {
+    const empty = document.createElement('span');
+    empty.style.cssText = 'font-size:11px;color:#999;';
+    empty.textContent = _detailCompareMode ? '在曲线上拖拽以添加对比段…' : '尚未选择对比段';
+    _segCmpChipsEl.appendChild(empty);
+    return;
+  }
+  _detailCompareSegs.forEach((seg, idx) => {
+    const color = COMPARE_COLORS[idx];
+    const label = String.fromCharCode(65 + idx); // A,B,C…
+    const km = recs ? ((_detailCumDistM[seg.i1] - _detailCumDistM[seg.i0]) / 1000) : 0;
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;' +
+      `font-size:11px;background:${color}22;color:${color};border:1px solid ${color}55;`;
+    chip.innerHTML = `<b>${label}</b> ${recs ? recs[seg.i0].t : ''}→${recs ? recs[seg.i1].t : ''} · ${km.toFixed(1)}km` +
+      `<span data-rm="${idx}" style="cursor:pointer;font-weight:700;margin-left:2px">✕</span>`;
+    chip.querySelector('[data-rm]').onclick = () => {
+      _detailCompareSegs.splice(idx, 1);
+      _updateCompareChips();
+      _updateCompareChart();
+    };
+    _segCmpChipsEl.appendChild(chip);
+  });
+  if (_detailCompareSegs.length) {
+    const clr = document.createElement('span');
+    clr.textContent = '清空';
+    clr.style.cssText = 'cursor:pointer;font-size:11px;color:#999;padding:3px 4px;text-decoration:underline;';
+    clr.onclick = () => { _detailCompareSegs = []; _updateCompareChips(); _updateCompareChart(); };
+    _segCmpChipsEl.appendChild(clr);
+  }
+}
+
+function _updateCompareChart() {
+  if (!_segCmpChart) return;
+  const recs = _detailRecordsRef;
+  const isDark = !document.body.classList.contains('light-theme');
+  const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
+  const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
+  const tickColor   = isDark ? '#555' : '#999';
+  const tooltipBg   = isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)';
+  const tooltipBorder = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
+  const tooltipBody   = isDark ? '#ddd' : '#333';
+  const meta = METRICS.find(m => m.key === _detailCompareMetric) || METRICS[0];
+
+  _segCmpChart.clear();
+  if (!recs || !_detailCompareSegs.length) {
+    _segCmpChart.setOption({
+      backgroundColor: 'transparent',
+      title: { text: '选择至少一段后在此按距离叠加', left: 'center', top: 'middle',
+        textStyle: { color: tickColor, fontSize: 12, fontWeight: 400 } },
+    });
+    return;
+  }
+
+  const series = _detailCompareSegs.map((seg, idx) => {
+    const color = COMPARE_COLORS[idx];
+    const base = _detailCumDistM[seg.i0];
+    const data = [];
+    for (let k = seg.i0; k <= seg.i1; k++) {
+      const y = recs[k][meta.rField];
+      if (y == null) continue;
+      data.push([(_detailCumDistM[k] - base) / 1000, y]);
+    }
+    return { type: 'line', name: '段' + String.fromCharCode(65 + idx), data, symbol: 'none',
+      lineStyle: { color, width: 1.5 }, itemStyle: { color }, connectNulls: false, emphasis: { disabled: true } };
+  });
+
+  _segCmpChart.setOption({
+    animation: false, backgroundColor: 'transparent',
+    grid: { top: 24, bottom: 30, left: 44, right: 8, containLabel: false },
+    legend: { data: series.map(s => s.name), textStyle: { color: tickColor, fontSize: 10 },
+      itemWidth: 12, itemHeight: 8, top: 2, right: 8 },
+    xAxis: { type: 'value', name: '距离 km', nameLocation: 'middle', nameGap: 18,
+      nameTextStyle: { color: tickColor, fontSize: 10 },
+      axisLine: { lineStyle: { color: borderColor } }, axisTick: { show: false },
+      axisLabel: { color: tickColor, fontSize: 10, formatter: v => v.toFixed(1) },
+      splitLine: { show: false } },
+    yAxis: { type: 'value', scale: meta.key !== 'altitude', name: meta.unit,
+      nameTextStyle: { color: tickColor, fontSize: 10 },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: tickColor, fontSize: 10 }, splitLine: { lineStyle: { color: gridColor } } },
+    series,
+    tooltip: { trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
+      backgroundColor: tooltipBg, borderColor: tooltipBorder, borderWidth: 1,
+      textStyle: { color: tooltipBody, fontSize: 11 },
+      formatter: params => {
+        const km = params[0]?.axisValue;
+        const head = `距离 ${(+km).toFixed(2)} km`;
+        const lines = params.map(p => `<span style="color:${p.color}">●</span> ${p.seriesName}: ${p.value[1]} ${meta.unit}`);
+        return `${head}<br/>${lines.join('<br/>')}`;
+      } },
+  });
 }
 
 function _renderDetailCharts(records, fallbackStats) {
@@ -3838,6 +4238,12 @@ function _renderDetailCharts(records, fallbackStats) {
   }
 
   _renderDetailDistributions(wrap, useRecords ? records : null);
+
+  _detailRecordsRef = useRecords ? records : null;
+  if (useRecords) {
+    _renderDetailFatigue(wrap, records);
+    _renderDetailSegments(wrap, records);
+  }
 }
 
 // Returns index of first element in arr >= val (leftmost binary search).

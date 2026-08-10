@@ -110,7 +110,7 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `/api/upload` | parse an uploaded FIT to a temp file; never persisted |
 | `/api/load` | parse one library file; returns `source="library"` |
 | `/api/files`, `/api/files/delete`, `/api/files/delete_all`, `/api/files/export` | library management; export streams a ZIP |
-| `/api/records/<filename>` | per-second stream for detail charts; local time from `fit.utc_offset_s` |
+| `/api/records/<filename>` | per-second stream for detail charts; local time from `fit.utc_offset_s`; includes cumulative `dist_m` for the segment-compare distance alignment |
 | `/api/fix_coords` | in-place GCJ-02 conversion; restores mtime and evicts caches |
 | `/api/export/all` | streaming JSON export of every activity (`no_km_stats`, `min_km`) |
 | `/api/activities` | lightweight summaries; drives activities / PMC / calendar |
