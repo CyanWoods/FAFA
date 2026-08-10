@@ -218,7 +218,7 @@ let _pmcDailyResizeObservers = [];
 let _pmcCurveChart  = null;
 let _pmcCurveResizeObserver = null;
 let _pmcLoadSeq = 0;
-let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, weight: 0 };
+let _pmcConfig = { ftp: 200, maxHr: 190, restHr: 50, lthr: 0, weight: 0, hrZoneMode: 'maxhr' };
 let _routeScaleCfg = { gradeMin: null, gradeMax: null, speedMax: null, cadenceMax: null };
 
 let _calYear  = new Date().getFullYear();
@@ -3628,7 +3628,6 @@ function _renderDetailDistributions(wrap, records) {
   if (!records || !records.length) return;
   const isDark = !document.body.classList.contains('light-theme');
   const ftp   = (typeof _pmcConfig !== 'undefined' && _pmcConfig.ftp)   ? _pmcConfig.ftp   : 0;
-  const maxHr = (typeof _pmcConfig !== 'undefined' && _pmcConfig.maxHr) ? _pmcConfig.maxHr : 0;
   const blocks = [];
 
   // 功率分布 — Coggan 7 区（%FTP），与 PMC 体能管理页一致；零功率/无数据计为休息，不计入百分比
@@ -3659,29 +3658,21 @@ function _renderDetailDistributions(wrap, records) {
     }
   }
 
-  // 心率分布 — 按最大心率百分比分区，沿用 PMC 分区原则
-  if (maxHr > 0 && records.some(r => r.hr != null)) {
-    const h = new Array(6).fill(0); // 0=<50%, 1-5=Z1-Z5
+  // 心率分布 — 按当前分区算法(最大心率/储备/阈值)分桶
+  const hrDef = _hrZoneDef();
+  if (hrDef && records.some(r => r.hr != null)) {
+    const n = hrDef.colors.length;
+    const h = new Array(n).fill(0);
     for (const r of records) {
-      const hr = r.hr;
-      if (hr == null) continue;
-      const ratio = hr / maxHr;
-      let i;
-      if      (ratio < 0.50) i = 0;
-      else if (ratio < 0.60) i = 1;
-      else if (ratio < 0.70) i = 2;
-      else if (ratio < 0.80) i = 3;
-      else if (ratio < 0.90) i = 4;
-      else                   i = 5;
-      h[i]++;
+      if (r.hr == null) continue;
+      h[_hrZoneBucket(r.hr, hrDef)]++;
     }
     const totalS = h.reduce((a, b) => a + b, 0);
     if (totalS > 0) {
-      const HR_LABELS = ['<Z1', 'Z1', 'Z2', 'Z3', 'Z4', 'Z5'];
-      const items = Array.from({ length: 6 }, (_, i) => ({
-        label: HR_LABELS[i], pct: h[i] / totalS * 100, count: Math.round(h[i] / 60), color: HR_ZONE_COLORS[i],
+      const items = Array.from({ length: n }, (_, i) => ({
+        label: hrDef.labels[i], pct: h[i] / totalS * 100, count: Math.round(h[i] / 60), color: hrDef.colors[i],
       }));
-      blocks.push(_detailDistBlock('心率分布', `最大心率 ${maxHr} bpm`, items, isDark));
+      blocks.push(_detailDistBlock('心率分布', hrDef.caption, items, isDark));
     }
   }
 
@@ -4459,14 +4450,62 @@ function _gradeHeatColor(t) {
   return `rgb(255,${Math.round(255*(1-s))},${Math.round(255*(1-s))})`;
 }
 
-function _hrZoneColor(hr, maxHr) {
-  const p = hr / maxHr;
-  if (p < 0.50) return HR_ZONE_COLORS[0];
-  if (p < 0.60) return HR_ZONE_COLORS[1];
-  if (p < 0.70) return HR_ZONE_COLORS[2];
-  if (p < 0.80) return HR_ZONE_COLORS[3];
-  if (p < 0.90) return HR_ZONE_COLORS[4];
-  return HR_ZONE_COLORS[5];
+// 心率分区定义 — 三种算法：maxhr(%最大心率) / hrr(储备心率 Karvonen) / lthr(%阈值心率 Friel)
+// 返回 null 表示所选模式缺少必要参数，调用方回退到无分区渲染。
+// bounds 为比率阈值，桶数 = bounds.length + 1；colors/labels 与桶数等长。
+// boundBpm[i] 为第 i 个阈值对应的心率(bpm)，用于图例；low/high 为图例心率轴范围。
+function _hrZoneDef() {
+  const mode = _pmcConfig.hrZoneMode || 'maxhr';
+  const { maxHr, restHr, lthr } = _pmcConfig;
+  if (mode === 'lthr') {
+    if (!(lthr > 0)) return null;
+    const bounds = [0.81, 0.90, 0.94, 1.00];      // Friel 骑行阈值心率 5 区
+    return {
+      mode, ratio: hr => hr / lthr,
+      bounds,
+      labels: ['Z1', 'Z2', 'Z3', 'Z4', 'Z5'],
+      colors: HR_ZONE_COLORS.slice(1, 6),
+      boundBpm: bounds.map(b => b * lthr),
+      low: 0, high: lthr * 1.2,
+      caption: `阈值心率 ${lthr} bpm`,
+    };
+  }
+  if (mode === 'hrr') {
+    if (!(maxHr > 0) || !(maxHr > restHr)) return null;
+    const bounds = [0.50, 0.60, 0.70, 0.80, 0.90]; // 储备心率百分比
+    return {
+      mode, ratio: hr => (hr - restHr) / (maxHr - restHr),
+      bounds,
+      labels: ['<Z1', 'Z1', 'Z2', 'Z3', 'Z4', 'Z5'],
+      colors: HR_ZONE_COLORS.slice(),
+      boundBpm: bounds.map(b => restHr + b * (maxHr - restHr)),
+      low: 0, high: maxHr,
+      caption: `储备心率 ${restHr}–${maxHr} bpm`,
+    };
+  }
+  if (!(maxHr > 0)) return null;
+  const bounds = [0.50, 0.60, 0.70, 0.80, 0.90];   // 最大心率百分比
+  return {
+    mode: 'maxhr', ratio: hr => hr / maxHr,
+    bounds,
+    labels: ['<Z1', 'Z1', 'Z2', 'Z3', 'Z4', 'Z5'],
+    colors: HR_ZONE_COLORS.slice(),
+    boundBpm: bounds.map(b => b * maxHr),
+    low: 0, high: maxHr,
+    caption: `最大心率 ${maxHr} bpm`,
+  };
+}
+
+// 依据分区定义把心率值映射到桶索引（0-based）
+function _hrZoneBucket(hr, def) {
+  const r = def.ratio(hr);
+  let i = 0;
+  while (i < def.bounds.length && r >= def.bounds[i]) i++;
+  return i;
+}
+
+function _hrZoneColor(hr, def) {
+  return def.colors[_hrZoneBucket(hr, def)];
 }
 
 function _powerZoneColor(watts, ftp) {
@@ -4507,10 +4546,12 @@ function _renderDetailRoute() {
       if (_routeScaleCfg.cadenceMax != null) scale.max = _routeScaleCfg.cadenceMax;
     }
   }
-  const maxHr = scale?.zone   ? _pmcConfig.maxHr : null;
+  // 心率分区：按当前算法(最大心率/储备/阈值)取分区定义；缺参数时回退线性热力
+  let hrDef = scale?.zone ? _hrZoneDef() : null;
+  if (scale?.zone && !hrDef) scale = null;
   const ftp   = scale?.coggan ? _pmcConfig.ftp   : null;
-  const minVal = (scale?.zone || scale?.coggan) ? 0 : (scale ? scale.min : dataMin);
-  const maxVal = scale?.zone ? maxHr : scale?.coggan ? ftp * 2 : (scale ? scale.max : dataMax);
+  const minVal = (scale?.zone || scale?.coggan) ? (scale?.zone ? hrDef.low : 0) : (scale ? scale.min : dataMin);
+  const maxVal = scale?.zone ? hrDef.high : scale?.coggan ? ftp * 2 : (scale ? scale.max : dataMax);
 
   const coords = getCoords(t);
   if (coords.length < 2) return;
@@ -4561,7 +4602,7 @@ function _renderDetailRoute() {
     const val = stats[b]?.[field];
     let color;
     if (scale?.zone) {
-      color = _hrZoneColor(val ?? 0, maxHr);
+      color = _hrZoneColor(val ?? 0, hrDef);
     } else if (scale?.coggan) {
       color = _powerZoneColor(val ?? 0, ftp);
     } else {
@@ -4597,14 +4638,17 @@ function _renderDetailRoute() {
   document.getElementById('detail-route-legend-high').textContent = fmtVal(maxVal);
   const legendBar = document.getElementById('detail-route-legend-bar');
   if (scale?.zone) {
-    const [g, b1, g2, y, o, r] = HR_ZONE_COLORS;
-    legendBar.style.background = `linear-gradient(to right,
-      ${g} 0%, ${g} 50%,
-      ${b1} 50%, ${b1} 60%,
-      ${g2} 60%, ${g2} 70%,
-      ${y} 70%, ${y} 80%,
-      ${o} 80%, ${o} 90%,
-      ${r} 90%, ${r} 100%)`;
+    // 从分区定义拼接图例：每个桶 [上一阈值, 当前阈值] 一段纯色，位置按心率轴归一化
+    const span = hrDef.high - hrDef.low || 1;
+    const stops = [];
+    let prev = 0; // 桶起点位置(%)
+    hrDef.colors.forEach((c, i) => {
+      const endBpm = i < hrDef.boundBpm.length ? hrDef.boundBpm[i] : hrDef.high;
+      const end = Math.max(prev, Math.min(100, (endBpm - hrDef.low) / span * 100));
+      stops.push(`${c} ${prev}%, ${c} ${end}%`);
+      prev = end;
+    });
+    legendBar.style.background = `linear-gradient(to right, ${stops.join(', ')})`;
   } else if (scale?.coggan) {
     const [g, b1, g2, y, o, r, w] = POWER_ZONE_COLORS;
     // Bar represents 0–200% FTP; zone boundaries at 55/75/90/105/120/150%
@@ -4626,7 +4670,7 @@ function _renderDetailRoute() {
   const marker = document.getElementById('detail-route-legend-marker');
   if (marker && scale) {
     const pos = scale.zone
-      ? Math.max(0, Math.min(1, dataMax / maxHr))
+      ? Math.max(0, Math.min(1, (dataMax - hrDef.low) / (hrDef.high - hrDef.low)))
       : scale.coggan
         ? Math.max(0, Math.min(1, dataMax / (ftp * 2)))
         : Math.max(0, Math.min(1, (dataMax - scale.min) / (scale.max - scale.min)));
@@ -5455,7 +5499,9 @@ async function _loadPmcConfig() {
     if (cfg.pmc_ftp     != null) _pmcConfig.ftp    = cfg.pmc_ftp;
     if (cfg.pmc_max_hr  != null) _pmcConfig.maxHr  = cfg.pmc_max_hr;
     if (cfg.pmc_rest_hr != null) _pmcConfig.restHr = cfg.pmc_rest_hr;
+    if (cfg.pmc_lthr    != null) _pmcConfig.lthr   = cfg.pmc_lthr;
     if (cfg.pmc_weight  != null) _pmcConfig.weight = cfg.pmc_weight;
+    if (cfg.hr_zone_mode)        _pmcConfig.hrZoneMode = cfg.hr_zone_mode;
     if (cfg.route_grade_min   != null) _routeScaleCfg.gradeMin   = cfg.route_grade_min;
     if (cfg.route_grade_max   != null) _routeScaleCfg.gradeMax   = cfg.route_grade_max;
     if (cfg.route_speed_max   != null) _routeScaleCfg.speedMax   = cfg.route_speed_max;
@@ -5464,7 +5510,9 @@ async function _loadPmcConfig() {
     _pmcConfig.ftp    = parseInt(localStorage.getItem('pmc_ftp')     || '200', 10);
     _pmcConfig.maxHr  = parseInt(localStorage.getItem('pmc_max_hr')  || '190', 10);
     _pmcConfig.restHr = parseInt(localStorage.getItem('pmc_rest_hr') || '50',  10);
+    _pmcConfig.lthr   = parseInt(localStorage.getItem('pmc_lthr')    || '0',   10);
     _pmcConfig.weight = parseFloat(localStorage.getItem('pmc_weight') || '0');
+    _pmcConfig.hrZoneMode = localStorage.getItem('hr_zone_mode') || 'maxhr';
   }
 }
 
@@ -5687,6 +5735,8 @@ async function loadSettingsView() {
     document.getElementById('cfg-pmc-ftp').value           = cfg.pmc_ftp              ?? '';
     document.getElementById('cfg-pmc-rest-hr').value       = cfg.pmc_rest_hr          ?? '';
     document.getElementById('cfg-pmc-max-hr').value        = cfg.pmc_max_hr           ?? '';
+    document.getElementById('cfg-pmc-lthr').value          = cfg.pmc_lthr             ?? '';
+    document.getElementById('cfg-hr-zone-mode').value      = cfg.hr_zone_mode         || 'maxhr';
     document.getElementById('cfg-pmc-weight').value        = cfg.pmc_weight           ?? '';
     document.getElementById('cfg-route-grade-min').value   = cfg.route_grade_min      ?? '';
     document.getElementById('cfg-route-grade-max').value   = cfg.route_grade_max      ?? '';
@@ -5716,6 +5766,8 @@ async function saveSettings() {
     pmc_ftp:              num('cfg-pmc-ftp'),
     pmc_rest_hr:          num('cfg-pmc-rest-hr'),
     pmc_max_hr:           num('cfg-pmc-max-hr'),
+    pmc_lthr:             num('cfg-pmc-lthr'),
+    hr_zone_mode:         val('cfg-hr-zone-mode') || 'maxhr',
     pmc_weight:           num('cfg-pmc-weight'),
     route_grade_min:      num('cfg-route-grade-min'),
     route_grade_max:      num('cfg-route-grade-max'),

@@ -910,6 +910,24 @@
           </div>
         </div>
         <div class="settings-row">
+          <label class="settings-label">阈值心率</label>
+          <div class="settings-input-wrap">
+            <input id="cfg-pmc-lthr" type="number" min="100" max="210" placeholder="—">
+            <span class="settings-unit">bpm</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">心率分区算法</label>
+          <div class="settings-input-wrap">
+            <select id="cfg-hr-zone-mode">
+              <option value="maxhr">最大心率百分比</option>
+              <option value="hrr">储备心率（Karvonen）</option>
+              <option value="lthr">阈值心率（Friel）</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-hint">最大心率百分比：入门码表默认；储备心率：Apple/Garmin 默认，需静息心率；阈值心率：公路车训练标准，需阈值心率（可由 20 分钟测试估算）。</div>
+        <div class="settings-row">
           <label class="settings-label">体重</label>
           <div class="settings-input-wrap">
             <input id="cfg-pmc-weight" type="number" min="30" max="150" placeholder="—">

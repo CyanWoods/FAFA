@@ -12,7 +12,8 @@
     "strava_client_id": "Strava 应用 Client ID，填写后可将骑行数据同步到 Strava",
     "strava_client_secret": "Strava 应用 Client Secret",
     "wind_source": "风向数据源：auto=自动选当地最优模式（默认）；ecmwf=欧洲中心，通常最准；gfs=美国 NOAA；icon=德国 DWD；era5=再分析，覆盖 1940 至今但精度较粗。高精模式查不到的老骑行（约 2022 年前）会自动回退 era5。",
-    "map_tile": "默认底图：dark / dark-nolabels / light / light-nolabels / amap"
+    "map_tile": "默认底图：dark / dark-nolabels / light / light-nolabels / amap",
+    "hr_zone_mode": "心率分区算法：maxhr=最大心率百分比(默认)；hrr=储备心率(Karvonen，需 pmc_rest_hr)；lthr=阈值心率(Friel 公路车标准，需 pmc_lthr)"
   },
   "api_base": "https://api.openai.com/v1",
   "api_key": "your-api-key-here",

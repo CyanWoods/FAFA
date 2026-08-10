@@ -1955,12 +1955,14 @@ _CONFIG_STRING_LIMITS = {
 }
 _CONFIG_NUMBER_RANGES = {
     'pmc_ftp': (50, 600), 'pmc_rest_hr': (30, 100), 'pmc_max_hr': (100, 220),
+    'pmc_lthr': (100, 210),
     'pmc_weight': (30, 150), 'route_grade_min': (-30, 0),
     'route_grade_max': (0, 30), 'route_speed_max': (10, 120),
     'route_cadence_max': (60, 200), 'max_tokens': (256, 16_000),
     'strava_redirect_port': (1024, 65_535),
 }
 _CONFIG_ENUM_VALUES = {
+    'hr_zone_mode': frozenset({'maxhr', 'hrr', 'lthr'}),
     'wind_source': frozenset({'auto', 'ecmwf', 'gfs', 'icon', 'era5'}),
     'map_tile': frozenset({
         'dark', 'dark-nolabels', 'light', 'light-nolabels',
