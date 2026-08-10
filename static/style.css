@@ -5043,6 +5043,7 @@ body {
   padding: 14px 20px 0;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
   border-top: 1px solid var(--border-subtle);
   margin-top: -1px;
 }
@@ -5051,6 +5052,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 #prompts-toolbar {
   display: flex;
@@ -5084,7 +5086,7 @@ body {
 
 #prompts-text {
   flex: 1;
-  min-height: 260px;
+  min-height: 120px;
   resize: vertical;
   background: var(--surface-1);
   border: 1px solid var(--surface-active);
@@ -5204,6 +5206,18 @@ body {
 #prompts-preview-text::-webkit-scrollbar-thumb {
   background: var(--surface-active);
   border-radius: var(--radius-sm);
+}
+
+/* 窄视口：变量/块参数侧栏改为堆叠在编辑区下方，避免横向挤压 */
+@media (max-width: 720px) {
+  #prompts-body { flex-direction: column; overflow-y: auto; }
+  #prompts-editor-col { flex: none; }
+  #prompts-side-col {
+    width: auto;
+    flex-shrink: 1;
+    overflow-y: visible;
+    padding-right: 0;
+  }
 }
 
 #prompts-modal-footer {
