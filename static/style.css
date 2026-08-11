@@ -105,6 +105,13 @@
   --chart-purple:          #9b59b6;
   --chart-red:             #c0392b;
 
+  /* 骑行详情各指标配色（与 app.js METRICS 对齐） */
+  --metric-speed:          #2e86de;
+  --metric-hr:             #e74c3c;
+  --metric-power:          #f39c12;
+  --metric-cadence:        #9b59b6;
+  --metric-alt:            #2ecc71;
+
   /* Extended border radii */
   --radius-md:             10px;
   --radius-xs:             2px;
@@ -5172,6 +5179,38 @@ body {
   color: var(--color-primary);
   border-color: var(--color-primary);
 }
+
+/* 指标变量按骑行详情配色着色（速度=蓝 心率=红 功率=橙 踏频=紫 海拔=绿） */
+.pmt-var--speed {
+  color: var(--metric-speed);
+  border-color: var(--metric-speed);
+  background: color-mix(in srgb, var(--metric-speed) 14%, transparent);
+}
+.pmt-var--hr {
+  color: var(--metric-hr);
+  border-color: var(--metric-hr);
+  background: color-mix(in srgb, var(--metric-hr) 14%, transparent);
+}
+.pmt-var--power {
+  color: var(--metric-power);
+  border-color: var(--metric-power);
+  background: color-mix(in srgb, var(--metric-power) 14%, transparent);
+}
+.pmt-var--cadence {
+  color: var(--metric-cadence);
+  border-color: var(--metric-cadence);
+  background: color-mix(in srgb, var(--metric-cadence) 14%, transparent);
+}
+.pmt-var--alt {
+  color: var(--metric-alt);
+  border-color: var(--metric-alt);
+  background: color-mix(in srgb, var(--metric-alt) 14%, transparent);
+}
+.pmt-var--speed:hover   { background: color-mix(in srgb, var(--metric-speed) 26%, transparent);   color: var(--metric-speed);   border-color: var(--metric-speed); }
+.pmt-var--hr:hover      { background: color-mix(in srgb, var(--metric-hr) 26%, transparent);      color: var(--metric-hr);      border-color: var(--metric-hr); }
+.pmt-var--power:hover   { background: color-mix(in srgb, var(--metric-power) 26%, transparent);   color: var(--metric-power);   border-color: var(--metric-power); }
+.pmt-var--cadence:hover { background: color-mix(in srgb, var(--metric-cadence) 26%, transparent); color: var(--metric-cadence); border-color: var(--metric-cadence); }
+.pmt-var--alt:hover     { background: color-mix(in srgb, var(--metric-alt) 26%, transparent);     color: var(--metric-alt);     border-color: var(--metric-alt); }
 
 #prompts-preview-wrap {
   margin: 12px 20px 0;

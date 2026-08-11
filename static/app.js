@@ -6032,26 +6032,41 @@ function _pmtRenderBlocks() {
     </div>`).join('');
 }
 
+// 把变量/数据块名归类到骑行详情指标配色（速度/心率/功率/踏频/海拔），无匹配返回 ''
+function _pmtMetricClass(name) {
+  const n = String(name || '').toLowerCase();
+  if (n.includes('wind') || n.includes('gust')) return '';   // 气象字段保持默认色
+  if (n.includes('speed')) return 'speed';
+  if (n.includes('cadence')) return 'cadence';
+  if (n.includes('elev') || n.includes('_alt') || n.includes('ascent') || n.includes('climb')) return 'alt';
+  if (n.includes('power') || n.includes('ftp') || n.startsWith('left') || n.includes('zone')) return 'power';
+  if (n.includes('hr') || n.includes('heart')) return 'hr';
+  return '';
+}
+
 function _pmtRenderCatalog() {
   const wrap = document.getElementById('prompts-catalog');
   const cat = _pmtData.catalog;
   const byGroup = {};
   for (const s of cat.scalars) (byGroup[s.group] ||= []).push(s);
 
-  const chip = (token, label, title) =>
-    `<button class="pmt-var" data-token="${_escapeHtml(token)}" ` +
-    `title="${_escapeHtml(title)}">${_escapeHtml(label)}</button>`;
+  const chip = (token, label, title, name) => {
+    const metric = _pmtMetricClass(name);
+    return `<button class="pmt-var${metric ? ' pmt-var--' + metric : ''}" ` +
+      `data-token="${_escapeHtml(token)}" ` +
+      `title="${_escapeHtml(title)}">${_escapeHtml(label)}</button>`;
+  };
 
   const parts = [];
   parts.push('<div class="pmt-var-group"><div class="pmt-var-group-title">数据块</div>' +
-    cat.blocks.map(b => chip(`{{#${b.name}}}`, b.label, `{{#${b.name}}} — ${b.note}`)).join('') +
+    cat.blocks.map(b => chip(`{{#${b.name}}}`, b.label, `{{#${b.name}}} — ${b.note}`, b.name)).join('') +
     '</div>');
   for (const g of cat.groups) {
     const items = byGroup[g.key];
     if (!items || !items.length) continue;
     parts.push(`<div class="pmt-var-group"><div class="pmt-var-group-title">${_escapeHtml(g.label)}</div>` +
       items.map(s => chip(`{{${s.name}}}`, s.label,
-        `{{${s.name}}}${s.unit ? ' — ' + s.unit : ''}`)).join('') + '</div>');
+        `{{${s.name}}}${s.unit ? ' — ' + s.unit : ''}`, s.name)).join('') + '</div>');
   }
   wrap.innerHTML = parts.join('');
   wrap.querySelectorAll('.pmt-var').forEach(btn => {
