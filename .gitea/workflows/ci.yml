@@ -6,6 +6,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      no_cache:
+        description: 禁用构建缓存（--no-cache）
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,4 +71,8 @@ jobs:
       - name: Build and push
         run: |
           chmod +x buildx.sh
-          ./buildx.sh linux/amd64,linux/arm64
+          extra=""
+          if [ "${{ github.event.inputs.no_cache }}" = "true" ]; then
+            extra="--no-cache"
+          fi
+          ./buildx.sh linux/amd64,linux/arm64 $extra
