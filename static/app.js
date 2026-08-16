@@ -2415,54 +2415,175 @@ function initDetailSplitResize() {
 }
 
 /* ── Detail table resize ─────────────────────────────────────────────────── */
+/* ── 详情布局：双栏 / 图表全宽+地图浮窗（偏好存 localStorage）─────────────── */
+let _detailMapFloat = localStorage.getItem('detailMapFloat') === '1';
+let _mapFloatCollapsed = false;
+
+function _applyDetailMapLayout() {
+  const row = document.getElementById('detail-main-row');
+  const btn = document.getElementById('detail-layout-btn');
+  const section = document.getElementById('detail-route-section');
+  if (!row || !section) return;
+  row.classList.toggle('map-float', _detailMapFloat);
+  if (btn) btn.textContent = _detailMapFloat ? '⊞ 双栏' : '⧉ 浮窗';
+  if (_detailMapFloat) {
+    if (!section.style.left) { section.style.right = '16px'; section.style.top = '8px'; section.style.left = 'auto'; }
+    section.classList.toggle('collapsed', _mapFloatCollapsed);
+  } else {
+    section.style.left = section.style.top = section.style.right = '';
+    section.style.width = section.style.height = '';
+    section.classList.remove('collapsed');
+  }
+  if (detailRouteMap) setTimeout(() => detailRouteMap.invalidateSize(), 60);
+}
+
+function _toggleDetailMapFloat() {
+  _detailMapFloat = !_detailMapFloat;
+  localStorage.setItem('detailMapFloat', _detailMapFloat ? '1' : '0');
+  _applyDetailMapLayout();
+}
+
+function _toggleMapFloatCollapse() {
+  _mapFloatCollapsed = !_mapFloatCollapsed;
+  const section = document.getElementById('detail-route-section');
+  section.classList.toggle('collapsed', _mapFloatCollapsed);
+  document.getElementById('detail-map-float-collapse').textContent = _mapFloatCollapsed ? '▢' : '–';
+  if (detailRouteMap && !_mapFloatCollapsed) setTimeout(() => detailRouteMap.invalidateSize(), 60);
+}
+
+function _initMapFloatDrag() {
+  const bar = document.getElementById('detail-map-float-bar');
+  const section = document.getElementById('detail-route-section');
+  if (!bar || !section) return;
+  let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  bar.addEventListener('mousedown', e => {
+    if (!_detailMapFloat || e.target.id === 'detail-map-float-collapse') return;
+    dragging = true;
+    const parent = section.offsetParent || section.parentElement;
+    const r = section.getBoundingClientRect(), pr = parent.getBoundingClientRect();
+    ox = r.left - pr.left; oy = r.top - pr.top;
+    section.style.left = ox + 'px'; section.style.top = oy + 'px'; section.style.right = 'auto';
+    sx = e.clientX; sy = e.clientY;
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    section.style.left = (ox + e.clientX - sx) + 'px';
+    section.style.top = Math.max(0, oy + e.clientY - sy) + 'px';
+  });
+  document.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
+}
+
+// 浮窗八向缩放：四边 + 四角把手，按方向调整 left/top/width/height
+function _initMapFloatResize() {
+  const section = document.getElementById('detail-route-section');
+  if (!section) return;
+  const MINW = 240, MINH = 120;
+  let dir = null, sx = 0, sy = 0, sl = 0, st = 0, sw = 0, sh = 0;
+  section.querySelectorAll('.map-float-rz').forEach(h => {
+    h.addEventListener('mousedown', e => {
+      if (!_detailMapFloat) return;
+      dir = h.dataset.dir;
+      const parent = section.offsetParent || section.parentElement;
+      const r = section.getBoundingClientRect(), pr = parent.getBoundingClientRect();
+      sl = r.left - pr.left; st = r.top - pr.top; sw = r.width; sh = r.height;
+      section.style.left = sl + 'px'; section.style.top = st + 'px';
+      section.style.right = 'auto'; section.style.width = sw + 'px'; section.style.height = sh + 'px';
+      sx = e.clientX; sy = e.clientY;
+      document.body.style.userSelect = 'none';
+      e.preventDefault(); e.stopPropagation();
+    });
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dir) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    let nl = sl, nt = st, nw = sw, nh = sh;
+    if (dir.includes('e')) nw = Math.max(MINW, sw + dx);
+    if (dir.includes('s')) nh = Math.max(MINH, sh + dy);
+    if (dir.includes('w')) { nw = Math.max(MINW, sw - dx); nl = sl + (sw - nw); }
+    if (dir.includes('n')) { nh = Math.max(MINH, sh - dy); nt = st + (sh - nh); }
+    section.style.width = nw + 'px'; section.style.height = nh + 'px';
+    section.style.left = nl + 'px'; section.style.top = Math.max(0, nt) + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dir) return;
+    dir = null; document.body.style.userSelect = '';
+    if (detailRouteMap) detailRouteMap.invalidateSize();
+  });
+
+  // 浏览器缩放时：右上停靠(right 锚点)自动跟随；已拖动过(left/top px)的则夹回可视区
+  window.addEventListener('resize', () => {
+    if (!_detailMapFloat) return;
+    const parent = section.offsetParent || section.parentElement;
+    if (!parent) return;
+    if (section.style.left && section.style.left !== 'auto') {
+      const pr = parent.getBoundingClientRect();
+      const maxLeft = Math.max(0, pr.width - section.offsetWidth);
+      const maxTop = Math.max(0, pr.height - section.offsetHeight);
+      const left = parseFloat(section.style.left) || 0;
+      const top = parseFloat(section.style.top) || 0;
+      section.style.left = Math.min(maxLeft, Math.max(0, left)) + 'px';
+      section.style.top = Math.min(maxTop, Math.max(0, top)) + 'px';
+    }
+    if (detailRouteMap) detailRouteMap.invalidateSize();
+  });
+}
+
+const DETAIL_TABLE_COLLAPSED_H = 30;   // 仅表头把手
+let _detailTableExpanded = false;
+
+// 展开/收起逐公里数据表；默认收起（可视化较弱，不占版面）
+function _setDetailTableExpanded(expanded, height) {
+  const section = document.getElementById('detail-table-section');
+  const chevron = document.getElementById('detail-table-chevron');
+  if (!section) return;
+  _detailTableExpanded = expanded;
+  section.style.height = (expanded ? (height || 220) : DETAIL_TABLE_COLLAPSED_H) + 'px';
+  section.classList.toggle('collapsed', !expanded);
+  if (chevron) chevron.textContent = expanded ? '▾' : '▸';
+  if (detailRouteMap) detailRouteMap.invalidateSize();
+}
+
 function initDetailTableResize() {
   const section = document.getElementById('detail-table-section');
   const handle  = document.getElementById('detail-table-handle');
-  const DEFAULT_H = 220, MIN_H = 16;
-  let dragging = false, startY = 0, startH = 0;
-
-  function startDrag(clientY) {
-    dragging = true;
-    startY   = clientY;
-    startH   = section.getBoundingClientRect().height;
-    document.body.style.cursor     = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  }
+  const DEFAULT_H = 220;
+  let dragging = false, moved = false, startY = 0, startH = 0;
 
   function contentMaxH() {
-    const wrap   = document.getElementById('detail-table-wrap');
-    const handle = document.getElementById('detail-table-handle');
-    return (wrap ? wrap.scrollHeight : 0) + (handle ? handle.getBoundingClientRect().height : 0);
+    const wrap = document.getElementById('detail-table-wrap');
+    return (wrap ? wrap.scrollHeight : 0) + DETAIL_TABLE_COLLAPSED_H;
   }
 
+  function startDrag(clientY) {
+    dragging = true; moved = false;
+    startY = clientY;
+    startH = section.getBoundingClientRect().height;
+    document.body.style.userSelect = 'none';
+  }
   function doDrag(clientY) {
     if (!dragging) return;
+    if (Math.abs(clientY - startY) > 3) { moved = true; document.body.style.cursor = 'ns-resize'; }
+    if (!moved) return;
     const maxH = Math.max(DEFAULT_H, contentMaxH());
-    const newH = Math.max(MIN_H, Math.min(maxH, startH + (startY - clientY)));
-    section.style.height = newH + 'px';
-    if (detailRouteMap) detailRouteMap.invalidateSize();
+    const newH = Math.max(DETAIL_TABLE_COLLAPSED_H, Math.min(maxH, startH + (startY - clientY)));
+    _setDetailTableExpanded(newH > DETAIL_TABLE_COLLAPSED_H + 8, newH);
   }
-
   function endDrag() {
     if (!dragging) return;
     dragging = false;
-    document.body.style.cursor     = '';
+    document.body.style.cursor = '';
     document.body.style.userSelect = '';
+    if (!moved) _setDetailTableExpanded(!_detailTableExpanded, DEFAULT_H);  // 未拖动=点击切换
   }
 
   handle.addEventListener('mousedown',  e => { startDrag(e.clientY); e.preventDefault(); });
   document.addEventListener('mousemove', e => doDrag(e.clientY));
   document.addEventListener('mouseup',   endDrag);
-
   handle.addEventListener('touchstart', e => { startDrag(e.touches[0].clientY); e.preventDefault(); }, { passive: false });
   document.addEventListener('touchmove', e => { if (dragging) { doDrag(e.touches[0].clientY); e.preventDefault(); } }, { passive: false });
   document.addEventListener('touchend',  endDrag);
-
-  handle.addEventListener('dblclick', () => {
-    const h = section.getBoundingClientRect().height;
-    section.style.height = (h > MIN_H + 10 ? MIN_H : DEFAULT_H) + 'px';
-    if (detailRouteMap) detailRouteMap.invalidateSize();
-  });
 }
 
 /* ── Zoom slider ─────────────────────────────────────────────────────────── */
@@ -3094,6 +3215,8 @@ async function openDetailView(id) {
 
   _renderDetailCharts(records, t.timeStats);
   _renderDetailTable();
+  _setDetailTableExpanded(false);   // 逐公里表默认收起
+  _applyDetailMapLayout();          // 应用保存的布局偏好（双栏/浮窗）
   _buildRouteMetricBar();
   _renderDetailRoute();
   _detailWindData = null;
@@ -4968,6 +5091,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initPanelResize();
   initDetailSplitResize();
   initDetailTableResize();
+  _initMapFloatDrag();
+  _initMapFloatResize();
   document.getElementById('act-ai-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _sendAiChat(); }
   });

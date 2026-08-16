@@ -398,6 +398,7 @@
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
       <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
+      <button class="det-export-btn" id="detail-layout-btn" onclick="_toggleDetailMapFloat()" title="切换布局：双栏 / 图表全宽+地图浮窗">⧉ 浮窗</button>
       <button class="det-export-btn" id="detail-poster-btn" onclick="openDetailShare()">分享</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
@@ -429,6 +430,18 @@
       </div>
       <div id="detail-split-handle"><div id="detail-split-handle-bar"></div></div>
       <div id="detail-route-section">
+        <div class="map-float-rz map-float-rz-n"  data-dir="n"></div>
+        <div class="map-float-rz map-float-rz-s"  data-dir="s"></div>
+        <div class="map-float-rz map-float-rz-e"  data-dir="e"></div>
+        <div class="map-float-rz map-float-rz-w"  data-dir="w"></div>
+        <div class="map-float-rz map-float-rz-ne" data-dir="ne"></div>
+        <div class="map-float-rz map-float-rz-nw" data-dir="nw"></div>
+        <div class="map-float-rz map-float-rz-se" data-dir="se"></div>
+        <div class="map-float-rz map-float-rz-sw" data-dir="sw"></div>
+        <div id="detail-map-float-bar">
+          <span id="detail-map-float-title">地图</span>
+          <button id="detail-map-float-collapse" onclick="_toggleMapFloatCollapse()" title="收起 / 展开地图">–</button>
+        </div>
         <div id="detail-route-metric-bar"></div>
         <div id="detail-route-map">
           <div id="detail-route-map-controls">
@@ -450,7 +463,10 @@
       </div>
     </div>
     <div id="detail-table-section">
-      <div id="detail-table-handle"><div id="detail-table-handle-bar"></div></div>
+      <div id="detail-table-handle" title="展开 / 收起逐公里数据">
+        <span id="detail-table-label">逐公里数据</span>
+        <span id="detail-table-chevron">▸</span>
+      </div>
       <div id="detail-table-wrap"></div>
     </div>
   </div>

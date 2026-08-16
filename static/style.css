@@ -1532,24 +1532,27 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 16px;
-  cursor: ns-resize;
+  gap: 6px;
+  height: 30px;
+  cursor: pointer;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  user-select: none;
 }
-
-#detail-table-handle-bar {
-  width: 36px;
-  height: 3px;
-  border-radius: var(--radius-xs);
-  background: var(--surface-raised);
-  transition: background var(--duration-fast), width var(--duration-fast);
+#detail-table-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-subtle);
+  letter-spacing: 0.02em;
 }
-
-#detail-table-handle:hover #detail-table-handle-bar {
-  background: rgba(255, 255, 255, 0.38);
-  width: 56px;
+#detail-table-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: color var(--duration-fast);
 }
+#detail-table-handle:hover #detail-table-label,
+#detail-table-handle:hover #detail-table-chevron { color: var(--text-light); }
+#detail-table-section.collapsed #detail-table-wrap { display: none; }
 
 #detail-table-wrap {
   flex: 1;
@@ -5474,6 +5477,70 @@ body {
   background: var(--bg-base);
 }
 #share-3d-panel > canvas { display: block; width: 100%; height: 100%; }
+
+/* ── 详情布局：图表全宽 + 地图浮窗 ─────────────────────────────────────────── */
+#detail-map-float-bar { display: none; }
+.map-float { position: relative; }
+.map-float #detail-chart-section { flex: 1 1 100% !important; width: 100%; }
+.map-float #detail-split-handle { display: none; }
+.map-float #detail-route-section {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  width: 420px;
+  height: 340px;
+  min-width: 240px;
+  min-height: 44px;
+  flex: none;
+  z-index: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  background: var(--bg-base);
+}
+/* 八向缩放把手（仅浮窗模式）——z 必须高于 Leaflet 面板(200–700)与控件(1000) */
+.map-float-rz { display: none; position: absolute; z-index: 1100; pointer-events: auto; }
+.map-float #detail-route-section > .map-float-rz { display: block; }
+.map-float #detail-route-section.collapsed > .map-float-rz { display: none; }
+.map-float-rz-n { top: -3px; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.map-float-rz-s { bottom: -3px; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.map-float-rz-e { top: 0; bottom: 0; right: -3px; width: 8px; cursor: ew-resize; }
+.map-float-rz-w { top: 0; bottom: 0; left: -3px; width: 8px; cursor: ew-resize; }
+.map-float-rz-ne { top: -4px; right: -4px; width: 15px; height: 15px; cursor: nesw-resize; z-index: 1101; }
+.map-float-rz-nw { top: -4px; left: -4px; width: 15px; height: 15px; cursor: nwse-resize; z-index: 1101; }
+.map-float-rz-se { bottom: -4px; right: -4px; width: 15px; height: 15px; cursor: nwse-resize; z-index: 1101; }
+.map-float-rz-sw { bottom: -4px; left: -4px; width: 15px; height: 15px; cursor: nesw-resize; z-index: 1101; }
+.map-float #detail-map-float-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  cursor: move;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  user-select: none;
+}
+#detail-map-float-collapse {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 6px;
+}
+#detail-map-float-collapse:hover { color: var(--text-light); }
+.map-float #detail-route-section.collapsed { height: auto !important; resize: none; }
+.map-float #detail-route-section.collapsed #detail-route-metric-bar,
+.map-float #detail-route-section.collapsed #detail-route-map,
+.map-float #detail-route-section.collapsed #detail-route-tooltip,
+.map-float #detail-route-section.collapsed #detail-route-legend { display: none; }
+.light-theme .map-float #detail-map-float-bar { background: rgba(0,0,0,0.05); }
 
 /* ── 分享作为独立整页（简陋版：全屏铺满，后续再做成真正的 view）─────────────── */
 #poster-modal-overlay { display: none; }
