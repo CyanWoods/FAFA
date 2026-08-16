@@ -6561,6 +6561,14 @@ async function _loadDefaultTile() {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
     if (TILES[cfg.map_tile]) tile = cfg.map_tile;
   } catch {}
+  // carto 瓦片明暗跟随当前主题（与 toggleTheme 一致）：首屏在浅色主题下
+  // 也用浅色瓦片，仅保留设置里的“是否带路网标注”偏好。amap 等非 carto 不动。
+  if (_isCartoTile(tile)) {
+    const isLight = document.body.classList.contains('light-theme');
+    const withLabels = tile === 'dark' || tile === 'light';
+    tile = isLight ? (withLabels ? 'light' : 'light-nolabels')
+                   : (withLabels ? 'dark' : 'dark-nolabels');
+  }
   document.getElementById('tile-select').value = tile;
   await setTiles(tile);
 }
@@ -6593,6 +6601,7 @@ function _initTheme() {
     document.body.classList.add('light-theme');
     document.getElementById('theme-toggle-icon').textContent = '◑';
     document.getElementById('theme-toggle-label').textContent = '浅色';
+    // 瓦片明暗随主题的同步由 _loadDefaultTile 负责（它在 initMap 后运行、是首屏瓦片权威）
   }
 }
 
