@@ -253,9 +253,13 @@ Two teardown invariants, both easy to break:
 - `_disposeCompareCharts()` must run on close **and** on theme toggle — ECharts instances capture their theme at `init`, so a themed redraw requires disposing first.
 - `_cmpLoadToken` guards the async load. `closeCompareModal()` and each new `_actBulkChartCompare()` bump it; the loader discards its result when the token moved. Without this, closing mid-load builds charts into a hidden modal that nothing ever disposes.
 
-### Ride posters
+### Sharing — 3D preview + posters
 
-Single-ride detail → **生成海报** (`openDetailPoster`) and activity multi-select → **汇总海报** (`_actBulkPoster`) open `#poster-modal`. The feature is entirely client-side: it loads library coordinates through `/api/load`, renders CARTO tiles and routes to `#poster-canvas`, and downloads a PNG without uploading or persisting poster content.
+Single-ride detail → **分享** (`openDetailShare`) opens `#poster-modal` as a two-tab share surface: **3D 预览** and **海报**. Activity multi-select → **汇总海报** (`_actBulkPoster`) opens the same modal on the 海报 tab (summary rides have no 3D preview). Tab switching (`_shareSwitchTab`) mounts/unmounts the 3D scene and toggles the download button.
+
+**3D 预览** — an interactive Three.js route (`static/route-scene.js`, `RouteScene`) bridged through `static/route3d.js` (`window.Route3D`). It projects `/api/records` lat/lon/altitude/grade into a slope-colored tube with an elevation curtain, and offers spin on/off + speed (`旋转` + slider), six background palettes (夜/纸/冰/日/极/岩), a ground compass (`指北`, N red, aligned to geographic north via the `-z=north / +x=east` projection), and EXIF photo pins (`exifr`, GPS → capture-time → even-distribution matching). `RouteScene` is a FAFA-original three.js implementation; `three` and `exifr` are vendored under `static/vendor/` (both MIT). Imports use absolute `/static/vendor/...` specifiers (no importmap) so the strict CSP `script-src 'self'` allows them.
+
+**海报** — entirely client-side: loads library coordinates through `/api/load`, renders CARTO tiles and routes to `#poster-canvas`, downloads a PNG without uploading or persisting.
 
 - Formats: 3:4 at 1440×1920 and 9:16 at 1080×1920; dark and light poster themes are independent of the application theme.
 - Single posters show one route and its metrics. Summary posters accept 1–50 selected rides, load in batches of four, draw each route in a palette color, and aggregate distance, total duration, moving-speed average, elevation, power, heart rate and cadence.
@@ -263,6 +267,14 @@ Single-ride detail → **生成海报** (`openDetailPoster`) and activity multi-
 - `_posterDownsampleSegments()` runs after privacy splitting and preserves each segment's endpoints. Single posters cap at 20 000 points; summaries divide an approximately 100 000-point budget across rides (minimum 1 500 each) to prevent large selections from freezing Canvas rendering.
 - `_posterState.renderToken` invalidates closed or superseded async tile renders. The map canvas is cached separately from text / metric overlays so title and field edits do not reload tiles.
 - Poster maps must use `EXPORT_TILE_URLS` CARTO layers. Amap tiles are not canvas-safe; if CARTO is unavailable the route is drawn over a plain fallback background.
+
+### Grade distribution & detail layout
+
+- **坡度分布 / 连续爬坡段** (`fafa/climbs.py`, `analyze_grade`): per-record grade (recorded FIT grade, else altitude/distance差分), ±4-point smoothed, distance-weighted into climbfinder-style bands — 下坡(<0) / 0–4 / 4–7 / 7–10 / 10–13 / 13–16 / >16 %. Rendered as a vertical bar block beside 功率/心率分布 (`_renderDetailDistributions`); continuous climbs (≥200 m, avg ≥2.5%) show as cards (`_renderDetailClimbs`). Result is cached in the parse output — bump `_PARSE_SCHEMA` in `app.py` whenever the climbs shape changes, to invalidate old caches.
+- `/api/records` also returns raw WGS-84 `lat`/`lon` (for the 3D route). Map display still uses the GCJ-02-corrected `coords` chain — do not confuse the two.
+- Detail map has a **浮窗** mode: drag by its title bar, resize from any edge/corner via `.map-float-rz` handles (z-index 1100+, above Leaflet panes), and it clamps back into view on window resize. Lets charts render full-width.
+- The per-km data table (`#detail-table-section`) is **collapsed by default**; its handle toggles expand/collapse.
+- `_loadDefaultTile()` selects the light/dark CARTO tile by current theme on first load (previously only `toggleTheme` coupled tile ↔ theme, so a saved light theme still loaded dark tiles).
 
 ### Weather / wind
 
@@ -323,7 +335,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 | 950 | `#detail-view`, `#analytics-view` |
 | 960 | `#ai-view` |
 | 1000 | `#detail-route-map-controls`, `#detail-route-legend` |
-| 1100 | `#tag-picker`, `#bulk-tag-picker`, `#detail-route-tooltip` |
+| 1100 | `#tag-picker`, `#bulk-tag-picker`, `#detail-route-tooltip`, `.map-float-rz` resize handles (edges 1100 / corners 1101, above Leaflet panes) |
 | 1500 | `#cal-act-modal` |
 | 1900 | `#drop-overlay` |
 | 2000 | `.toast` |
