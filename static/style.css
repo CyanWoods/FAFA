@@ -2387,7 +2387,8 @@ body {
 }
 
 #detail-route-fit-btn,
-#detail-route-wind-btn {
+#detail-route-wind-btn,
+#detail-route-3d-btn {
   width: 30px;
   height: 30px;
   border-radius: var(--radius-sm);
@@ -2403,9 +2404,12 @@ body {
 }
 #detail-route-fit-btn { color: var(--text-placeholder); font-size: var(--text-2xl); transition: var(--transition-base); }
 #detail-route-wind-btn { color: var(--text-placeholder); transition: var(--transition-full); }
+#detail-route-3d-btn { color: var(--text-placeholder); font-size: var(--text-sm); font-weight: 700; letter-spacing: 0.02em; transition: var(--transition-base); }
 #detail-route-fit-btn:hover,
-#detail-route-wind-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
-#detail-route-wind-btn.active { color: var(--color-primary); border-color: rgba(46,134,222,0.6); }
+#detail-route-wind-btn:hover,
+#detail-route-3d-btn:hover { background: rgba(46,134,222,0.25); color: var(--color-accent); border-color: rgba(46,134,222,0.4); }
+#detail-route-wind-btn.active,
+#detail-route-3d-btn.active { color: var(--color-primary); border-color: rgba(46,134,222,0.6); }
 
 #map-fit-btn {
   position: absolute;
@@ -4270,10 +4274,13 @@ body {
 .light-theme .detail-table tr:hover td { background: rgba(0,0,0,0.04); }
 .light-theme #detail-route-metric-bar { background: rgba(242,242,246,0.98); border-bottom-color: rgba(0,0,0,0.12); }
 .light-theme #detail-route-fit-btn,
-.light-theme #detail-route-wind-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: var(--text-disabled); }
+.light-theme #detail-route-wind-btn,
+.light-theme #detail-route-3d-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: var(--text-disabled); }
 .light-theme #detail-route-fit-btn:hover,
-.light-theme #detail-route-wind-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
-.light-theme #detail-route-wind-btn.active { color: var(--color-primary); border-color: var(--color-primary); background: rgba(46,134,222,0.12); }
+.light-theme #detail-route-wind-btn:hover,
+.light-theme #detail-route-3d-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
+.light-theme #detail-route-wind-btn.active,
+.light-theme #detail-route-3d-btn.active { color: var(--color-primary); border-color: var(--color-primary); background: rgba(46,134,222,0.12); }
 .light-theme #map-fit-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: var(--text-disabled); }
 .light-theme #map-fit-btn:hover { background: rgba(46,134,222,0.15); color: var(--color-primary); }
 .light-theme .det-route-metric-btn { border-color: rgba(0,0,0,0.20); color: var(--bg-control); background: transparent; }
@@ -5384,3 +5391,97 @@ body {
 .light-theme .climb-band-bar { background: rgba(0,0,0,0.06); }
 .light-theme .climb-band-seg.band-flat, .light-theme .climb-band-dot.band-flat { background: #9aa1ab; }
 .light-theme .climb-card { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.08); }
+
+/* ── 3D 路线可视化叠层（控件复用 .det-route-metric-btn，样式与 2D 统一）──────── */
+#detail-route-3d {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  background: var(--bg-base);
+}
+#detail-route-3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+#detail-route-3d-controls {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#detail-route-3d-palettes { display: flex; gap: 6px; }
+#detail-route-3d-spin { display: flex; align-items: center; gap: 8px; }
+#detail-route-3d-hint { font-size: var(--text-sm); color: var(--text-subtle); }
+
+/* 转速拉手：细轨 + 蓝色圆钮，沿用 FAFA 主色 */
+.r3d-speed {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 84px;
+  height: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-active);
+  cursor: pointer;
+  outline: none;
+}
+.r3d-speed::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid rgba(255,255,255,0.25);
+  cursor: grab;
+}
+.r3d-speed::-webkit-slider-thumb:active { cursor: grabbing; background: var(--color-primary-dark); }
+.r3d-speed::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid rgba(255,255,255,0.25);
+  cursor: grab;
+}
+.r3d-speed::-moz-range-track { height: 4px; border-radius: var(--radius-xs); background: var(--surface-active); }
+
+/* ── 分享弹窗标签 + 3D 预览面板 ─────────────────────────────────────────────── */
+#share-tabs { display: flex; gap: 4px; }
+.share-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--surface-active);
+  border-radius: var(--radius-input);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  cursor: pointer;
+  transition: var(--transition-full);
+}
+.share-tab:hover:not(.active) { color: var(--text-light); }
+.share-tab.active { background: var(--surface-2); color: var(--color-primary); border-color: var(--surface-raised); }
+.light-theme .share-tab { border-color: rgba(0,0,0,0.16); color: var(--text-dim); }
+.light-theme .share-tab.active { background: rgba(0,0,0,0.05); color: var(--color-primary-dark); border-color: rgba(0,0,0,0.16); }
+
+#share-3d-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+#share-3d-panel > canvas { display: block; width: 100%; height: 100%; }
+
+/* ── 分享作为独立整页（简陋版：全屏铺满，后续再做成真正的 view）─────────────── */
+#poster-modal-overlay { display: none; }
+#poster-modal-box {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+  border: none;
+}

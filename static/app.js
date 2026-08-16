@@ -1094,12 +1094,56 @@ function _posterOpen(rides, kind) {
   document.getElementById('poster-modal').style.display = 'flex';
   _posterUpdateSizeHint();
   _posterScheduleRender(true);
+
+  // 标签初始化：单条骑行可用 3D 预览（默认）；汇总仅海报
+  const tab3dBtn = document.querySelector('#share-tabs [data-tab="3d"]');
+  if (tab3dBtn) tab3dBtn.style.display = kind === 'single' ? '' : 'none';
+  _shareSwitchTab(kind === 'single' ? '3d' : 'poster');
 }
 
-function openDetailPoster() {
+function openDetailShare() {
   const track = tracks.get(detailTrackId);
   if (!track) { toast('当前骑行尚未加载'); return; }
   _posterOpen([_posterRideFromTrack(track)], 'single');
+}
+
+// ── 分享弹窗标签：3D 预览（交互式）/ 海报 ──────────────────────────────────
+let _shareTab = '3d';
+
+function _shareSwitchTab(tab) {
+  _shareTab = tab;
+  document.querySelectorAll('#share-tabs .share-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === tab));
+  const panel3d = document.getElementById('share-3d-panel');
+  const posterBody = document.getElementById('poster-modal-body');
+  const dlBtn = document.getElementById('poster-download-btn');
+  const exportHint = document.getElementById('poster-export-hint');
+  const is3d = tab === '3d';
+  if (panel3d) panel3d.style.display = is3d ? '' : 'none';
+  if (posterBody) posterBody.style.display = is3d ? 'none' : '';
+  if (dlBtn) dlBtn.style.display = is3d ? 'none' : '';
+  if (exportHint) exportHint.style.display = is3d ? 'none' : '';
+  if (is3d) _share3DMount();
+  else { _share3DUnmount(); _posterScheduleRender(true); }
+}
+
+function _share3DMount() {
+  if (!window.Route3D) { toast('3D 模块未加载'); return; }
+  if (_route3DActive) return;
+  const records = _detailRoute3DRecords();
+  const hint = document.getElementById('detail-route-3d-hint');
+  if (records.length < 2) { if (hint) hint.textContent = '本次骑行无坐标数据'; return; }
+  const canvas = document.getElementById('detail-route-3d-canvas');
+  const inst = window.Route3D.mount(canvas, records, { transparent: false, showGround: true });
+  if (!inst) { toast('3D 场景初始化失败'); return; }
+  _route3DActive = true;
+  _detailRoute3DSyncSpinUI();
+}
+
+function _share3DUnmount() {
+  if (!_route3DActive) return;
+  try { window.Route3D?.unmount(); } catch {}
+  _route3DActive = false;
 }
 
 async function _actBulkPoster() {
@@ -1150,13 +1194,14 @@ function closePosterModal() {
   if (_posterState.renderTimer) clearTimeout(_posterState.renderTimer);
   _posterState.renderTimer = null;
   _posterState.renderPromise = null;
+  _share3DUnmount();
   document.getElementById('poster-modal').style.display = 'none';
 }
 
 function _posterSetOption(key, value) {
   _posterState[key] = value;
-  const group = document.getElementById(key === 'theme' ? 'poster-theme-options' : 'poster-ratio-options');
-  group.querySelectorAll('button').forEach(btn => btn.classList.toggle('active', btn.dataset.val === value));
+  const group = document.getElementById(`poster-${key}-options`);
+  group?.querySelectorAll('button').forEach(btn => btn.classList.toggle('active', btn.dataset.val === value));
   _posterState.mapCanvas = null;
   _posterUpdateSizeHint();
   _posterScheduleRender(true);
@@ -1402,6 +1447,7 @@ async function _posterRender() {
   status.textContent = '正在绘制地图与路线…';
 
   if (!_posterState.mapCanvas || _posterState.mapKey !== mapKey) {
+    status.textContent = '正在绘制地图与路线…';
     const built = await _posterBuildMap(mapWidth, mapHeight, theme, token);
     if (!built || token !== _posterState.renderToken) return;
     _posterState.mapCanvas = built;
@@ -3079,6 +3125,7 @@ async function openDetailView(id) {
 
 function closeDetailView() {
   document.getElementById('detail-view').classList.remove('active');
+  if (_route3DActive) _detailRoute3DTeardown();
   _disposeDetailCharts();
   _detailZoomDrag = null;
   _detailZoomActive = false;
@@ -3507,6 +3554,129 @@ function _renderDetailClimbs(wrap) {
     `<div class="detail-chart-label">连续爬坡段</div>
      <div class="climb-cards">${cardsHtml}</div>`;
   wrap.appendChild(block);
+}
+
+/* ── 3D 路线可视化（Three.js，经 window.Route3D 桥接）───────────────────────── */
+let _route3DActive = false;
+
+// 从当前详情记录序列取出带坐标的点，喂给 RouteScene
+function _detailRoute3DRecords() {
+  const src = _detailRecordsRef || [];
+  const out = [];
+  for (const r of src) {
+    if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+      out.push({ lat: r.lat, lon: r.lon, altitude: r.altitude, grade: r.grade, timestamp: r.timestamp });
+    }
+  }
+  return out;
+}
+
+// 3D 激活时隐藏 2D 专属控件（指标切换条 / 图例 / 风向按钮），退出时恢复
+function _detailRoute3DToggle2D(show) {
+  const disp = show ? '' : 'none';
+  const bar = document.getElementById('detail-route-metric-bar');
+  const legend = document.getElementById('detail-route-legend');
+  const wind = document.getElementById('detail-route-wind-btn');
+  if (bar) bar.style.display = disp;
+  if (legend) legend.style.display = disp;
+  if (wind) wind.style.display = disp;
+}
+
+function _detailRoute3DTeardown() {
+  try { window.Route3D?.unmount(); } catch {}
+  _route3DActive = false;
+  const layer = document.getElementById('detail-route-3d');
+  const btn = document.getElementById('detail-route-3d-btn');
+  const hint = document.getElementById('detail-route-3d-hint');
+  if (layer) layer.style.display = 'none';
+  if (btn) { btn.classList.remove('active'); btn.textContent = '3D'; btn.title = '3D 路线'; }
+  if (hint) hint.textContent = '';
+  _detailRoute3DToggle2D(true);
+}
+
+function toggleDetailRoute3D() {
+  if (!window.Route3D) { toast('3D 模块未加载'); return; }
+  if (_route3DActive) { _detailRoute3DTeardown(); return; }
+
+  const records = _detailRoute3DRecords();
+  if (records.length < 2) { toast('本次骑行无坐标数据，无法生成 3D 路线'); return; }
+
+  const layer = document.getElementById('detail-route-3d');
+  const canvas = document.getElementById('detail-route-3d-canvas');
+  const btn = document.getElementById('detail-route-3d-btn');
+  if (!layer || !canvas) return;
+  layer.style.display = 'block';
+  const inst = window.Route3D.mount(canvas, records, { transparent: false, showGround: true });
+  if (!inst) { layer.style.display = 'none'; toast('3D 场景初始化失败'); return; }
+  _route3DActive = true;
+  if (btn) { btn.classList.add('active'); btn.textContent = '2D'; btn.title = '返回 2D 地图'; }
+  _detailRoute3DToggle2D(false);
+  _detailRoute3DSyncSpinUI();
+}
+
+function _detailRoute3DPalette(name, el) {
+  if (!_route3DActive) return;
+  window.Route3D?.setPalette(name);
+  document.querySelectorAll('#detail-route-3d-palettes .det-route-metric-btn')
+    .forEach(b => b.classList.toggle('active', b === el));
+}
+
+// 旋转开关
+function _detailRoute3DSpin(el) {
+  if (!_route3DActive) return;
+  const on = !window.Route3D.isSpinning();
+  window.Route3D.setSpinning(on);
+  el.classList.toggle('active', on);
+  el.textContent = on ? '旋转' : '静止';
+}
+
+// 转速拉手：value 1(慢)–10(快) → 每圈秒数 44−value*4（4–40s）
+function _detailRoute3DSpeed(value) {
+  if (!_route3DActive) return;
+  window.Route3D.setSpinDuration(44 - Number(value) * 4);
+}
+
+// 地面方位罗盘开关
+function _detailRoute3DCompass(el) {
+  if (!_route3DActive) return;
+  const on = !el.classList.contains('active');
+  window.Route3D.setCompass(on);
+  el.classList.toggle('active', on);
+}
+
+// 挂载后同步旋转控件初始态（默认旋转开、中速）
+function _detailRoute3DSyncSpinUI() {
+  const btn = document.getElementById('detail-route-3d-spin-btn');
+  const speed = document.getElementById('detail-route-3d-speed');
+  if (btn) { btn.classList.add('active'); btn.textContent = '旋转'; }
+  if (speed) { speed.value = 5; window.Route3D.setSpinDuration(44 - 5 * 4); }
+  const compass = document.getElementById('detail-route-3d-compass-btn');
+  if (compass) { compass.classList.remove('active'); window.Route3D.setCompass(false); }
+}
+
+async function _detailRoute3DAddPhotos(event) {
+  const input = event.target;
+  const files = input.files;
+  if (!files || !files.length || !_route3DActive) return;
+  const hint = document.getElementById('detail-route-3d-hint');
+  if (hint) hint.textContent = '解析照片…';
+  try {
+    const res = await window.Route3D.addPhotos(files);
+    if (hint) {
+      if (res.added) {
+        const gps = res.methods.filter(m => m === '照片 GPS').length;
+        const parts = [`已添加 ${res.added} 张`];
+        if (gps) parts.push(`${gps} 张 GPS 定位`);
+        hint.textContent = parts.join(' · ');
+      } else {
+        hint.textContent = '未识别到可用照片';
+      }
+    }
+  } catch (e) {
+    if (hint) hint.textContent = '照片解析失败';
+  } finally {
+    input.value = '';
+  }
 }
 
 
@@ -4318,6 +4488,12 @@ function _bisectLeft(arr, val) {
 
 function _updateDetailRouteMarker(dataIdx) {
   if (_detailRouteHideTimer) { clearTimeout(_detailRouteHideTimer); _detailRouteHideTimer = null; }
+  // 3D 模式：图表滑动暂停飞览，把骑行点移到对应进度
+  if (_route3DActive) {
+    const s = window.Route3D?.scene;
+    if (s) { s.playing = false; s.setProgress(dataIdx / Math.max(1, _detailChartDataLen - 1)); }
+    return;
+  }
   if (!detailRouteMap || !_detailRouteCoords || !_detailRouteCumDist) return;
   const totalDist = _detailRouteCumDist[_detailRouteCumDist.length - 1];
   const targetDist = _detailChartIsRecords
@@ -4370,6 +4546,11 @@ function _updateDetailRouteMarker(dataIdx) {
 }
 
 function _hideDetailRouteMarker() {
+  if (_route3DActive) {
+    const s = window.Route3D?.scene;
+    if (s) s.playing = true;   // 移出图表恢复自动飞览
+    return;
+  }
   _detailRouteHideTimer = setTimeout(() => {
     _detailRouteHideTimer = null;
     if (_detailRouteMarker && detailRouteMap) {
@@ -4448,6 +4629,7 @@ function _windEffect(bearing, windFromDir) {
 }
 
 function _detailRouteFitBounds() {
+  if (_route3DActive) { window.Route3D?.scene?.resetCamera(); return; }
   if (!detailRouteMap || !detailRouteLayers.length) return;
   const bounds = L.latLngBounds([]);
   for (const layer of detailRouteLayers) bounds.extend(layer.getBounds());

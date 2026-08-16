@@ -398,7 +398,7 @@
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
       <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
-      <button class="det-export-btn" id="detail-poster-btn" onclick="openDetailPoster()">生成海报</button>
+      <button class="det-export-btn" id="detail-poster-btn" onclick="openDetailShare()">分享</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
     <div id="detail-meta">
@@ -700,12 +700,39 @@
     <div id="poster-modal-box">
       <div id="poster-modal-header">
         <div>
-          <div id="poster-modal-title">骑行分享海报</div>
+          <div id="poster-modal-title">骑行分享</div>
           <div id="poster-modal-kind"></div>
+        </div>
+        <div id="share-tabs">
+          <button class="share-tab active" data-tab="3d" onclick="_shareSwitchTab('3d')">3D 预览</button>
+          <button class="share-tab" data-tab="poster" onclick="_shareSwitchTab('poster')">海报</button>
         </div>
         <button onclick="closePosterModal()" aria-label="关闭">✕</button>
       </div>
-      <div id="poster-modal-body">
+
+      <div id="share-3d-panel">
+        <canvas id="detail-route-3d-canvas"></canvas>
+        <div id="detail-route-3d-controls">
+          <div id="detail-route-3d-spin">
+            <button class="det-route-metric-btn active" id="detail-route-3d-spin-btn" onclick="_detailRoute3DSpin(this)">旋转</button>
+            <input type="range" id="detail-route-3d-speed" class="r3d-speed" min="1" max="10" value="5" oninput="_detailRoute3DSpeed(this.value)" title="转速">
+          </div>
+          <button class="det-route-metric-btn" id="detail-route-3d-compass-btn" onclick="_detailRoute3DCompass(this)" title="地面方位罗盘">指北</button>
+          <div id="detail-route-3d-palettes">
+            <button class="det-route-metric-btn active" data-pal="night" onclick="_detailRoute3DPalette('night', this)">夜</button>
+            <button class="det-route-metric-btn" data-pal="paper" onclick="_detailRoute3DPalette('paper', this)">纸</button>
+            <button class="det-route-metric-btn" data-pal="ice" onclick="_detailRoute3DPalette('ice', this)">冰</button>
+            <button class="det-route-metric-btn" data-pal="sunset" onclick="_detailRoute3DPalette('sunset', this)">日</button>
+            <button class="det-route-metric-btn" data-pal="aurora" onclick="_detailRoute3DPalette('aurora', this)">极</button>
+            <button class="det-route-metric-btn" data-pal="slate" onclick="_detailRoute3DPalette('slate', this)">岩</button>
+          </div>
+          <button class="det-route-metric-btn" onclick="this.nextElementSibling.click()">添加照片</button>
+          <input type="file" accept="image/*" multiple onchange="_detailRoute3DAddPhotos(event)" hidden>
+          <span id="detail-route-3d-hint"></span>
+        </div>
+      </div>
+
+      <div id="poster-modal-body" style="display:none">
         <div id="poster-controls">
           <label class="poster-field poster-field-wide">
             <span>标题</span>
@@ -1074,6 +1101,7 @@
 
   <script src="/static/vendor/leaflet/leaflet.js"></script>
   <script src="/static/app.js"></script>
+  <script type="module" src="/static/route3d.js"></script>
   <div id="bulk-tag-picker" style="display:none">
     <div id="bulk-tag-picker-list"></div>
     <div id="bulk-tag-picker-footer">

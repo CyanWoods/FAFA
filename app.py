@@ -1341,7 +1341,11 @@ def get_records(filename):
         cps = _pct(r.combined_pedal_smoothness)
         out.append({
             "t":                 ts_local.strftime("%H:%M:%S"),
+            "timestamp":         ts_local.isoformat(),  # 完整时间，供照片 EXIF 拍摄时间匹配路线进度
             "dist_m":            round(r.distance_m, 1),  # 累计距离，供分段对比按距离对齐
+            # 原始 WGS-84 经纬度（供 3D 路线可视化；地图展示另走 coords/GCJ 纠偏链路）
+            "lat":               round(r.position_lat * SEMICIRCLE_TO_DEG, 6) if r.position_lat is not None else None,
+            "lon":               round(r.position_long * SEMICIRCLE_TO_DEG, 6) if r.position_long is not None else None,
             "speed_kmh":         round(r.speed_ms * 3.6, 2) if r.speed_ms is not None else None,
             "hr":                r.heart_rate,
             "power":             r.power,
