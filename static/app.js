@@ -1908,7 +1908,8 @@ function addTrack(data, { fit = true } = {}) {
                   source: data.source || 'upload',
                   summary: data.summary || null, kmStats: data.km_stats || [],
                   distStats: data.dist_stats || [], timeStats: data.time_stats || [],
-                  timeStatsStart: data.time_stats_start || null };
+                  timeStatsStart: data.time_stats_start || null,
+                  climbs: data.climbs || null };
   tracks.set(id, track);
 
   renderTrack(track);
@@ -3455,6 +3456,59 @@ function _renderDetailSummary(summary) {
     chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
 }
 
+/* ── 爬坡分段面板 ─────────────────────────────────────────────────────────── */
+// climbfinder 坡度配色分档：下坡 / 0–4 / 4–7 / 7–10 / 10–13 / 13–16 / >16 (%)
+const _CLIMB_BANDS = [
+  { key: 'descent', label: '下坡'  },
+  { key: 'b0',      label: '0–4%'  },
+  { key: 'b4',      label: '4–7%'  },
+  { key: 'b7',      label: '7–10%' },
+  { key: 'b10',     label: '10–13%'},
+  { key: 'b13',     label: '13–16%'},
+  { key: 'b16',     label: '>16%'  },
+];
+const _CLIMB_BAND_COLORS = {
+  descent: '#6b8cae',   // 下坡 冷灰蓝
+  b0:      '#6ab04c',   // 绿
+  b4:      '#f0c419',   // 黄
+  b7:      '#f0932b',   // 橙
+  b10:     '#eb4d4b',   // 红
+  b13:     '#b33939',   // 深红
+  b16:     '#6c1e9c',   // 紫
+};
+
+// 坡度分布 + 连续爬坡段块，渲染进详情左分栏（与功率分布/心率分布同列）
+// 连续爬坡段卡片（坡度分布本身已在 _renderDetailDistributions 以竖柱图展示）
+function _renderDetailClimbs(wrap) {
+  const climbs = tracks.get(detailTrackId)?.climbs;
+  if (!wrap || !climbs || (climbs.coverage || 0) < 10 || !climbs.distribution) return;
+  if (!climbs.climbs || !climbs.climbs.length) return;   // 无连续爬坡段则不显示卡片区
+
+  const cardsHtml = climbs.climbs.map((c, i) => {
+    const distKm = c.distance_m >= 1000
+      ? (c.distance_m / 1000).toFixed(1) + ' km'
+      : Math.round(c.distance_m) + ' m';
+    const atKm = (c.start_distance_m / 1000).toFixed(1);
+    const maxc = c.max_grade_pct != null ? c.max_grade_pct.toFixed(1) : '—';
+    return `<div class="climb-card">
+      <div class="climb-card-head">爬坡 ${i + 1} <span class="climb-card-at">@ ${atKm} km</span></div>
+      <div class="climb-card-body">
+        <span><b>${distKm}</b><em>距离</em></span>
+        <span><b>${Math.round(c.elevation_gain_m)} m</b><em>爬升</em></span>
+        <span><b>${c.avg_grade_pct.toFixed(1)}%</b><em>均坡</em></span>
+        <span><b>${maxc}%</b><em>最大</em></span>
+      </div>
+    </div>`;
+  }).join('');
+
+  const block = document.createElement('div');
+  block.className = 'detail-chart-block climb-block';
+  block.innerHTML =
+    `<div class="detail-chart-label">连续爬坡段</div>
+     <div class="climb-cards">${cardsHtml}</div>`;
+  wrap.appendChild(block);
+}
+
 
 function _buildRouteMetricBar() {
   const t = tracks.get(detailTrackId);
@@ -3567,7 +3621,7 @@ function _setupChartZoomDrag(chart) {
 }
 
 // 详情页分布柱状块（功率分布 / 心率分布）——纵向柱，内联样式，复用 zone 配色
-function _detailDistBlock(title, sub, items, isDark) {
+function _detailDistBlock(title, sub, items, isDark, unit = 'min') {
   const BAR_H = 140;
   const block = document.createElement('div');
   block.className = 'detail-chart-block';
@@ -3606,7 +3660,7 @@ function _detailDistBlock(title, sub, items, isDark) {
   const labels = items.map(it => `
       <div style="flex:1;display:flex;flex-direction:column;align-items:center">
         <span style="font-size:11px;color:${labelColor}">${it.label}</span>
-        <span style="font-size:10px;color:${subColor};margin-top:1px">${it.count}min</span>
+        <span style="font-size:10px;color:${subColor};margin-top:1px">${it.count}${unit}</span>
       </div>`).join('');
 
   const chart = document.createElement('div');
@@ -3674,6 +3728,23 @@ function _renderDetailDistributions(wrap, records) {
       }));
       blocks.push(_detailDistBlock('心率分布', hrDef.caption, items, isDark));
     }
+  }
+
+  // 坡度分布 — 竖柱图，与功率/心率分布同款；柱下标注该带距离(km)
+  const climbs = tracks.get(detailTrackId)?.climbs;
+  if (climbs && (climbs.coverage || 0) >= 10 && climbs.distribution) {
+    const dist = climbs.distribution;
+    const totalKm = records.length ? (records[records.length - 1].dist_m || 0) / 1000 : 0;
+    const items = _CLIMB_BANDS.map(b => {
+      const pct = dist[b.key] || 0;
+      const km = totalKm * pct / 100;
+      return { label: b.label, pct, count: km >= 10 ? Math.round(km) : km.toFixed(1), color: _CLIMB_BAND_COLORS[b.key] };
+    });
+    const rep = climbs.representative_grade, maxG = climbs.max_grade;
+    const sub = (rep != null ? `代表 ${rep.toFixed(1)}%` : '') +
+                (rep != null && maxG != null ? ' · ' : '') +
+                (maxG != null ? `最大 ${maxG.toFixed(1)}%` : '');
+    blocks.push(_detailDistBlock('坡度分布', sub, items, isDark, ' km'));
   }
 
   if (!blocks.length) return;
@@ -4229,6 +4300,7 @@ function _renderDetailCharts(records, fallbackStats) {
   }
 
   _renderDetailDistributions(wrap, useRecords ? records : null);
+  _renderDetailClimbs(wrap);
 
   _detailRecordsRef = useRecords ? records : null;
   if (useRecords) {

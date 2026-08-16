@@ -36,6 +36,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from fafa.parser import parse_fit, decode_lr_balance
 from fafa.gcj02 import needs_wgs84_conversion
 from fafa.stats import compute_km_stats, compute_dist_stats, compute_time_stats, compute_summary
+from fafa.climbs import analyze_grade
 import fafa.strava as _strava
 import fafa.db as _db
 import fafa.auth as _auth
@@ -474,9 +475,13 @@ _parse_states: dict[str, dict] = {}   # key = str(input_dir)
 _parse_state_lock = threading.Lock()
 
 
+# 解析结果 schema 版本：字段结构变化时递增，令旧缓存自动失效并重算
+_PARSE_SCHEMA = "s3"
+
+
 def _file_signature(path: Path) -> str:
     stat = path.stat()
-    return f'{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}'
+    return f'{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}:{_PARSE_SCHEMA}'
 
 
 def _cache_get(path_str: str, signature) -> dict | None:
@@ -810,6 +815,12 @@ def _parse_and_build_direct(fit_path: str, filename: str) -> dict:
     except Exception:
         zone_time = None
 
+    try:
+        climbs = analyze_grade(fit.records)
+    except Exception as e:
+        logging.warning("计算爬坡分段失败 (%s): %s", filename, e)
+        climbs = None
+
     result = dict(
         coords=coords,
         filename=filename,
@@ -822,6 +833,7 @@ def _parse_and_build_direct(fit_path: str, filename: str) -> dict:
         start_time_utc=start_time_utc,
         peak_power=peak_power,
         zone_time_s=zone_time,
+        climbs=climbs,
     )
 
     if p.exists():

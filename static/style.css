@@ -5315,3 +5315,72 @@ body {
 .light-theme #prompts-hint { color: var(--text-dim); }
 .light-theme .settings-link-btn { border-color: rgba(0,0,0,0.16); color: var(--text-dim); }
 .light-theme .settings-link-btn:hover { background: rgba(0,0,0,0.05); color: var(--bg-panel); }
+
+/* ── 坡度分布 / 爬坡分段块（详情左分栏）───────────────────────────────────── */
+/* 100% 粗堆叠条：段内标注名称+百分比 */
+.climb-band-bar {
+  display: flex;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  margin-top: 2px;
+}
+.climb-band-seg {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.climb-band-seg > span {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.climb-band-seg.band-descent { background: #48a6c8; }
+.climb-band-seg.band-flat    { background: #6b7280; }
+.climb-band-seg.band-climb   { background: #d6ff64; }
+.climb-band-seg.band-steep   { background: #ff6b42; }
+/* 段内文字对比色：亮底用深字，暗底用浅字 */
+.climb-band-seg.band-descent > span,
+.climb-band-seg.band-flat > span    { color: rgba(255,255,255,0.95); }
+.climb-band-seg.band-climb > span,
+.climb-band-seg.band-steep > span   { color: rgba(0,0,0,0.82); }
+.climb-cards {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.climb-card {
+  flex: 1 1 160px;
+  min-width: 150px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.climb-card-head {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.climb-card-at { font-weight: 400; color: var(--text-muted); font-size: var(--text-xs); }
+.climb-card-body { display: flex; gap: 10px; }
+.climb-card-body span { display: flex; flex-direction: column; }
+.climb-card-body b { font-size: var(--text-sm); color: var(--text-primary); font-weight: 600; }
+.climb-card-body em { font-size: var(--text-xs); color: var(--text-muted); font-style: normal; }
+.climb-empty {
+  margin-top: 10px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.light-theme .climb-band-bar { background: rgba(0,0,0,0.06); }
+.light-theme .climb-band-seg.band-flat, .light-theme .climb-band-dot.band-flat { background: #9aa1ab; }
+.light-theme .climb-card { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.08); }
