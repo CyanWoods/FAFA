@@ -20,15 +20,18 @@ const clampNum = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const mix = (a, b, t) => a + (b - a) * t;
 const ease = (t) => t * t * (3 - 2 * t);
 
-// 坡度 → 颜色的取样点（自定义配色，冷→暖随坡度上升）
-const SLOPE_RAMP = [
-  { g: -0.10, c: 0x3aa0c4 },
-  { g: -0.03, c: 0x74cbc0 },
-  { g:  0.00, c: 0xeef2d8 },
-  { g:  0.04, c: 0xc7f24a },
-  { g:  0.08, c: 0xf5b02e },
-  { g:  0.14, c: 0xe8512f },
-].map((s) => ({ g: s.g, c: new THREE.Color(s.c) }));
+// 坡度 → 颜色：离散分档，与详情页「坡度分布」竖柱图（app.js _CLIMB_BAND_COLORS）
+// 及后端分档阈值（fafa/climbs.py analyze_grade）保持同一套配色 — 三处改动需同步。
+// 档位按坡度百分比：下坡(<0) / 0–4 / 4–7 / 7–10 / 10–13 / 13–16 / >16
+const SLOPE_BANDS = [
+  { max: 0,        c: 0x6b8cae },  // 下坡
+  { max: 4,        c: 0x6ab04c },  // 0–4%
+  { max: 7,        c: 0xf0c419 },  // 4–7%
+  { max: 10,       c: 0xf0932b },  // 7–10%
+  { max: 13,       c: 0xeb4d4b },  // 10–13%
+  { max: 16,       c: 0xb33939 },  // 13–16%
+  { max: Infinity, c: 0x6c1e9c },  // >16%
+].map((s) => ({ max: s.max, c: new THREE.Color(s.c) }));
 
 // 六套配色：line=管道基调, wall=幕布, dot=骑行点, grid=网格, sky=背景雾色
 const PALETTES = {
@@ -40,16 +43,12 @@ const PALETTES = {
   slate:  { line: 0xa1c2ff, wall: 0x5f7fbf, dot: 0xe6eefb, grid: 0x3a4658, sky: 0x0e131b },
 };
 
-function slopeToColor(grade, target) {
-  const g = clampNum(grade, SLOPE_RAMP[0].g, SLOPE_RAMP[SLOPE_RAMP.length - 1].g);
-  for (let i = 1; i < SLOPE_RAMP.length; i += 1) {
-    const lo = SLOPE_RAMP[i - 1], hi = SLOPE_RAMP[i];
-    if (g <= hi.g) {
-      const t = (g - lo.g) / Math.max(1e-4, hi.g - lo.g);
-      return target.copy(lo.c).lerp(hi.c, ease(t));
-    }
+function slopeToColor(gradeFraction, target) {
+  const pct = gradeFraction * 100;   // this.slopes 存的是小数(如 -0.05=-5%)，分档阈值按百分比定义
+  for (const band of SLOPE_BANDS) {
+    if (pct < band.max) return target.copy(band.c);
   }
-  return target.copy(SLOPE_RAMP[SLOPE_RAMP.length - 1].c);
+  return target.copy(SLOPE_BANDS[SLOPE_BANDS.length - 1].c);
 }
 
 // 生成一张文字贴图（用于海拔标注与罗盘方位）
@@ -130,7 +129,6 @@ export class RouteScene {
     this.autoSpinDuration = 24;   // 每圈秒数
     this.progress = 0;
     this.spinAngle = 0;
-    this.floatClock = 0;
     this.ready = false;
     this.disposed = false;
     this.photos = [];
@@ -588,12 +586,13 @@ export class RouteScene {
       if (this.playing) this.setProgress(this.progress + dt / 18);
       if (this.spinning) {
         this.spinAngle = (this.spinAngle + dt * (Math.PI * 2) / this.autoSpinDuration) % (Math.PI * 2);
-        this.floatClock += dt;
       }
+      // 只绕世界竖直 Y 轴自转：root 不带任何俯仰/横滚，地面法线恒与旋转轴重合，
+      // 转动画面才是匀速稳定的。此前叠加的俯仰摆动会让地面法线偏离旋转轴，
+      // 越转越像失衡陀螺，是之前旋转显得"怪异"的根因。
+      this.root.rotation.x = 0;
       this.root.rotation.y = this.spinAngle;
-      const bob = this.spinning ? 1 : 0;
-      this.root.rotation.x = THREE.MathUtils.degToRad(-7) + Math.sin(this.floatClock * 0.7) * 0.024 * bob;
-      this.root.position.y = Math.sin(this.floatClock * 0.66) * 2.0 * bob;
+      this.root.position.y = 0;
 
       const at = this.curve.getPointAt(this.progress);
       this.rider.position.copy(at);

@@ -1,107 +1,97 @@
 """Strava upload integration.
 
-Credentials stored in config.json under strava_* keys.
-Upload dedup state at input/.strava_state.json.
+Credentials stored in users.db (user_config 表，加密) —— 见 fafa/auth.py。
+Upload dedup state at input/.strava_state.json（这个是去重状态，不是凭证，
+不敏感，仍留文件）。
 """
 
 import json
+import fcntl
 import logging
 import os
 import re
 import secrets
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
-import fcntl
+
+from . import auth
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_AI_CONFIG_FILE = _PROJECT_ROOT / "config.json"
 _INPUT_DIR = _PROJECT_ROOT / "input"
 _STATE_FILE = _INPUT_DIR / ".strava_state.json"
 
 DATA_TYPE_MAP = {".fit": "fit", ".gpx": "gpx", ".tcx": "tcx"}
 
 
+@contextmanager
+def _token_refresh_lock(user_id: int):
+    """Serialize Strava token rotation across gunicorn workers for one user."""
+    lock_dir = _PROJECT_ROOT / ".runtime_locks"
+    lock_dir.mkdir(mode=0o700, exist_ok=True)
+    lock_path = lock_dir / f"strava-token-{int(user_id)}.lock"
+    with open(lock_path, "a+") as lock_fh:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        yield
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
-def load_config(config_file: Path | None = None) -> dict | None:
+def load_config(user_id: int | None = None) -> dict | None:
     """Return Strava config dict, or None if client_id/secret not set."""
-    cfg_path = config_file or _AI_CONFIG_FILE
-    if not cfg_path.exists():
+    if user_id is None:
         return None
     try:
-        with open(cfg_path, encoding="utf-8") as f:
-            cfg = json.load(f)
-        client_id = (cfg.get("strava_client_id") or "").strip()
-        client_secret = (cfg.get("strava_client_secret") or "").strip()
+        cfg = auth.get_user_config(user_id)
+        client_id = str(cfg.get("strava_client_id") or "").strip()
+        client_secret = str(cfg.get("strava_client_secret") or "").strip()
         if not client_id or not client_secret:
             return None
         return {
             "client_id": client_id,
             "client_secret": client_secret,
-            "access_token": (cfg.get("strava_access_token") or "").strip(),
-            "refresh_token": (cfg.get("strava_refresh_token") or "").strip(),
+            "access_token": str(cfg.get("strava_access_token") or "").strip(),
+            "refresh_token": str(cfg.get("strava_refresh_token") or "").strip(),
             "expires_at": int(cfg.get("strava_expires_at") or 0),
-            "athlete_id": (cfg.get("strava_athlete_id") or "").strip(),
-            "athlete_name": (cfg.get("strava_athlete_name") or "").strip(),
+            "athlete_id": str(cfg.get("strava_athlete_id") or "").strip(),
+            "athlete_name": str(cfg.get("strava_athlete_name") or "").strip(),
         }
     except Exception:
         return None
 
 
-def _atomic_save_config(cfg_path: Path, cfg: dict) -> None:
-    fd, tmp_name = tempfile.mkstemp(prefix=f'.{cfg_path.name}.', suffix='.tmp', dir=cfg_path.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        Path(tmp_name).replace(cfg_path)
-        os.chmod(cfg_path, 0o600)
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
-
-
 def _save_tokens(access_token, refresh_token, expires_at,
-                 athlete_id="", athlete_name="", config_file: Path | None = None):
-    cfg_path = config_file or _AI_CONFIG_FILE
-    lock_path = cfg_path.with_name(cfg_path.name + '.lock')
-    with open(lock_path, 'a+') as lock_fh:
-        os.chmod(lock_path, 0o600)
-        fcntl.flock(lock_fh, fcntl.LOCK_EX)
-        with open(cfg_path, encoding="utf-8") as f:
-            cfg = json.load(f)
-        cfg["strava_access_token"] = access_token
-        cfg["strava_refresh_token"] = refresh_token
-        cfg["strava_expires_at"] = expires_at
-        if athlete_id:
-            cfg["strava_athlete_id"] = str(athlete_id)
-        if athlete_name:
-            cfg["strava_athlete_name"] = athlete_name
-        _atomic_save_config(cfg_path, cfg)
+                 athlete_id="", athlete_name="", user_id: int | None = None):
+    updates = {
+        "strava_access_token": access_token,
+        "strava_refresh_token": refresh_token,
+        "strava_expires_at": expires_at,
+    }
+    if athlete_id:
+        updates["strava_athlete_id"] = str(athlete_id)
+    if athlete_name:
+        updates["strava_athlete_name"] = athlete_name
+    auth.set_user_config_values(user_id, updates)
 
 
 # ── Token management ──────────────────────────────────────────────────────────
 
-def get_access_token(config_file: Path | None = None) -> str:
-    cfg_path = config_file or _AI_CONFIG_FILE
-    lock_path = cfg_path.with_name(cfg_path.name + '.lock')
-    with open(lock_path, 'a+') as lock_fh:
-        os.chmod(lock_path, 0o600)
-        fcntl.flock(lock_fh, fcntl.LOCK_EX)
-        cfg = load_config(cfg_path)
+def get_access_token(user_id: int | None = None) -> str:
+    if user_id is None:
+        raise Exception("Strava 用户上下文缺失")
+    # Strava 会轮换 refresh_token；必须覆盖“重新读取 → 网络刷新 → 写回”整个
+    # 临界区。auth._db_lock 只保护单次 SQLite 写入，无法阻止多个 worker 同时
+    # 用同一个旧 refresh_token 刷新后相互覆盖。
+    with _token_refresh_lock(user_id):
+        cfg = load_config(user_id)
         if not cfg:
             raise Exception("Strava 未配置 client_id / client_secret")
         if not cfg["refresh_token"]:
@@ -128,26 +118,23 @@ def get_access_token(config_file: Path | None = None) -> str:
             raise Exception("Strava 授权已失效，请重新授权 (refresh_token 刷新失败)")
         data = resp.json()
         athlete = data.get("athlete") or {}
-        with open(cfg_path, encoding="utf-8") as f:
-            current = json.load(f)
-        current["strava_access_token"] = data.get("access_token", "")
-        current["strava_refresh_token"] = data.get("refresh_token", cfg["refresh_token"])
-        current["strava_expires_at"] = data.get("expires_at", 0)
-        if athlete.get("id"):
-            current["strava_athlete_id"] = str(athlete["id"])
-        athlete_name = athlete.get("username") or athlete.get("firstname") or ""
-        if athlete_name:
-            current["strava_athlete_name"] = athlete_name
-        _atomic_save_config(cfg_path, current)
+        _save_tokens(
+            access_token=data.get("access_token", ""),
+            refresh_token=data.get("refresh_token", cfg["refresh_token"]),
+            expires_at=data.get("expires_at", 0),
+            athlete_id=athlete.get("id", ""),
+            athlete_name=athlete.get("username") or athlete.get("firstname") or "",
+            user_id=user_id,
+        )
         logger.info("[strava] token 刷新成功")
         return data.get("access_token", "")
 
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def build_auth_url(redirect_uri: str, config_file: Path | None = None,
+def build_auth_url(redirect_uri: str, user_id: int | None = None,
                    state_token: str | None = None) -> str:
-    cfg = load_config(config_file)
+    cfg = load_config(user_id)
     if not cfg:
         raise Exception("Strava 未配置 client_id")
     state_tok = state_token or secrets.token_urlsafe(32)
@@ -162,9 +149,9 @@ def build_auth_url(redirect_uri: str, config_file: Path | None = None,
     )
 
 
-def exchange_code(code: str, config_file: Path | None = None) -> dict:
-    """Exchange OAuth code for tokens. Saves to config.json."""
-    cfg = load_config(config_file)
+def exchange_code(code: str, user_id: int | None = None) -> dict:
+    """Exchange OAuth code for tokens. Saves to users.db."""
+    cfg = load_config(user_id)
     if not cfg:
         raise Exception("Strava 未配置")
     resp = requests.post(
@@ -191,7 +178,7 @@ def exchange_code(code: str, config_file: Path | None = None) -> dict:
         expires_at=data.get("expires_at", 0),
         athlete_id=athlete.get("id", ""),
         athlete_name=name,
-        config_file=config_file,
+        user_id=user_id,
     )
     return {"athlete_id": str(athlete.get("id", "")), "athlete_name": name}
 
@@ -347,14 +334,14 @@ def _poll_status(upload_id, access_token: str, timeout: int = 90) -> dict:
 def upload_files(filenames: list[str], force: bool = False,
                  progress_cb=None,
                  input_dir: Path | None = None,
-                 config_file: Path | None = None) -> dict:
+                 user_id: int | None = None) -> dict:
     """Upload named FIT files from input/ to Strava.
 
     progress_cb(filename, done, total) called before each file.
     Returns {results, success, skipped, failed}.
     """
     idir = input_dir or _INPUT_DIR
-    access_token = get_access_token(config_file)
+    access_token = get_access_token(user_id)
     state = _load_state(input_dir)
     results = []
     total = len(filenames)

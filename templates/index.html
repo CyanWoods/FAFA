@@ -63,7 +63,7 @@
       </button>
     </div>
     <div id="user-bar">
-      <span id="user-name">{{ username }}</span>
+      <span id="user-name" data-user-id="{{ user_id }}">{{ username }}</span>
       <form method="post" action="/logout" class="logout-form">
         <button type="submit" id="logout-btn" title="退出登录">⏻</button>
       </form>
@@ -1087,14 +1087,63 @@
 
       {% if server_mode %}
       <div class="settings-card settings-card--wide">
+        <div class="settings-section-title">账户</div>
+        <div class="account-row">
+          <div class="account-avatar-wrap">
+            <img id="account-avatar-img" class="account-avatar" src="/api/account/avatar/{{ user_id }}?t=0"
+                 alt="头像" onerror="this.style.display='none'; document.getElementById('account-avatar-fallback').style.display='flex';">
+            <div id="account-avatar-fallback" class="account-avatar account-avatar-fallback">{{ (display_name or username)[0]|upper }}</div>
+          </div>
+          <div class="account-fields">
+            <div class="settings-row">
+              <label class="settings-label">显示名</label>
+              <div class="settings-input-wrap">
+                <input id="account-display-name" type="text" maxlength="40" value="{{ display_name or '' }}" placeholder="{{ username }}">
+              </div>
+              <button class="settings-link-btn" onclick="saveDisplayName()">保存</button>
+            </div>
+            <label class="settings-link-btn account-avatar-upload-btn">
+              更换头像
+              <input type="file" id="account-avatar-input" accept="image/*" onchange="uploadAvatar(event)" hidden>
+            </label>
+          </div>
+        </div>
+        <div class="settings-subtitle">修改密码</div>
+        <div class="settings-row">
+          <label class="settings-label">当前密码</label>
+          <div class="settings-input-wrap"><input id="account-cur-pw" type="password" autocomplete="current-password"></div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">新密码</label>
+          <div class="settings-input-wrap"><input id="account-new-pw" type="password" autocomplete="new-password"></div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">确认新密码</label>
+          <div class="settings-input-wrap"><input id="account-new-pw2" type="password" autocomplete="new-password"></div>
+        </div>
+        <button class="settings-link-btn" onclick="changeOwnPassword()">修改密码</button>
+      </div>
+      {% endif %}
+
+      {% if server_mode %}
+      <div class="settings-card settings-card--wide">
         <div class="settings-section-title">授权码（API）</div>
-        <div class="settings-hint">授权码用于以编程方式访问 <code>/api/v1</code> 只读接口，请求头带上 <code>Authorization: Bearer &lt;授权码&gt;</code>。授权码只在生成时完整显示一次，请妥善保存。</div>
+        <div class="settings-hint">授权码用于以编程方式访问 <code>/api/v1</code>，请求头带上 <code>Authorization: Bearer &lt;授权码&gt;</code>。默认只读权限；勾选「允许写入」才能调用上传/删除文件、触发同步等写接口。授权码只在生成时完整显示一次，请妥善保存。</div>
         <div class="token-create-row">
           <input id="token-name" type="text" maxlength="64" placeholder="用途备注，如 my-script">
           <input id="token-expires" type="number" min="1" max="3650" placeholder="有效期(天，可空)">
+          <label class="token-scope-check"><input id="token-write" type="checkbox"> 允许写入</label>
           <button class="settings-link-btn" onclick="createToken()">生成授权码</button>
         </div>
         <div id="token-list" class="token-list"></div>
+      </div>
+      {% endif %}
+
+      {% if server_mode and is_admin %}
+      <div class="settings-card settings-card--wide">
+        <div class="settings-section-title">管理员</div>
+        <div class="settings-hint">全站用户列表与账号管理。删除用户不会清空其 fit 文件，仅移除账号本身。</div>
+        <div id="admin-user-list" class="admin-user-list"></div>
       </div>
       {% endif %}
 

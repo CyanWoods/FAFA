@@ -4240,22 +4240,37 @@ function _renderDetailSegments(wrap, records) {
   const lbl = document.createElement('div');
   lbl.className = 'detail-chart-label';
   lbl.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+  const btnGroup = document.createElement('span');
+  btnGroup.style.cssText = 'display:flex;gap:4px;';
+  const autoBtn = document.createElement('button');
+  autoBtn.textContent = '自动分段（转向）';
+  autoBtn.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
+    `background:transparent;color:${subColor}`;
+  autoBtn.onclick = () => {
+    const segs = _autoSegmentByTurns(_detailRecordsRef || []);
+    if (!segs) { toast('未检测到足够明显的转弯，无法自动分段'); return; }
+    _detailCompareSegs = segs;
+    _updateCompareChips();
+    _updateCompareChart();
+    toast(`已按转向自动生成 ${segs.length} 段`);
+  };
   const toggle = document.createElement('button');
   toggle.textContent = '框选对比';
   toggle.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
     `background:transparent;color:${subColor}`;
   _segCmpToggleBtn = toggle;
   toggle.onclick = () => { _setCompareMode(!_detailCompareMode); };
+  btnGroup.append(autoBtn, toggle);
   const title = document.createElement('span');
   title.textContent = '分段平行对比 · 距离叠加';
   lbl.appendChild(title);
-  lbl.appendChild(toggle);
+  lbl.appendChild(btnGroup);
   block.appendChild(lbl);
 
   // 提示
   const hint = document.createElement('div');
   hint.style.cssText = `font-size:11px;color:${subColor};padding:4px 2px 0;`;
-  hint.textContent = '开启后在上方任意曲线按住拖拽选一段，可多选；各段起点距离归零后叠加对比。';
+  hint.textContent = '「自动分段」按转向角把路线自动切成若干段；或开启「框选对比」在上方曲线拖拽手动选段，可多选；各段起点距离归零后叠加对比。';
   block.appendChild(hint);
 
   // 指标切换条
@@ -4317,6 +4332,84 @@ function _updateCompareMetricBar(isDark) {
     b.style.color = active ? (isDark ? '#eee' : '#222') : (isDark ? '#888' : '#999');
     b.style.fontWeight = active ? '600' : '400';
   });
+}
+
+// 按转向角自动分段：沿累计距离每 ~25m 重采样一次经纬度，用重采样点间的方位角
+// 变化识别转弯，转弯点作为分段边界；邻近转弯合并、过短分段丢弃，最多给出
+// COMPARE_COLORS.length 段。找不到足够转弯时返回 null。
+function _autoSegmentByTurns(records) {
+  if (!records?.length || !_detailCumDistM) return null;
+  const pts = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+      pts.push({ i, lat: r.lat, lon: r.lon, cum: _detailCumDistM[i] });
+    }
+  }
+  if (pts.length < 20) return null;   // 无坐标或点数太少，判不了转弯
+
+  const STEP_M = 25;
+  const sampled = [pts[0]];
+  for (const p of pts) {
+    if (p.cum - sampled[sampled.length - 1].cum >= STEP_M) sampled.push(p);
+  }
+  if (sampled[sampled.length - 1] !== pts[pts.length - 1]) sampled.push(pts[pts.length - 1]);
+  if (sampled.length < 6) return null;
+
+  const bearing = (a, b) => {
+    const phi1 = a.lat * Math.PI / 180, phi2 = b.lat * Math.PI / 180;
+    const dLambda = (b.lon - a.lon) * Math.PI / 180;
+    const y = Math.sin(dLambda) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  };
+  const angleDiff = (a, b) => ((b - a + 540) % 360) - 180;
+
+  const TURN_DEG = 40;    // 转弯判定阈值
+  const MERGE_M  = 60;    // 邻近转弯点合并半径
+  const MIN_SEG_M = 300;  // 最短分段，太短的转弯边界直接丢弃
+
+  const turns = [];
+  for (let k = 1; k < sampled.length - 1; k++) {
+    const b1 = bearing(sampled[k - 1], sampled[k]);
+    const b2 = bearing(sampled[k], sampled[k + 1]);
+    const delta = Math.abs(angleDiff(b1, b2));
+    if (delta >= TURN_DEG) turns.push({ idx: sampled[k].i, cum: sampled[k].cum, delta });
+  }
+  if (!turns.length) return null;
+
+  const merged = [];
+  for (const t of turns) {
+    const last = merged[merged.length - 1];
+    if (last && t.cum - last.cum < MERGE_M) { if (t.delta > last.delta) merged[merged.length - 1] = t; }
+    else merged.push(t);
+  }
+
+  const bounds = [0, ...merged.map(t => t.idx), records.length - 1];
+  const cleaned = [bounds[0]];
+  for (let k = 1; k < bounds.length; k++) {
+    const prevCum = _detailCumDistM[cleaned[cleaned.length - 1]];
+    const curCum = _detailCumDistM[bounds[k]];
+    if (curCum - prevCum < MIN_SEG_M) {
+      if (k === bounds.length - 1 && cleaned.length > 1) {
+        // 末尾不足最短距离时去掉前一个边界，把短尾段并入上一段。
+        cleaned[cleaned.length - 1] = bounds[k];
+      }
+      continue;
+    }
+    cleaned.push(bounds[k]);
+  }
+  if (cleaned[cleaned.length - 1] !== bounds[bounds.length - 1]) cleaned.push(bounds[bounds.length - 1]);
+
+  let segs = [];
+  for (let k = 0; k < cleaned.length - 1; k++) segs.push({ i0: cleaned[k], i1: cleaned[k + 1] });
+  segs = segs.filter(s => s.i1 - s.i0 >= 5);
+  if (segs.length > COMPARE_COLORS.length) {
+    const routeEnd = segs[segs.length - 1].i1;
+    segs = segs.slice(0, COMPARE_COLORS.length);
+    segs[segs.length - 1].i1 = routeEnd;  // 超出颜色数的尾段合并，仍覆盖完整路线
+  }
+  return segs.length >= 2 ? segs : null;
 }
 
 function _addCompareSegment(chart, minPx, maxPx) {
@@ -6108,6 +6201,7 @@ function _pmcChartTheme(sourceEl = null) {
 /* ── Settings view ──────────────────────────────────────────────────────── */
 async function loadSettingsView() {
   loadTokens();
+  loadAdminUsers();
   try {
     const cfg = await fetch('/api/config/raw').then(r => r.json());
     document.getElementById('cfg-map-tile').value          = TILES[cfg.map_tile] ? cfg.map_tile : 'dark-nolabels';
@@ -6184,6 +6278,62 @@ async function saveSettings() {
   finally { if (btn) btn.disabled = false; }
 }
 
+/* ── 账户自助（头像 / 显示名 / 改密）───────────────────────────────────────── */
+async function saveDisplayName() {
+  const el = document.getElementById('account-display-name');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/account/profile', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ display_name: el.value.trim() }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '保存失败'); return; }
+    toast('显示名已保存');
+  } catch { toast('保存失败'); }
+}
+
+async function uploadAvatar(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await fetch('/api/account/avatar', { method: 'POST', body: form });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '上传失败'); input.value = ''; return; }
+    toast('头像已更新');
+    const img = document.getElementById('account-avatar-img');
+    const fallback = document.getElementById('account-avatar-fallback');
+    if (img) {
+      img.style.display = '';
+      img.src = img.src.split('?')[0] + '?t=' + Date.now();   // 破缓存
+    }
+    if (fallback) fallback.style.display = 'none';
+  } catch { toast('上传失败'); }
+  finally { input.value = ''; }
+}
+
+async function changeOwnPassword() {
+  const curEl  = document.getElementById('account-cur-pw');
+  const newEl  = document.getElementById('account-new-pw');
+  const new2El = document.getElementById('account-new-pw2');
+  const cur = curEl.value, pw1 = newEl.value, pw2 = new2El.value;
+  if (!cur || !pw1) { toast('请填写当前密码和新密码'); return; }
+  if (pw1 !== pw2) { toast('两次输入的新密码不一致'); return; }
+  try {
+    const r = await fetch('/api/account/password', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ current_password: cur, new_password: pw1 }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '修改失败'); return; }
+    toast('密码已修改');
+    curEl.value = ''; newEl.value = ''; new2El.value = '';
+  } catch { toast('修改失败'); }
+}
+
 /* ── 授权码 / API token ─────────────────────────────────────────────────── */
 async function loadTokens() {
   const box = document.getElementById('token-list');
@@ -6202,10 +6352,13 @@ async function loadTokens() {
       const exp  = t.expires_at ? t.expires_at : '永不过期';
       const action = t.revoked ? '' :
         `<button class="token-revoke-btn" onclick="revokeToken(${t.id})">撤销</button>`;
+      const rw = t.scopes === 'read_write';
+      const scopeBadge = `<span class="token-row-scope${rw ? ' token-row-scope--rw' : ''}">${rw ? '读写' : '只读'}</span>`;
       return `<div class="token-row${revoked}">
         <div class="token-row-main">
           <span class="token-row-name">${_escapeHtml(t.name)}</span>
           <span class="token-row-prefix">fafa_${_escapeHtml(t.token_prefix)}…</span>
+          ${scopeBadge}
           <span class="token-row-status">${status}</span>
         </div>
         <div class="token-row-meta">创建 ${_escapeHtml(t.created_at || '')} · 最后使用 ${_escapeHtml(last)} · ${_escapeHtml(exp)}</div>
@@ -6216,20 +6369,22 @@ async function loadTokens() {
 }
 
 async function createToken() {
-  const nameEl = document.getElementById('token-name');
-  const expEl  = document.getElementById('token-expires');
+  const nameEl  = document.getElementById('token-name');
+  const expEl   = document.getElementById('token-expires');
+  const writeEl = document.getElementById('token-write');
   const name = nameEl.value.trim();
   if (!name) { toast('请填写授权码名称'); return; }
   const body = { name };
   const days = parseInt(expEl.value, 10);
   if (!isNaN(days)) body.expires_days = days;
+  if (writeEl?.checked) body.read_write = true;
   try {
     const r = await fetch('/api/tokens', {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || '生成失败'); return; }
-    nameEl.value = ''; expEl.value = '';
+    nameEl.value = ''; expEl.value = ''; if (writeEl) writeEl.checked = false;
     _showTokenReveal(d.token);
     loadTokens();
   } catch { toast('生成失败'); }
@@ -6256,6 +6411,121 @@ function closeTokenReveal() {
 function copyTokenReveal() {
   const v = document.getElementById('token-reveal-value').textContent;
   navigator.clipboard.writeText(v).then(() => toast('已复制到剪贴板'), () => toast('复制失败，请手动选择'));
+}
+
+/* ── 管理员：全站用户列表 ─────────────────────────────────────────────────── */
+function _currentUserId() {
+  const el = document.getElementById('user-name');
+  const v = el ? parseInt(el.dataset.userId, 10) : NaN;
+  return isNaN(v) ? null : v;
+}
+
+function _fmtBytes(n) {
+  if (!n) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+async function loadAdminUsers() {
+  const box = document.getElementById('admin-user-list');
+  if (!box) return;   // 非管理员无此卡片
+  const selfId = _currentUserId();
+  try {
+    const d = await fetch('/api/admin/users').then(r => r.json());
+    const users = d.users || [];
+    const quota = d.storage_quota_bytes || 0;
+    if (!users.length) { box.innerHTML = '<div class="token-empty">没有用户</div>'; return; }
+    box.innerHTML = users.map(u => {
+      const isSelf = u.id === selfId;
+      const pct = quota ? Math.min(100, Math.round(u.storage_bytes / quota * 100)) : 0;
+      const roleBadge = u.is_admin
+        ? '<span class="token-row-scope token-row-scope--rw">管理员</span>'
+        : '<span class="token-row-scope">普通</span>';
+      const statusBadge = u.is_frozen
+        ? '<span class="admin-status admin-status--frozen">已冻结</span>'
+        : '<span class="admin-status">正常</span>';
+      const name = _escapeHtml(u.display_name || u.username);
+      const lastLogin = u.last_login_at ? _escapeHtml(u.last_login_at) : '从未登录';
+      let actions = '';
+      if (!isSelf) {
+        actions = `
+          <button class="token-revoke-btn" onclick="adminResetPassword(${u.id}, '${_escapeHtml(u.username)}')">重置密码</button>
+          <button class="token-revoke-btn" onclick="adminToggleFreeze(${u.id}, ${u.is_frozen ? 'false' : 'true'})">${u.is_frozen ? '解冻' : '冻结'}</button>
+          <button class="token-revoke-btn" onclick="adminToggleAdmin(${u.id}, ${u.is_admin ? 'false' : 'true'})">${u.is_admin ? '取消管理员' : '设为管理员'}</button>
+          <button class="token-revoke-btn" onclick="adminDeleteUser(${u.id}, '${_escapeHtml(u.username)}')">删除</button>`;
+      } else {
+        actions = '<span class="admin-self-hint">（当前账号）</span>';
+      }
+      return `<div class="token-row admin-user-row">
+        <img class="admin-user-avatar" src="/api/account/avatar/${u.id}" alt=""
+             onerror="this.style.visibility='hidden'">
+        <div class="admin-user-body">
+          <div class="token-row-main">
+            <span class="token-row-name">${name}</span>
+            <span class="token-row-prefix">${_escapeHtml(u.username)}</span>
+            ${roleBadge}
+            ${statusBadge}
+          </div>
+          <div class="token-row-meta">
+            创建 ${_escapeHtml(u.created_at || '')} · 最后登录 ${lastLogin} ·
+            ${u.file_count} 个文件 · ${_fmtBytes(u.storage_bytes)}${quota ? ` (${pct}%)` : ''} ·
+            ${u.token_count} 个有效授权码
+          </div>
+          <div class="admin-user-actions">${actions}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch { box.innerHTML = '<div class="token-empty">加载用户列表失败</div>'; }
+}
+
+async function adminResetPassword(uid, username) {
+  const pw = prompt(`为「${username}」设置新密码（至少 8 位）：`);
+  if (!pw) return;
+  try {
+    const r = await fetch(`/api/admin/users/${uid}/reset_password`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ new_password: pw }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '重置失败'); return; }
+    toast('密码已重置');
+  } catch { toast('重置失败'); }
+}
+
+async function adminToggleFreeze(uid, freeze) {
+  const action = freeze ? '冻结' : '解冻';
+  if (freeze && !confirm(`确定要${action}这个账号吗？冻结后该用户会被立即登出，且无法再登录。`)) return;
+  try {
+    const r = await fetch(`/api/admin/users/${uid}/${freeze ? 'freeze' : 'unfreeze'}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || `${action}失败`); return; }
+    toast(`已${action}`);
+    loadAdminUsers();
+  } catch { toast(`${action}失败`); }
+}
+
+async function adminToggleAdmin(uid, makeAdmin) {
+  const action = makeAdmin ? '设为管理员' : '取消管理员身份';
+  if (!confirm(`确定要${action}吗？`)) return;
+  try {
+    const r = await fetch(`/api/admin/users/${uid}/${makeAdmin ? 'promote' : 'demote'}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '操作失败'); return; }
+    toast(`已${action}`);
+    loadAdminUsers();
+  } catch { toast('操作失败'); }
+}
+
+async function adminDeleteUser(uid, username) {
+  if (!confirm(`确定要删除账号「${username}」吗？此操作不可撤销；该用户的 fit 文件不会被删除，仍留在磁盘上。`)) return;
+  try {
+    const r = await fetch(`/api/admin/users/${uid}`, { method: 'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '删除失败'); return; }
+    toast('账号已删除');
+    loadAdminUsers();
+  } catch { toast('删除失败'); }
 }
 
 /* ── AI 提示词编辑器 ──────────────────────────────────────────────────────── */

@@ -9,6 +9,8 @@
 import bisect
 from collections import OrderedDict
 import fcntl
+import hashlib
+import io
 import ipaddress
 import json
 import logging
@@ -30,7 +32,8 @@ from urllib.parse import urlparse
 
 from html import escape as _html_escape
 
-from flask import Flask, render_template, request, jsonify, send_file, session, g, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, session, g, redirect, url_for, Response
+from PIL import Image, UnidentifiedImageError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from fafa.parser import parse_fit, decode_lr_balance
@@ -40,6 +43,7 @@ from fafa.climbs import analyze_grade
 import fafa.strava as _strava
 import fafa.db as _db
 import fafa.auth as _auth
+import fafa.config_schema as _config_schema
 import fafa.prompts as _prompts
 
 SERVER_MODE = "--server" in sys.argv or os.environ.get("FAFA_SERVER") == "1"
@@ -102,7 +106,12 @@ def _security_headers(resp):
     )
     if SERVER_MODE:
         resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    if request.path.startswith('/api/') or request.path in ('/login', '/strava/callback'):
+    avatar_response = (
+        request.method in ('GET', 'HEAD')
+        and request.path.startswith('/api/account/avatar/')
+    )
+    if ((request.path.startswith('/api/') and not avatar_response)
+            or request.path in ('/login', '/strava/callback')):
         resp.headers['Cache-Control'] = 'no-store'
     return resp
 
@@ -110,6 +119,11 @@ def _security_headers(resp):
 @app.before_request
 def _check_same_origin():
     if not SERVER_MODE or request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return None
+    # Bearer 授权码天然不受 CSRF 影响：浏览器不会自动附带 Authorization 头，
+    # 必须调用方主动设置，这正是 CSRF 防的"自动带凭证"场景不成立。只豁免
+    # /api/v1 且带 Bearer 头的请求；会话 Cookie 鉴权的路径仍强制同源。
+    if request.path.startswith('/api/v1/') and request.headers.get('Authorization', '').startswith('Bearer '):
         return None
     origin = request.headers.get('Origin')
     referer = request.headers.get('Referer')
@@ -140,6 +154,7 @@ _MAX_AI_STREAM_SECONDS = 5 * 60
 _MAX_AI_SSE_LINE_BYTES = 256 * 1024
 _MAX_SYNC_ACTIVITIES = 2_000
 _MAX_SYNC_FILE_BYTES = 32 * 1024 * 1024
+_MAX_API_UPLOAD_BYTES = min(_MAX_SYNC_FILE_BYTES, app.config["MAX_CONTENT_LENGTH"])
 _USER_STORAGE_MAX_BYTES = max(32 * 1024 * 1024, int(os.environ.get('FAFA_USER_STORAGE_MB', '10240')) * 1024 * 1024)
 _TASK_STALE_S     = 15 * 60
 _PARSE_TIMEOUT_S  = 30
@@ -301,24 +316,17 @@ def _user_input_dir() -> Path:
     return d
 
 
-def _user_config_file() -> Path:
-    path = _user_input_dir() / 'config.json'
-    if path.exists():
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    return path
-
-
 def _user_db_path() -> Path:
     return _user_input_dir() / 'fafa.db'
 
 
-def _activate_user(user_id: int, username: str) -> None:
+def _activate_user(user_id: int, username: str, is_admin: bool = False,
+                    display_name: str | None = None) -> None:
     """把已鉴权的用户写入 g，并惰性初始化其数据目录与 SQLite。"""
     g.user_id  = user_id
     g.username = username
+    g.is_admin = is_admin
+    g.display_name = display_name
     udir = PROJECT_ROOT / 'input' / username
     udir.mkdir(parents=True, exist_ok=True)
     udir_str = str(udir)
@@ -328,10 +336,37 @@ def _activate_user(user_id: int, username: str) -> None:
             _db_init_done.add(udir_str)
 
 
+def _maybe_migrate_config(user_id: int, udir: Path) -> None:
+    """存量用户首次访问时，把旧 config.json 的内容搬进 user_config 表（第三方
+    凭证加密存储）；成功后归档为首个未占用的 .bak[.N]（不覆盖历史备份）。
+    表里已有该用户任意配置行则视为已迁移过，跳过——同时也覆盖"本来就是全新
+    用户、SQLite 里已直接有配置"的情况，不会重复搬。"""
+    if _auth.get_user_config(user_id):
+        return
+    cfg_path = udir / 'config.json'
+    if not cfg_path.exists():
+        return
+    try:
+        if _auth.migrate_config_from_file(user_id, cfg_path):
+            _auth.archive_config_file(cfg_path)
+    except OSError:
+        pass  # 归档失败不影响已落库的数据；明文源文件仍保留，供运维人工处理
+
+
 def _bearer_token() -> str | None:
     header = request.headers.get('Authorization', '')
     if header.startswith('Bearer '):
         return header[7:].strip() or None
+    return None
+
+
+def _require_api_write():
+    """/api/v1 写接口的前置检查。会话登录（浏览器本人操作）不受限；走 Bearer
+    授权码的请求必须是 read_write 范围，否则拒绝 —— g.api_scopes 只在
+    Bearer 分支里被赋值，session 分支完全不设置，据此区分两种来源。"""
+    scopes = getattr(g, 'api_scopes', None)
+    if scopes is not None and scopes != 'read_write':
+        return jsonify(error='此授权码为只读权限，无法执行写操作'), 403
     return None
 
 
@@ -340,23 +375,34 @@ def _load_user():
     if not SERVER_MODE:
         g.user_id  = 0
         g.username = "local"
+        g.is_admin = True   # 单用户本地模式隐含管理员，无角色概念
+        g.display_name = None
+        _maybe_migrate_config(0, PROJECT_ROOT / 'input')
         return
     user_id = session.get('user_id')
     if user_id:
         user = _auth.get_user_by_id(user_id)
-        if user:
-            _activate_user(user['id'], user['username'])
-        else:
+        if not user:
             session.clear()
+            return
+        if user['is_frozen']:
+            # 冻结账号：立即清会话踢出，不进入 _activate_user
+            session.clear()
+            return
+        _activate_user(user['id'], user['username'],
+                        is_admin=bool(user['is_admin']), display_name=user['display_name'])
+        _maybe_migrate_config(user['id'], PROJECT_ROOT / 'input' / user['username'])
         return
     # 授权码（Bearer token）仅对 /api/v1 生效，其余接口一律要求会话
     if request.path.startswith('/api/v1/'):
         token = _bearer_token()
         if token:
-            info = _auth.verify_api_token(token)
+            info = _auth.verify_api_token(token)   # 已在 auth.py 里排除冻结用户
             if info:
                 g.api_scopes = info['scopes']
-                _activate_user(info['user_id'], info['username'])
+                _activate_user(info['user_id'], info['username'],
+                                is_admin=info['is_admin'], display_name=info['display_name'])
+                _maybe_migrate_config(info['user_id'], PROJECT_ROOT / 'input' / info['username'])
 
 
 # ── Auth routes ────────────────────────────────────────────────────────────────
@@ -411,6 +457,8 @@ def login_page():
     password = payload.get('password') or ''
     valid_password = len(password) <= _MAX_LOGIN_PASSWORD_CHARS
     user = _auth.verify_user(username, password) if valid_username and valid_password else None
+    if user and user['is_frozen']:
+        return _fail('账户已被冻结，请联系管理员', 403)
     if user:
         if user_rk:
             _reset_login_fail(user_rk)
@@ -578,6 +626,14 @@ def _delete_library_file(path: Path) -> None:
         _remove_file_caches(path, remove_lock=False)
     finally:
         lock_fh.close()
+    # fit 索引是读时协调的缓存，磁盘才是最终真相——这里只是让索引更及时，
+    # 失败不影响真正的删除结果，三个调用点（单删/全删/API v1 删）都走这一处。
+    try:
+        uid = getattr(g, 'user_id', None)
+        if uid is not None:
+            _auth.remove_user_file(uid, path.name)
+    except Exception:
+        pass
 
 
 _PEAK_DURATIONS = (5, 60, 300, 1200, 3600)
@@ -910,16 +966,13 @@ def _try_acquire_sync_flock(input_dir: Path):
 _MAX_DL_WORKERS = 6
 
 
-def _load_platform_credentials(prefix: str, config_file: Path) -> dict | None:
-    """Load username/password for a sync platform from config.json.
+def _load_platform_credentials(prefix: str, user_id: int) -> dict | None:
+    """Load username/password for a sync platform from users.db (user_config)。
     prefix is e.g. 'onelap' or 'igpsport'."""
-    if not config_file.exists():
-        return None
     try:
-        with open(config_file, encoding="utf-8") as f:
-            cfg = json.load(f)
-        username = (cfg.get(f"{prefix}_username") or "").strip()
-        password = (cfg.get(f"{prefix}_password") or "").strip()
+        cfg = _auth.get_user_config_values(user_id, [f"{prefix}_username", f"{prefix}_password"])
+        username = str(cfg.get(f"{prefix}_username") or "").strip()
+        password = str(cfg.get(f"{prefix}_password") or "").strip()
         if username and password:
             return {"username": username, "password": password}
     except Exception:
@@ -927,7 +980,7 @@ def _load_platform_credentials(prefix: str, config_file: Path) -> dict | None:
     return None
 
 
-def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, limit: int | None):
+def _run_sync(username: str, input_dir: Path, user_id: int, full: bool, limit: int | None):
     """后台线程：登录顽鹿 → 拉取列表 → 并发下载 FIT。"""
     from fafa.onelap import (
         browser_login, api_login, build_session, fetch_activity_list,
@@ -949,7 +1002,7 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
         _atomic_write_json(state_file, st)
 
     try:
-        creds = _load_platform_credentials("onelap", config_file)
+        creds = _load_platform_credentials("onelap", user_id)
         if creds:
             _set_sync(username, input_dir=input_dir, state="login", message="正在自动登录顽鹿…", total=0, done=0, new_files=[])
             try:
@@ -1048,6 +1101,11 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
                     dc = done_count
                     if path:
                         new_files.append(path.name)
+                        try:
+                            st = path.stat()
+                            _auth.upsert_user_file(user_id, path.name, st.st_size, st.st_mtime_ns)
+                        except Exception:
+                            pass
                 _set_sync(username, input_dir=input_dir, message=f"[{dc}/{total}] {msg}", done=dc, new_files=list(new_files))
 
         save_state(state)
@@ -1064,12 +1122,12 @@ def _run_sync(username: str, input_dir: Path, config_file: Path, full: bool, lim
         _set_sync(username, input_dir=input_dir, state="error", message=f"同步出错：{e}")
 
 
-def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: bool):
+def _run_igpsport_sync(username: str, input_dir: Path, user_id: int, full: bool):
     """后台线程：登录 iGPSport → 拉取列表 → 下载 FIT。"""
     from fafa.igpsport import IGPSportClient, make_filename, ride_id_exists, _parse_start_time
 
     try:
-        creds = _load_platform_credentials("igpsport", config_file)
+        creds = _load_platform_credentials("igpsport", user_id)
         if not creds:
             _set_sync(username, input_dir=input_dir, state="error", message="iGPSport 未配置账号密码，请在设置中填写")
             return
@@ -1117,8 +1175,13 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
                 if storage_used + _MAX_SYNC_FILE_BYTES > _USER_STORAGE_MAX_BYTES:
                     raise RuntimeError('用户 FIT 存储空间已达到上限')
                 client.download_file(ride_id, dst_path)
-                storage_used += dst_path.stat().st_size
+                dst_st = dst_path.stat()
+                storage_used += dst_st.st_size
                 new_files.append(filename)
+                try:
+                    _auth.upsert_user_file(user_id, filename, dst_st.st_size, dst_st.st_mtime_ns)
+                except Exception:
+                    pass
             except Exception as e:
                 failed += 1
                 logging.warning("iGPSport 下载 %s 失败: %s", ride_id, e)
@@ -1139,7 +1202,8 @@ def _run_igpsport_sync(username: str, input_dir: Path, config_file: Path, full: 
 @_auth.login_required
 def index():
     return render_template("index.html", username=g.username, version=FAFA_VERSION,
-                           server_mode=SERVER_MODE)
+                           server_mode=SERVER_MODE, is_admin=g.is_admin,
+                           user_id=g.user_id, display_name=g.display_name)
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -1178,6 +1242,7 @@ def list_files():
         return jsonify(files=[])
 
     files = []
+    index_rows = []
     for p in _library_fit_paths(input_dir):
         try:
             st = p.stat()
@@ -1188,7 +1253,14 @@ def list_files():
             "size_kb": round(st.st_size / 1024, 1),
             "mtime": st.st_mtime,
         })
+        index_rows.append((p.name, st.st_size, st.st_mtime_ns))
     files.sort(key=lambda item: item["mtime"], reverse=True)
+    # 扫盘结果是权威来源，顺手把这批行同步进索引供管理员看板用；
+    # 索引本身失败不影响这个接口本来就要给的文件列表。
+    try:
+        _auth.bulk_reindex_user_files(g.user_id, index_rows)
+    except Exception:
+        pass
     return jsonify(files=files)
 
 
@@ -1490,7 +1562,7 @@ def export_all():
 
 
 # ── 路由：顽鹿同步（alias） ───────────────────────────────────────────────────
-def _sync_start_handler(username, input_dir, config_file, platform, full, limit):
+def _sync_start_handler(username, input_dir, user_id, platform, full, limit):
     """共享逻辑：检查文件锁 → 启动后台线程。"""
     flock_fh = _try_acquire_sync_flock(input_dir)
     if flock_fh is None:
@@ -1517,9 +1589,9 @@ def _sync_start_handler(username, input_dir, config_file, platform, full, limit)
             slot_fh.close()
 
     if platform == 'igpsport':
-        target, args = _run_igpsport_sync, (username, input_dir, config_file, full)
+        target, args = _run_igpsport_sync, (username, input_dir, user_id, full)
     else:
-        target, args = _run_sync, (username, input_dir, config_file, full, limit)
+        target, args = _run_sync, (username, input_dir, user_id, full, limit)
 
     t = threading.Thread(target=_run_and_release, args=(target, args, flock_fh, global_slot_fh), daemon=False)
     try:
@@ -1549,7 +1621,7 @@ def onelap_sync():
             return jsonify(error=f'limit 必须在 1-{_MAX_SYNC_ACTIVITIES} 之间'), 400
     else:
         limit = _MAX_SYNC_ACTIVITIES
-    return _sync_start_handler(g.username, _user_input_dir(), _user_config_file(), 'onelap', full, limit)
+    return _sync_start_handler(g.username, _user_input_dir(), g.user_id, 'onelap', full, limit)
 
 
 @app.route("/api/onelap/status")
@@ -1579,7 +1651,7 @@ def sync_start():
             return jsonify(error=f'limit 必须在 1-{_MAX_SYNC_ACTIVITIES} 之间'), 400
     else:
         limit = _MAX_SYNC_ACTIVITIES
-    return _sync_start_handler(g.username, _user_input_dir(), _user_config_file(), platform, full, limit)
+    return _sync_start_handler(g.username, _user_input_dir(), g.user_id, platform, full, limit)
 
 
 @app.route("/api/sync/status")
@@ -1591,18 +1663,13 @@ def sync_status():
 # ── AI 骑行评估 ───────────────────────────────────────────────────────────────
 
 def _get_ai_config() -> dict | None:
-    config_file = _user_config_file()
-    if not config_file.exists():
+    cfg = _auth.get_user_config(g.user_id)
+    if not cfg:
         return None
-    try:
-        with open(config_file, encoding='utf-8') as f:
-            cfg = json.load(f)
-        key = (cfg.get('api_key') or '').strip()
-        if not key or key.startswith('your-'):
-            return None
-        return cfg
-    except Exception:
+    key = str(cfg.get('api_key') or '').strip()
+    if not key or key.startswith('your-'):
         return None
+    return cfg
 
 
 def _config_max_tokens(cfg: dict) -> int:
@@ -1959,10 +2026,9 @@ def ai_config_status():
     return jsonify(configured=False, model="")
 
 
-_SECRET_FIELDS = frozenset({
-    'api_key', 'onelap_password', 'igpsport_password',
-    'strava_client_secret', 'strava_access_token', 'strava_refresh_token',
-})
+# 与 fafa/config_schema.py 共用同一份定义（存储层加密哪些字段、也是这里
+# 判断哪些字段要在 GET 响应里打码），避免两处各存一份、日后新增配置项漏改。
+_SECRET_FIELDS = _config_schema.SECRET_KEYS
 _CONFIG_STRING_LIMITS = {
     'api_base': 2048, 'api_key': 4096, 'model': 256,
     'onelap_username': 256, 'onelap_password': 4096,
@@ -2036,8 +2102,10 @@ def _validate_config_update(data: dict) -> dict:
 @app.route("/api/config/raw", methods=["GET"])
 @_auth.login_required
 def get_config_raw():
-    config_file = _user_config_file()
-    if not config_file.exists():
+    data = _auth.get_user_config(g.user_id)
+    if not data:
+        # 全新用户，SQLite 里还没有任何配置行（懒迁移已在 before_request 跑
+        # 过，跑到这里说明用户确实从没配置过）——用模板默认值兜底。
         template = PROJECT_ROOT / "config.template.json"
         if template.exists():
             with open(template, encoding="utf-8") as f:
@@ -2046,18 +2114,12 @@ def get_config_raw():
             data.pop("_comments", None)
         else:
             data = {}
-        return jsonify(_mask_secrets(data))
-    with open(config_file, encoding="utf-8") as f:
-        data = json.load(f)
-    data.pop("_comment", None)
-    data.pop("_comments", None)
     return jsonify(_mask_secrets(data))
 
 
 @app.route("/api/config/raw", methods=["POST"])
 @_auth.login_required
 def save_config_raw():
-    config_file = _user_config_file()
     data = request.get_json(force=True, silent=True)
     if data is None:
         return jsonify(error="invalid JSON"), 400
@@ -2070,24 +2132,14 @@ def save_config_raw():
         data = _validate_config_update(data)
     except ValueError as e:
         return jsonify(error=str(e)), 400
-    lock_fh = _locked_file(config_file)
-    try:
-        existing: dict = {}
-        if config_file.exists():
-            try:
-                with open(config_file, encoding="utf-8") as f:
-                    existing = json.load(f)
-            except Exception:
-                pass
-        readonly_keys = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
-        filtered = {k: v for k, v in data.items() if k not in readonly_keys}
-        for k in _SECRET_FIELDS:
-            if filtered.get(k) in (_SECRET_MASK, ''):
-                filtered.pop(k, None)
-        existing.update(filtered)
-        _atomic_write_json(config_file, existing)
-    finally:
-        lock_fh.close()
+    readonly_keys = {"strava_access_token", "strava_refresh_token", "strava_expires_at", "strava_athlete_id", "strava_athlete_name"}
+    filtered = {k: v for k, v in data.items() if k not in readonly_keys}
+    for k in _SECRET_FIELDS:
+        if filtered.get(k) in (_SECRET_MASK, ''):
+            filtered.pop(k, None)
+    # 按 key 逐条 upsert（未提交的字段保持不变），加密/串行化都在 auth.py 里做，
+    # 不需要这里再拿文件锁。
+    _auth.set_user_config_values(g.user_id, filtered)
     return jsonify(ok=True)
 
 
@@ -2376,10 +2428,7 @@ def weather_for_activity(filename: str):
     # 用户选择的风向数据源（默认 auto）
     wind_source = "auto"
     try:
-        cfg_file = _user_config_file()
-        if cfg_file.exists():
-            with open(cfg_file, encoding="utf-8") as f:
-                wind_source = json.load(f).get("wind_source") or "auto"
+        wind_source = _auth.get_user_config_values(g.user_id, ["wind_source"]).get("wind_source") or "auto"
     except Exception:
         wind_source = "auto"
     if wind_source not in _WIND_SOURCES:
@@ -2590,6 +2639,122 @@ def api_v1_records(filename):
     return get_records(filename)
 
 
+# ── 对外 API（/api/v1）：写操作，需要 read_write 授权码 ────────────────────────
+@app.route("/api/v1/files", methods=["POST"])
+@_auth.login_required
+def api_v1_upload_file():
+    """上传一个 .fit 文件并直接存入当前用户的文件库（持久化，非预览）。"""
+    deny = _require_api_write()
+    if deny:
+        return deny
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="未收到文件"), 400
+    filename = f.filename or ""
+    try:
+        filename_bytes = len(filename.encode("utf-8"))
+    except UnicodeError:
+        filename_bytes = 0
+    if (not filename or Path(filename).name != filename or "\\" in filename
+            or "\x00" in filename or filename_bytes > 255):
+        return jsonify(error="文件名不合法"), 400
+    if not filename.lower().endswith(".fit"):
+        return jsonify(error="请上传 .fit 格式文件"), 400
+
+    input_dir = _user_input_dir()
+    dest = _validate_filename_in_input(filename, input_dir)
+    if dest is None:
+        return jsonify(error="文件名不合法"), 400
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    f.seek(0)
+    if size > _MAX_API_UPLOAD_BYTES:
+        return jsonify(error=f"单个文件不能超过 {_MAX_API_UPLOAD_BYTES // (1024 * 1024)} MB"), 413
+    if _input_storage_bytes(input_dir) + size > _USER_STORAGE_MAX_BYTES:
+        return jsonify(error="用户 FIT 存储空间不足"), 507
+
+    try:
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return jsonify(error="同名文件已存在"), 409
+    except OSError as e:
+        return jsonify(error=f"文件保存失败: {e}"), 500
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while chunk := f.stream.read(1024 * 1024):
+                out.write(chunk)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        return jsonify(error=f"文件保存失败: {e}"), 500
+    try:
+        data = _parse_and_build(str(dest), filename)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        _remove_file_caches(dest)
+        return jsonify(error=f"解析失败，文件未保存: {e}"), 422
+    try:
+        st = dest.stat()
+        _auth.upsert_user_file(g.user_id, filename, st.st_size, st.st_mtime_ns)
+    except Exception:
+        pass
+    return jsonify(**data, source="upload"), 201
+
+
+@app.route("/api/v1/files/<path:filename>", methods=["DELETE"])
+@_auth.login_required
+def api_v1_delete_file(filename):
+    deny = _require_api_write()
+    if deny:
+        return deny
+    input_dir = _user_input_dir()
+    path = _validate_filename_in_input(filename, input_dir)
+    if path is None:
+        return jsonify(error="invalid filename"), 400
+    if not path.exists():
+        return jsonify(error="not found"), 404
+    try:
+        _delete_library_file(path)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    return jsonify(deleted=1)
+
+
+@app.route("/api/v1/sync", methods=["POST"])
+@_auth.login_required
+def api_v1_sync_start():
+    """触发 OneLap / iGPSport 同步（复用 /api/sync/start 的后台任务逻辑）。"""
+    deny = _require_api_write()
+    if deny:
+        return deny
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify(error="JSON 请求体必须是对象"), 400
+    platform = body.get("platform", "onelap")
+    if platform not in ("onelap", "igpsport"):
+        return jsonify(error="不支持的同步平台"), 400
+    try:
+        full = _json_bool(body, "full")
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    limit = body.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return jsonify(error="limit 参数无效"), 400
+        if limit < 1 or limit > _MAX_SYNC_ACTIVITIES:
+            return jsonify(error=f"limit 必须在 1-{_MAX_SYNC_ACTIVITIES} 之间"), 400
+    else:
+        limit = _MAX_SYNC_ACTIVITIES
+    return _sync_start_handler(g.username, _user_input_dir(), g.user_id, platform, full, limit)
+
+
+@app.route("/api/v1/sync/status")
+@_auth.login_required
+def api_v1_sync_status():
+    return jsonify(**_read_sync_state(_user_input_dir()))
+
+
 # ── 授权码管理（会话鉴权，仅供设置页调用）────────────────────────────────────────
 _MAX_TOKEN_NAME = 64
 
@@ -2608,15 +2773,24 @@ def create_token():
     if not SERVER_MODE:
         return jsonify(error="授权码功能仅在服务器模式下可用"), 400
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
+    if not isinstance(data, dict):
+        return jsonify(error="JSON 请求体必须是对象"), 400
+    raw_name = data.get("name") or ""
+    if not isinstance(raw_name, str):
+        return jsonify(error="授权码名称需为 1-64 位"), 400
+    name = raw_name.strip()
     if not name or len(name) > _MAX_TOKEN_NAME:
         return jsonify(error="授权码名称需为 1-64 位"), 400
     expires_days = data.get("expires_days")
     if expires_days is not None:
         if isinstance(expires_days, bool) or not isinstance(expires_days, int):
             return jsonify(error="有效期必须是整数天数"), 400
+    read_write = data.get("read_write", False)
+    if not isinstance(read_write, bool):
+        return jsonify(error="read_write 必须是布尔值"), 400
+    scope = "read_write" if read_write else "read"
     try:
-        token = _auth.create_api_token(g.user_id, name, expires_days)
+        token = _auth.create_api_token(g.user_id, name, expires_days, scope=scope)
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(token=token), 201
@@ -2630,6 +2804,196 @@ def revoke_token(token_id):
     ok = _auth.revoke_api_token(g.user_id, token_id)
     if not ok:
         return jsonify(error="授权码不存在或已撤销"), 404
+    return jsonify(ok=True)
+
+
+# ── 账户自助（本人操作，会话鉴权）───────────────────────────────────────────────
+_MAX_DISPLAY_NAME = 40
+_MAX_AVATAR_BYTES = 5 * 1024 * 1024
+_AVATAR_MAX_DIM = 512
+_AVATAR_MAX_PIXELS = 16_000_000
+
+
+@app.route("/api/account/password", methods=["POST"])
+@_auth.login_required
+def change_own_password():
+    if not SERVER_MODE:
+        return jsonify(error="账户功能仅在服务器模式下可用"), 400
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(error="JSON 请求体必须是对象"), 400
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+    if not isinstance(current_password, str) or not isinstance(new_password, str):
+        return jsonify(error="密码格式无效"), 400
+    if len(current_password) > _MAX_LOGIN_PASSWORD_CHARS:
+        return jsonify(error="当前密码格式无效"), 400
+    if not _auth.verify_user(g.username, current_password):
+        return jsonify(error="当前密码不正确"), 403
+    try:
+        _auth.change_password(g.username, new_password)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/account/profile", methods=["POST"])
+@_auth.login_required
+def update_own_profile():
+    if not SERVER_MODE:
+        return jsonify(error="账户功能仅在服务器模式下可用"), 400
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(error="JSON 请求体必须是对象"), 400
+    raw_name = data.get("display_name") or ""
+    if not isinstance(raw_name, str):
+        return jsonify(error="显示名格式无效"), 400
+    name = raw_name.strip()
+    if len(name) > _MAX_DISPLAY_NAME:
+        return jsonify(error=f"显示名不能超过 {_MAX_DISPLAY_NAME} 位"), 400
+    _auth.set_display_name(g.user_id, name)
+    return jsonify(ok=True)
+
+
+@app.route("/api/account/avatar", methods=["POST"])
+@_auth.login_required
+def upload_own_avatar():
+    if not SERVER_MODE:
+        return jsonify(error="账户功能仅在服务器模式下可用"), 400
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="未收到文件"), 400
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    f.seek(0)
+    if size > _MAX_AVATAR_BYTES:
+        return jsonify(error=f"头像文件不能超过 {_MAX_AVATAR_BYTES // (1024 * 1024)} MB"), 413
+    raw = f.read()
+    try:
+        # 先 verify() 校验文件完整性；verify() 之后该 Image 对象不可再用于
+        # 读像素（Pillow 的已知行为），必须重新 open 一次才能继续处理。
+        with Image.open(io.BytesIO(raw)) as probe:
+            if probe.width * probe.height > _AVATAR_MAX_PIXELS:
+                return jsonify(error="图片像素尺寸过大"), 413
+            probe.verify()
+        with Image.open(io.BytesIO(raw)) as source:
+            if source.width * source.height > _AVATAR_MAX_PIXELS:
+                return jsonify(error="图片像素尺寸过大"), 413
+            img = source.convert("RGBA")
+    except (UnidentifiedImageError, OSError, ValueError):
+        return jsonify(error="不是有效的图片文件"), 400
+    img.thumbnail((_AVATAR_MAX_DIM, _AVATAR_MAX_DIM))
+    out = io.BytesIO()
+    img.save(out, format="PNG")   # 重新编码，剥离原始文件的一切元数据/EXIF
+    _auth.set_avatar(g.user_id, out.getvalue(), "image/png")
+    return jsonify(ok=True)
+
+
+@app.route("/api/account/avatar/<int:user_id>")
+@_auth.login_required
+def get_account_avatar(user_id):
+    av = _auth.get_avatar(user_id)
+    if av is None:
+        return jsonify(error="not found"), 404
+    blob, mime, _updated_at = av
+    # 内容哈希不会受 SQLite 秒级时间戳碰撞影响；同一秒连续上传两次也能立即
+    # 得到新的 ETag，避免浏览器在 max-age 期间继续显示旧头像。
+    etag = hashlib.sha256(blob).hexdigest()[:16]
+    if request.if_none_match.contains(etag):
+        return "", 304
+    resp = Response(blob, mimetype=mime)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    resp.set_etag(etag)
+    return resp
+
+
+# ── 管理员（会话鉴权 + is_admin，见 fafa.auth.admin_required）───────────────────
+@app.route("/api/admin/users")
+@_auth.login_required
+@_auth.admin_required
+def admin_list_users():
+    users = _auth.list_users()
+    storage = {row["user_id"]: row for row in _auth.admin_storage_summary()}
+    for u in users:
+        s = storage.get(u["id"], {})
+        u["file_count"] = s.get("file_count", 0)
+        u["storage_bytes"] = s.get("total_bytes", 0)
+        u["token_count"] = sum(1 for t in _auth.list_api_tokens(u["id"]) if not t["revoked"])
+    return jsonify(users=users, storage_quota_bytes=_USER_STORAGE_MAX_BYTES)
+
+
+@app.route("/api/admin/users/<int:uid>/reset_password", methods=["POST"])
+@_auth.login_required
+@_auth.admin_required
+def admin_reset_password(uid):
+    if uid == g.user_id:
+        return jsonify(error="不能通过管理员操作重置自己的密码，请用「账户」里的改密"), 400
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(error="JSON 请求体必须是对象"), 400
+    new_password = data.get("new_password") or ""
+    if not isinstance(new_password, str):
+        return jsonify(error="密码格式无效"), 400
+    user = _auth.get_user_by_id(uid)
+    if not user:
+        return jsonify(error="用户不存在"), 404
+    try:
+        _auth.change_password(user["username"], new_password)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/admin/users/<int:uid>/freeze", methods=["POST"])
+@_auth.login_required
+@_auth.admin_required
+def admin_freeze_user(uid):
+    if uid == g.user_id:
+        return jsonify(error="不能冻结自己的账号"), 400
+    if not _auth.set_frozen(uid, True):
+        return jsonify(error="用户不存在"), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/admin/users/<int:uid>/unfreeze", methods=["POST"])
+@_auth.login_required
+@_auth.admin_required
+def admin_unfreeze_user(uid):
+    if not _auth.set_frozen(uid, False):
+        return jsonify(error="用户不存在"), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/admin/users/<int:uid>", methods=["DELETE"])
+@_auth.login_required
+@_auth.admin_required
+def admin_delete_user(uid):
+    if uid == g.user_id:
+        return jsonify(error="不能删除自己的账号"), 400
+    user = _auth.get_user_by_id(uid)
+    if not user:
+        return jsonify(error="用户不存在"), 404
+    _auth.delete_user(user["username"])
+    return jsonify(ok=True)
+
+
+@app.route("/api/admin/users/<int:uid>/promote", methods=["POST"])
+@_auth.login_required
+@_auth.admin_required
+def admin_promote_user(uid):
+    if not _auth.set_admin(uid, True):
+        return jsonify(error="用户不存在"), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/admin/users/<int:uid>/demote", methods=["POST"])
+@_auth.login_required
+@_auth.admin_required
+def admin_demote_user(uid):
+    if uid == g.user_id:
+        return jsonify(error="不能取消自己的管理员身份，请找另一位管理员或使用 CLI"), 400
+    if not _auth.set_admin(uid, False):
+        return jsonify(error="用户不存在"), 404
     return jsonify(ok=True)
 
 
@@ -2797,7 +3161,7 @@ def _write_strava_state(input_dir: Path, state: dict) -> None:
         logging.warning('strava state write failed: %s', e)
 
 
-def _run_strava_upload(username: str, input_dir: Path, config_file: Path,
+def _run_strava_upload(username: str, input_dir: Path, user_id: int,
                        filenames: list[str], force: bool):
     with _strava_lock:
         _write_strava_state(input_dir, {"state": "uploading", "current": "", "done": 0,
@@ -2812,7 +3176,7 @@ def _run_strava_upload(username: str, input_dir: Path, config_file: Path,
 
     try:
         summary = _strava.upload_files(filenames, force=force, progress_cb=on_progress,
-                                       input_dir=input_dir, config_file=config_file)
+                                       input_dir=input_dir, user_id=user_id)
         with _strava_lock:
             st = _read_strava_state(input_dir)
             _write_strava_state(input_dir, {**st, "state": "done", "done": len(filenames), **summary})
@@ -2837,7 +3201,7 @@ def strava_callback():
     if not expected or not secrets.compare_digest(expected, state):
         return "<html><body><p>无效的 OAuth state，请重新授权</p></body></html>", 400
     try:
-        info = _strava.exchange_code(code, config_file=_user_config_file())
+        info = _strava.exchange_code(code, user_id=g.user_id)
         name = _html_escape(info.get("athlete_name") or "未知")
         return (
             f"<html><body><p>Strava 授权成功！账号: {name}</p>"
@@ -2853,7 +3217,7 @@ def strava_callback():
 @app.route("/api/strava/status")
 @_auth.login_required
 def strava_status():
-    cfg = _strava.load_config(config_file=_user_config_file())
+    cfg = _strava.load_config(user_id=g.user_id)
     if not cfg:
         return jsonify(configured=False, has_tokens=False)
     return jsonify(
@@ -2872,9 +3236,8 @@ def strava_diff():
     Returns {to_upload, local_count, strava_count, match_count}.
     """
     input_dir   = _user_input_dir()
-    config_file = _user_config_file()
     try:
-        token = _strava.get_access_token(config_file=config_file)
+        token = _strava.get_access_token(user_id=g.user_id)
     except Exception as e:
         kind, _ = _strava.classify_error(str(e))
         return jsonify(error=str(e), auth_error=kind == "auth"), 400
@@ -2935,7 +3298,7 @@ def strava_auth_url():
         state_val = secrets.token_urlsafe(32)
         url = _strava.build_auth_url(
             redirect_uri=redirect_uri,
-            config_file=_user_config_file(),
+            user_id=g.user_id,
             state_token=state_val,
         )
         session['strava_oauth_state'] = state_val
@@ -2987,12 +3350,12 @@ def strava_upload():
             seen.add(filename)
     filenames = validated_filenames
 
-    config_file = _user_config_file()
+    user_id = g.user_id
     username = g.username
 
     def _run_and_release_strava(fh, slot_fh):
         try:
-            _run_strava_upload(username, input_dir, config_file, filenames, force)
+            _run_strava_upload(username, input_dir, user_id, filenames, force)
         finally:
             try:
                 fh.close()

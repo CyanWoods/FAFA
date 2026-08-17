@@ -1,6 +1,6 @@
 # FAFA — Fit Analysis & Functional Aggregator
 
-解析、纠偏、可视化骑行 FIT 文件的工具集，包含六视图交互式 Web 查看器和命令行分析工具。
+解析、纠偏、可视化骑行 FIT 文件的工具集，包含七视图交互式 Web 查看器和命令行分析工具。
 
 支持 Garmin、Magene 等设备导出的 `.fit` 格式文件。
 
@@ -20,6 +20,8 @@ FAFA/
 │   ├── onelap.py       # 顽鹿 API 客户端（登录 / 列表 / 下载）
 │   ├── igpsport.py     # iGPSport API 客户端（登录 / 列表 / 下载）
 │   ├── strava.py       # Strava 上传集成（OAuth / token 刷新 / 去重状态）
+│   ├── auth.py         # 用户、角色、授权码及加密配置存储
+│   ├── config_schema.py # 配置字段类型与敏感字段定义
 │   ├── db.py           # SQLite 活动元数据（标签 / 备注，存于 input/fafa.db）
 │   └── tools/
 │       ├── fix_coords.py   # FIT 文件坐标系批量纠偏
@@ -54,7 +56,7 @@ venv\Scripts\pip install -r requirements.txt
 
 ## Web 可视化工具
 
-主要功能入口，基于 Flask + Leaflet.js + ECharts 的多视图交互查看器。左侧固定侧边栏通过图标切换六个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理、关于。侧边栏底部提供深色 / 浅色主题切换和「设置」面板（FTP / 最大心率 / AI 配置 / 顽鹿账密 / Strava 凭证一体化编辑）。
+主要功能入口，基于 Flask + Leaflet.js + ECharts 的多视图交互查看器。左侧固定侧边栏通过图标切换七个顶层视图：骑行记录、骑行轨迹、体能管理、训练日历、文件管理、设置、关于；底部提供深色 / 浅色主题切换。
 
 **macOS / Linux：**
 ```bash
@@ -76,7 +78,7 @@ venv\Scripts\python app.py --server
 | `FAFA_PORT` | `5173` | 监听端口 |
 | `FAFA_ALLOW_INSECURE_REMOTE` | `0` | 设为 `1` 时允许无鉴权的本地模式监听非回环地址；不推荐，远程访问应使用 `--server` |
 | `FAFA_SERVER` | — | 设为 `1` 启用多用户服务模式 |
-| `FAFA_SECRET` | — | 服务模式必填，Flask session 签名密钥 |
+| `FAFA_SECRET` | — | 服务模式必填；用于 Flask session 签名，并经 HKDF 派生用户配置加密密钥。轮换后原有加密凭证需重新填写 |
 | `FAFA_PROXY_HOPS` | `0` | 可信反向代理层数；仅在应用端口不对外暴露时设置，`start.sh` 默认为 `1` |
 
 **Docker 部署：**
@@ -87,7 +89,6 @@ docker run -d \
   -e FAFA_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))") \
   -v /data/fafa/input:/app/input \
   -v /data/fafa/users.db:/app/users.db \
-  -v /data/fafa/config.json:/app/config.json \
   fafa
 ```
 
@@ -162,16 +163,68 @@ docker run -d \
 
 ### 设置视图
 
-侧边栏第六个视图，将原先左下角的设置弹窗提升为独立分页，按功能分栏卡片布局：外观与地图、PMC 参数、路线热图范围、风向数据源、AI 配置、同步账号（顽鹿 / iGPSport / Strava）。服务器模式下额外提供「授权码 (API)」栏。
+侧边栏第六个视图，将原先左下角的设置弹窗提升为独立分页，按功能分栏卡片布局：外观与地图、PMC 参数、路线热图范围、风向数据源、AI 配置、同步账号（顽鹿 / iGPSport / Strava）。服务器模式下额外提供「账户」「授权码 (API)」栏；管理员账号还会看到「管理员」栏。
 
-**授权码（API）** —— 仅服务器模式可用，为以后对外 API 打基础：
+**账户** —— 仅服务器模式可用，管理自己的账号：
 
-- 在设置视图生成命名授权码，明文**仅生成时显示一次**，服务端只保存 sha256 哈希；可设可选有效期、随时撤销。
-- 用于以编程方式访问只读接口 `/api/v1`（`/api/v1/activities`、`/api/v1/activities/<文件名>`、`/api/v1/records/<文件名>`），请求头带 `Authorization: Bearer <授权码>`。
+- 头像：上传图片经像素上限校验后等比例缩放至 512px 内并转存 PNG（剥离原图全部 EXIF/元数据），存于数据库，不落文件系统。
+- 显示名：可选的展示用别名，不影响登录用户名。
+- 修改密码：需先验证当前密码。
+
+**管理员** —— 仅管理员账号可见，全站用户列表与管理操作：查看每个用户的存储占用（含配额百分比）、fit 文件数、有效授权码数、创建/最后登录时间；可重置任意用户密码、冻结/解冻账号（冻结立即踢出在线会话并禁止再登录）、提升/降级管理员身份、删除账号（**不会**删除该用户的 fit 文件，仅移除账号本身）。出于安全考虑，管理员不能对自己执行这些操作（要卸任找另一位管理员）；这些操作只能在浏览器登录会话中进行，授权码（哪怕是「读写」范围）无法调用管理员接口。
+
+首次部署时还没有任何管理员，需要用命令行创建第一个：
 
 ```bash
-curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activities
+venv/bin/python -m fafa.tools.manage_users promote <username>
 ```
+
+之后新增管理员就可以在网页「管理员」栏里操作，不必再用命令行。
+
+**旧配置批量迁移** —— 升级前先使用与线上服务完全相同的 `FAFA_SECRET` 预检，再执行迁移：
+
+```bash
+FAFA_SECRET=<线上密钥> venv/bin/python scripts/migrate_config_to_db.py --dry-run
+FAFA_SECRET=<线上密钥> venv/bin/python scripts/migrate_config_to_db.py
+```
+
+脚本默认扫描 `users.db` 中的所有用户及其 `input/<username>/config.json`；可重复传入 `--username USER` 缩小范围，也可用 `--username USER --config PATH` 指定单个来源文件。它不会覆盖数据库中已有配置，迁移成功后会将明文原文件归档为首个未占用的 `config.json.bak[.N]`。单用户也可运行 `venv/bin/python -m fafa.tools.manage_users migrate-config <username>`。
+
+**授权码（API）** —— 仅服务器模式可用，以编程方式访问 `/api/v1`：
+
+- 在设置视图生成命名授权码，明文**仅生成时显示一次**，服务端只保存 sha256 哈希；可设可选有效期、随时撤销。
+- 每个授权码有一个**授权范围**：默认「只读」；生成时勾选「允许写入」得到「读写」授权码，才能调用上传/删除文件、触发同步这几个写接口。已发出的旧授权码永远是只读，不会因为升级被动提权。
+- 所有请求头带 `Authorization: Bearer <授权码>`；Bearer 鉴权天然不受 CSRF 影响（不会被浏览器自动附带），所以 `/api/v1` 下带 Bearer 头的请求豁免了同源校验，其余接口（含会话 Cookie 鉴权）不受影响。
+
+```bash
+# 只读：列出活动
+curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activities
+
+# 只读：单条活动详情 / 逐点结构化数据（含 lat/lon/hr/power/grade 等全字段）
+curl -H "Authorization: Bearer $TOKEN" https://<host>/api/v1/activities/<文件名>
+curl -H "Authorization: Bearer $TOKEN" https://<host>/api/v1/records/<文件名>
+
+# 读写：上传 .fit 文件（直接存入库，非预览）
+curl -H "Authorization: Bearer $RW_TOKEN" -F "file=@ride.fit" https://<host>/api/v1/files
+
+# 读写：删除库内文件
+curl -H "Authorization: Bearer $RW_TOKEN" -X DELETE https://<host>/api/v1/files/<文件名>
+
+# 读写：触发 OneLap / iGPSport 同步，及查询同步状态
+curl -H "Authorization: Bearer $RW_TOKEN" -X POST https://<host>/api/v1/sync \
+     -H "Content-Type: application/json" -d '{"platform":"onelap","full":false}'
+curl -H "Authorization: Bearer $RW_TOKEN" https://<host>/api/v1/sync/status
+```
+
+| 接口 | 方法 | 所需范围 | 说明 |
+|---|---|---|---|
+| `/api/v1/activities` | GET | 只读 | 活动列表 |
+| `/api/v1/activities/<文件名>` | GET | 只读 | 单条活动摘要 + 逐公里统计 |
+| `/api/v1/records/<文件名>` | GET | 只读 | 逐点结构化数据（全字段） |
+| `/api/v1/files` | POST | 读写 | 上传 `.fit` 并持久化到库（受全局请求上限约束，单文件 ≤16MB；超出用户存储配额拒绝，同名文件已存在返回 409） |
+| `/api/v1/files/<文件名>` | DELETE | 读写 | 删除库内文件 |
+| `/api/v1/sync` | POST | 读写 | 触发 OneLap/iGPSport 同步（复用网页端同步逻辑，同一时间每用户只能有一个同步任务） |
+| `/api/v1/sync/status` | GET | 只读 | 查询同步任务状态 |
 
 ### 关于视图
 
@@ -189,7 +242,7 @@ curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activiti
 | 分栏调整 | 拖拽折线图与热图之间的竖向拉柄可自由调整两者宽度比例，双击重置 50/50 |
 | 区间分布 | 折线图下方并排展示功率分布（Coggan 7 区，按 FTP）与心率分布（按最大心率百分比）柱状图，分区原则与体能管理页一致 |
 | 体力衰竭 | 有氧解耦（Pw:HR，无功率时退回 速度:HR）：以效率因子曲线呈现前后半程漂移，给出解耦率（前半 − 后半效率的百分比变化）及分级（<5% 良好 / 5–8% 轻度 / >8% 明显）。仅对稳态骑行有参考意义 |
-| 分段平行对比 | 开启「框选对比」后在任意折线图拖拽选取任意多段（A/B/C…），各段起点距离归零后按距离叠加同一指标曲线（可切 速度 / 心率 / 功率 / 踏频 / 海拔），用于同一骑行内不同段落的横向对比 |
+| 分段平行对比 | 可按路线转向自动分段，或开启「框选对比」后在任意折线图拖拽手动选段（A/B/C…）；各段起点距离归零后按距离叠加同一指标曲线（可切速度 / 心率 / 功率 / 踏频 / 海拔） |
 | 坡度分布 / 爬坡段 | 逐点坡度平滑后按距离加权分档（下坡 / 0–4 / 4–7 / 7–10 / 10–13 / 13–16 / >16%，climbfinder 风格），以竖柱图与功率 / 心率分布并排展示；连续爬坡段（≥200m 且均坡≥2.5%）另以卡片列出距离 / 爬升 / 均坡 / 最大坡 |
 | 数据表 | 底部按公里 / 分钟分段分行展示所有数据，表头吸顶，仅展示有数据的列；**默认折叠**，点击表头可展开 / 收起 |
 | 浮窗地图 | 详情页地图可切为浮窗：拖动标题栏移动、任意边 / 角缩放，图表随之全宽展示 |
@@ -237,13 +290,13 @@ curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activiti
 
 **顽鹿（OneLap）：**
 - 支持增量下载（只拉取本地尚未存在的新活动）或全量下载
-- 侧边栏「设置」面板或 `config.json` 中配置 `onelap_username` / `onelap_password` 后自动登录，无需弹出浏览器
+- 在「设置 → 同步账号」中配置 `onelap_username` / `onelap_password` 后自动登录，无需弹出浏览器
 - 未配置账密则弹出 Chromium 浏览器窗口完成登录（90 秒超时）
 - 新版 Magene 固件的 FIT 文件下载后自动进行火星解密：C506 版本 ≥ 19，C706 版本 ≥ 20
 
 **iGPSport：**
 - 支持增量下载（按 `ride_id` glob 匹配去重）或全量下载
-- 侧边栏「设置」面板或 `config.json` 中配置 `igpsport_username` / `igpsport_password` 后自动登录
+- 在「设置 → 同步账号」中配置 `igpsport_username` / `igpsport_password` 后自动登录
 - 文件命名格式：`iGPSport_{ride_id}_{YYYYMMDD-HHMMSS}.fit`
 - iGPSport 文件为 WGS-84 坐标系，无需火星解密
 
@@ -253,8 +306,8 @@ curl -H "Authorization: Bearer fafa_xxxxxxxx_..." https://<host>/api/v1/activiti
 
 **配置步骤：**
 1. 在 [Strava 开发者控制台](https://www.strava.com/settings/api) 创建 App，将回调域名设为部署时的域名（本地运行填 `localhost`，服务器部署填实际域名）
-2. 在侧边栏「设置」面板或 `config.json` 中填写 `strava_client_id` / `strava_client_secret`
-3. 在活动视图点击「全部上传 Strava」→ 首次需在弹窗中点击「授权 Strava」完成 OAuth（token 自动保存到 `config.json`）
+2. 在「设置 → 同步账号」中填写 `strava_client_id` / `strava_client_secret`
+3. 在活动视图点击「全部上传 Strava」→ 首次需在弹窗中点击「授权 Strava」完成 OAuth（token 加密保存到 `users.db`）
 4. 授权后点击「全部上传 Strava」会先查询 Strava 已有活动列表，弹窗显示「本地 M 个，Strava 已有 K 个，待上传 N 个」，确认后仅上传差集
 
 **去重逻辑：**
@@ -381,17 +434,13 @@ Web 查看器内置三个 AI 功能：**单次骑行评估**（活动卡片或�
 
 发给模型的提示词可以自定义：设置面板 →「AI 配置」→「编辑提示词模板…」。五份模板（单次评估 / 多骑行对比 / 体能管理 / 日历周建议 / 日历月建议）各自独立编辑，右侧变量面板可点击插入骑行数据占位符（如 `{{avg_power}}`、`{{#km_table}}`），并可调节逐公里表、逐分钟表等数据块的行数以控制 token 消耗。支持预览渲染结果、按版本回溯（每份模板滚动保留 5 个历史版本）和一键恢复默认——默认提示词内置于代码中，不会因误操作丢失。
 
-### 1. 创建配置文件
+### 1. 在设置视图填写
 
-将项目根目录下的模板文件复制一份：
+启动 Web 服务后进入「设置 → AI 配置」填写并保存。配置存入 `users.db` 的 `user_config` 表；API Key、同步平台密码和 Strava token 等敏感字段会用 `FAFA_SECRET` 派生的密钥加密。升级前遗留的每用户 `config.json` 会在首次访问时自动迁移并改名为 `config.json.bak`。
 
-```bash
-cp config.template.json config.json
-```
+### 2. 字段参考
 
-### 2. 编辑配置
-
-**推荐：** 启动 Web 服务后在侧边栏「设置」面板直接填写。或手动编辑 `config.json`：
+`config.template.json` 只用于提供默认值和字段说明，不应复制为运行时配置。主要字段如下：
 
 ```json
 {
@@ -440,7 +489,7 @@ cp config.template.json config.json
 
 服务模式仅接受解析到公网地址的 HTTPS AI API，防止用户配置被用于访问内网服务。本地 Ollama 需要通过受信任的 HTTPS 反向代理接入。
 
-> **注意：** `config.json` 已被 `.gitignore` 排除，不会提交到版本库，请勿将含有真实 API Key 的文件公开。
+> **注意：** `users.db` 和迁移后的 `config.json.bak` 都包含敏感数据，必须排除在版本控制之外并限制文件权限；备份时也应按凭证文件保护。
 
 ---
 

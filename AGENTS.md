@@ -36,7 +36,17 @@ There is no `Makefile` and no automated test suite — `scripts/quality.py` is t
 
 ```bash
 # User management (server mode)
-venv/bin/python -m fafa.tools.manage_users add|list|passwd|delete [<username>]
+venv/bin/python -m fafa.tools.manage_users add|list|passwd|delete|promote|migrate-config [<username>]
+#   promote          — grant is_admin=1; the *first* admin on an instance must be set this way
+#                       (the web admin UI can only promote/demote once an admin already exists)
+#   migrate-config    — force the config.json→user_config lazy migration immediately instead of
+#                       waiting for the user's next login (see "Accounts, roles..." below)
+
+# Bulk legacy config migration (server mode; requires the production FAFA_SECRET)
+FAFA_SECRET=<secret> venv/bin/python scripts/migrate_config_to_db.py --dry-run
+FAFA_SECRET=<secret> venv/bin/python scripts/migrate_config_to_db.py
+#   --username USER    limit to one or more users (repeatable)
+#   --config PATH      migrate one explicit file; requires exactly one --username
 
 # GCJ-02 coordinate conversion (batch, directory in → directory out)
 venv/bin/python -m fafa.tools.fix_coords [input_dir] --method decrypt|encrypt [-o OUT] [--dry-run]
@@ -75,16 +85,17 @@ input/<username>/               server mode: per-user isolation (0700)
   .cache/<name>.fit.json        disk parse cache (keyed by file signature)
   .cache/<name>.fit.parse.lock  per-file flock, prevents duplicate parses
   fafa.db                       SQLite: activity_meta / tags / activity_tags (0600)
-  config.json                   per-user AI + sync credentials (0600)
+  config.json.bak               legacy config file, renamed here after one-time migration
+                                into users.db (see "Accounts, roles..." below) — not read again
   prompts.json                  customized AI prompt templates + block params (0600)
   prompts_history.json          rolling prompt revisions, 5 per template (0600)
   download_state.json           OneLap incremental sync state
   .sync_state.json              sync progress (readable across gunicorn workers)
   .strava_upload_state.json     Strava upload progress
-users.db                        global SQLite: users + login_attempts (0600)
-config.template.json            committed template (root)
-config.json                     root-level — only a fallback for `fafa.strava` when
-                                called outside the web app; the app never reads it
+users.db                        global SQLite: users, login_attempts, api_tokens,
+                                user_config (encrypted secrets), user_files (fit index)
+config.template.json            committed template (root) — seeds a brand-new user's
+                                first `GET /api/config/raw`, never written to disk per-user
 .runtime_locks/                 process-wide slot locks (parse / ai / sync)
 ```
 
@@ -119,8 +130,13 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `/api/ai/config`, `/api/ai/evaluate`, `/api/ai/chat`, `/api/ai/pmc`, `/api/ai/calendar`, `/api/ai/compare` | SSE streams via `_llm_stream()` |
 | `/api/config/raw` GET/POST | settings view; secrets masked on read, Strava tokens read-only on write |
 | `/api/prompts` GET/POST, `/api/prompts/reset`, `/api/prompts/history`, `/api/prompts/preview` | user-editable AI prompt templates (see below) |
-| `/api/tokens` GET/POST, `/api/tokens/<id>/revoke` POST | personal API 授权码 CRUD (session-only); plaintext returned **once** on create, only sha256 stored |
-| `/api/v1/activities`, `/api/v1/activities/<filename>`, `/api/v1/records/<filename>` | read-only public API; authenticates via session **or** `Authorization: Bearer <token>` (Bearer accepted only under `/api/v1/`) |
+| `/api/tokens` GET/POST, `/api/tokens/<id>/revoke` POST | personal API 授权码 CRUD (session-only); plaintext returned **once** on create, only sha256 stored. POST body `read_write: true` issues a `read_write`-scope token instead of the default `read`. |
+| `/api/account/password`, `/api/account/profile` POST | self-service password change (verifies current password via `_auth.verify_user` first) and display-name update; session-only |
+| `/api/account/avatar` POST, `/api/account/avatar/<user_id>` GET | avatar upload (5 MB compressed / 16 MP decoded limits, Pillow `verify()` + re-encode to PNG ≤512px, strips all metadata/EXIF) and fetch (any logged-in user may view any user's avatar — not sensitive, needed for the admin table; content-hash `ETag`) |
+| `/api/admin/users` GET, `/api/admin/users/<uid>/{reset_password,freeze,unfreeze,promote,demote}` POST, `/api/admin/users/<uid>` DELETE | admin-only (`@_auth.admin_required`, session-only — **never** reachable via Bearer token even with `read_write` scope, see below); every self-targeting destructive action (freeze/demote/delete/reset-own-password) is rejected with 400 |
+| `/api/v1/activities`, `/api/v1/activities/<filename>`, `/api/v1/records/<filename>` | read-only; authenticates via session **or** `Authorization: Bearer <token>` (Bearer accepted only under `/api/v1/`) |
+| `/api/v1/files` POST, `/api/v1/files/<filename>` DELETE, `/api/v1/sync` POST | write endpoints — `_require_api_write()` rejects a Bearer token whose scope isn't `read_write` (session auth is never scope-limited: `g.api_scopes` is only ever set on the Bearer branch of `_load_user`). Upload persists straight into the library (16 MB global request cap, `_USER_STORAGE_MAX_BYTES` quota, exclusive-create so concurrent same-name uploads cannot overwrite); delete reuses `_delete_library_file`; sync reuses `_sync_start_handler` (`platform`: `onelap` \| `igpsport`). |
+| `/api/v1/sync/status` GET | read-only sync-state lookup, mirrors `/api/sync/status` |
 | `/api/sync/start`, `/api/sync/status` | unified sync (`platform`: `onelap` \| `igpsport`) |
 | `/api/onelap/sync`, `/api/onelap/status` | legacy OneLap-only aliases |
 | `/api/strava/status`, `/api/strava/auth_url`, `/strava/callback`, `/api/strava/diff`, `/api/strava/upload`, `/api/strava/upload/status` | Strava OAuth + diff + upload |
@@ -136,12 +152,27 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | `gcj02.py` | WGS-84 ↔ GCJ-02 math + `needs_wgs84_conversion()`. |
 | `prompts.py` | AI 提示词默认模板、变量目录、渲染器。See "Prompt templates" below. |
 | `db.py` | Per-user SQLite (WAL). Tables `activity_meta`, `tags`, `activity_tags`; 5 preset tags seeded. |
-| `auth.py` | `users.db`, password hashing, `login_required`, exponential login lockout, `last_login_at`. Personal API 授权码 (`api_tokens` table, sha256-hashed, `hmac.compare_digest`): `create/verify/list/revoke_api_token`. `login_required` authorizes a valid `g.user_id` set from **either** session or Bearer token. |
+| `auth.py` | `users.db`, password hashing, `login_required`, `admin_required`, exponential login lockout, `last_login_at`. Personal API 授权码 (`api_tokens` table, sha256-hashed, `hmac.compare_digest`): `create/verify/list/revoke_api_token`. Each token carries a `scopes` column (`read` default \| `read_write`, set via `create_api_token(..., scope=)`); existing tokens keep `read` after upgrades — scope is never retroactively widened. `login_required` authorizes a valid `g.user_id` set from **either** session or Bearer token; write routes additionally call `_require_api_write()` in app.py. Also owns: roles/status (`is_admin`, `is_frozen`, `set_admin`/`set_frozen`/`admin_count`), avatar BLOB storage (`get_avatar`/`set_avatar`), and the `user_config`/`user_files` tables — see "Accounts, roles and per-user config storage" below. |
 | `onelap.py` | OneLap: request signing, API/browser login, list, download, Magene renaming. |
 | `igpsport.py` | iGPSport: token login, paged activity list, FIT download. SSRF-guarded redirect handler, 32 MB cap. |
-| `strava.py` | OAuth, token refresh, activity diff, upload polling. |
+| `strava.py` | OAuth, token refresh, activity diff, upload polling. Its public functions take `user_id: int`, not a config file path — they read/write credentials through `fafa.auth.get_user_config`/`set_user_config_values` directly (no `config_file` parameter anywhere in this module). Refresh rotation is serialized per user with a flock under `.runtime_locks/`; SQLite's write lock alone is too narrow because Strava rotates refresh tokens during the network request. |
 | `tiles.py` | Folium presets — legacy/CLI only, unused by the Leaflet frontend. |
 | `reporter.py` | CLI text/JSON/CSV formatting. |
+
+### Accounts, roles and per-user config storage
+
+`users` table columns beyond the original `id/username/password_hash/created_at/last_login_at`: `is_admin`, `is_frozen`, `display_name`, `avatar_blob`/`avatar_mime`/`avatar_updated_at`. Two new tables, both in `users.db` (not a second database file, and not split per-user — a deliberate choice to keep one file to back up/inspect):
+
+- **`user_config(user_id, key, value, is_secret, updated_at)`** — replaced the old per-user `config.json`. Key-value rather than fixed columns because settings keys have kept growing (`wind_source`, `map_tile` were added well after the table would have shipped) — a fixed schema would need an `ALTER TABLE` every time. `fafa.auth.get_user_config(user_id)`/`set_user_config_values(user_id, updates)` are the only read/write path; `app.py`'s `/api/config/raw` GET/POST keep the **exact same external JSON shape** as the old file-based version, so the frontend (`loadSettingsView`/`saveSettings` in `static/app.js`) needed zero changes — only the storage backend moved. Type casting (which keys round-trip as `int`/`float` vs stay `str`) is centralized in `fafa/config_schema.py`, imported by both `auth.py` (storage) and `app.py` (validation) so the two layers can't drift apart on what a given key means.
+- **`user_files(user_id, filename, size_bytes, mtime_ns, indexed_at)`** — a fit-file index. **The filesystem directory listing is still the source of truth for existence** — this table is a read-time-reconciled cache, not authoritative. `/api/files` (`list_files`) scans disk as before and, after building the response, upserts a matching batch of rows (`bulk_reindex_user_files`) — this is the primary way the index stays correct, self-healing on every visit regardless of what wrote the file. The three real file-creation points (`/api/v1/files` POST, OneLap download, iGPSport download) and the single deletion chokepoint (`_delete_library_file`, which all three delete routes funnel through) additionally do a best-effort single-row upsert/delete right after the disk operation, wrapped in `try/except` — a failed index write must never block or fail the real file operation. The payoff: `admin_storage_summary()` answers "how much does each user store" with one `GROUP BY` query instead of walking every user's directory tree, which is what makes the admin dashboard's storage column cheap.
+
+**Secret fields are encrypted at rest**, not just file-permission-protected like the old `config.json` was. `config_schema.SECRET_KEYS` (`api_key`, `onelap_password`, `igpsport_password`, `strava_client_secret`, `strava_access_token`, `strava_refresh_token`) get Fernet-encrypted before the `INSERT`; `app.py`'s `_SECRET_FIELDS` constant is now just an alias for the same frozenset (`_SECRET_FIELDS = _config_schema.SECRET_KEYS`) so the two layers can't independently drift on which fields count as secret. **The Fernet key is derived from `FAFA_SECRET` via HKDF-SHA256**, not a second standalone secret — server mode already requires `FAFA_SECRET` (refuses to start without it), so this piggybacks on an already-mandatory value rather than adding a second one to provision and back up. **Consequence: rotating `FAFA_SECRET` makes every previously-encrypted secret field undecryptable.** `_decrypt()` catches `InvalidToken` and returns `''` per-field rather than raising — a rotated secret degrades to "that field reads as empty, user re-enters it," not a 500 on every settings load. Local mode has no `FAFA_SECRET` requirement; it derives from a fixed constant (`_LOCAL_MODE_KEY_MATERIAL`) instead — local mode is single-user, same-machine, same-permissions as `users.db` itself, so this layer isn't defending against a local attacker, it just keeps the same code path working in both modes without an `if server_mode` branch.
+
+**Migration from the old `config.json` supports both lazy and explicit paths.** `_activate_user()` (session/Bearer paths) and the local-mode branch of `_load_user()` call `_maybe_migrate_config(user_id, input_dir)` on every request: if `user_config` has zero rows for that user and a `config.json` still exists, it imports every key (encrypting secrets) and archives the source as the first unused `config.json.bak[.N]`; backups are created without overwriting an existing one. A user who never logs in keeps the old file until an operator runs `scripts/migrate_config_to_db.py`. The script requires the production `FAFA_SECRET`, scans all users by default, supports `--dry-run`, repeatable `--username`, and an explicit `--config` path, and refuses to overwrite users who already have database config. `manage_users.py migrate-config <username>` remains the lightweight single-user command.
+
+**`admin_required` (in `auth.py`, paired with `login_required` on every `/api/admin/*` route) rejects Bearer-token auth outright**, even a `read_write`-scoped token belonging to an actual admin: `getattr(g, 'api_scopes', None) is not None` → 403, checked before the `is_admin` check. An API token represents "act on my own account's data"; it is not a delegation of admin authority over the whole instance, and conflating the two would be a privilege-escalation path. In practice this is doubly enforced — `/api/admin/*` isn't under `/api/v1/`, and `_load_user`'s Bearer branch only ever activates for paths starting `/api/v1/`, so a Bearer-authenticated request to `/api/admin/*` never even reaches `admin_required`; it 401s at `login_required` first because `g.user_id` was never set. Admin actions are session-only, full stop.
+
+Self-targeting destructive admin actions are rejected unconditionally, not by a dynamic "unless you're the last admin" check: freeze/demote/delete/reset-own-password-via-the-admin-route on `uid == g.user_id` all 400 immediately. The simpler rule is harder to get wrong. **The first admin on a fresh instance must be set via CLI** (`manage_users.py promote <username>`) — the web UI's promote/demote requires an existing admin session to call it, so there is no self-service bootstrap path, by design (anyone able to reach the API before any admin exists would otherwise be able to grant themselves admin).
 
 ### Security invariants (enforced by `scripts/quality.py`)
 
@@ -161,7 +192,7 @@ Several checks silently degrade to `[SKIP]` when their tool is absent, so CI ins
 
 One workflow, two jobs: `quality` runs on every push and PR; `build` declares `needs: quality` and is further gated by `if` to `main`, `v*` tags and manual dispatch. Keeping them in separate workflow files makes them run **in parallel**, which lets an image publish while the gate is red — that was the previous setup.
 
-Other hard-coded defenses to preserve: `_validate_filename_in_input` (rejects symlinks, requires parent == resolved input dir), `_resolve_public_api_base` (SSRF: HTTPS-only, blocks RFC1918/loopback/link-local for v4 and v6), `_check_same_origin` before-request hook, CSP/HSTS in `_security_headers`, `_atomic_write_json` for every JSON write, and the 16 MB `MAX_CONTENT_LENGTH`.
+Other hard-coded defenses to preserve: `_validate_filename_in_input` (rejects symlinks, requires parent == resolved input dir), `_resolve_public_api_base` (SSRF: HTTPS-only, blocks RFC1918/loopback/link-local for v4 and v6), `_check_same_origin` before-request hook (exempts `/api/v1/*` requests that carry an `Authorization: Bearer` header — Bearer credentials aren't ambient like cookies, so CSRF doesn't apply; every other path, including session-cookie `/api/*` calls, still enforces same-origin), CSP/HSTS in `_security_headers`, `_atomic_write_json` for every JSON write, and the 16 MB `MAX_CONTENT_LENGTH`.
 
 ### Key data conventions
 
@@ -345,7 +376,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 
 ## Configuration
 
-`config.json` is per-user and never committed; `config.template.json` documents every field in its `_comments` block. Writes go through `/api/config/raw`, which rejects unknown keys and validates:
+Per-user config lives in `users.db` (`user_config` table, secrets encrypted — see "Accounts, roles and per-user config storage" above), not a per-user file anymore; `config.template.json` still documents every field in its `_comments` block and seeds the response for a user with no config yet. Writes go through `/api/config/raw`, which rejects unknown keys and validates:
 
 - **Strings** (with length caps): `api_base` (HTTPS + SSRF check), `api_key`, `model`, `onelap_username/password`, `igpsport_username/password`, `strava_client_id/secret`
 - **Numbers** (with ranges): `max_tokens` 256–16000, `pmc_ftp` 50–600, `pmc_rest_hr` 30–100, `pmc_max_hr` 100–220, `pmc_weight` 30–150, `route_grade_min` −30–0, `route_grade_max` 0–30, `route_speed_max` 10–120, `route_cadence_max` 60–200, `strava_redirect_port` 1024–65535
@@ -358,7 +389,7 @@ Secret fields are returned masked as `••••••••`; posting the mas
 | Variable | Default | Purpose |
 |---|---|---|
 | `FAFA_SERVER` | `0` | `1` enables server mode |
-| `FAFA_SECRET` | — | Flask secret key; **required** in server mode |
+| `FAFA_SECRET` | — | Flask secret key; **required** in server mode. Also the source material for the `user_config` secret-field encryption key (HKDF-derived) — rotating it makes previously-encrypted config fields undecryptable (they read back as empty, not an error; see "Accounts, roles..." above) |
 | `FAFA_HOST` | `127.0.0.1` / `0.0.0.0` | bind address |
 | `FAFA_PORT` | `5173` | listen port |
 | `FAFA_PROXY_HOPS` | `0` | `ProxyFix` hop count behind a reverse proxy |

@@ -1968,6 +1968,18 @@ body {
   transition: border-color var(--duration-fast);
 }
 .token-create-row input:focus { border-color: rgba(99,153,255,0.5); }
+.token-scope-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-width: auto;
+  font-size: var(--text-base);
+  color: var(--text-subtle);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.token-scope-check input[type="checkbox"] { flex: none; width: auto; min-width: auto; }
 .token-list { display: flex; flex-direction: column; gap: 8px; }
 .token-empty { color: var(--text-disabled); font-size: var(--text-base); padding: 8px 0; }
 .token-row {
@@ -1980,6 +1992,14 @@ body {
 .token-row-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-right: 60px; }
 .token-row-name { font-size: var(--text-md); color: var(--text-primary); font-weight: 600; }
 .token-row-prefix { font-family: monospace; font-size: var(--text-base); color: var(--text-subtle); }
+.token-row-scope {
+  font-size: var(--text-xs);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-subtle);
+}
+.token-row-scope--rw { background: rgba(243,156,18,0.16); color: var(--color-warning); }
 .token-row-status { font-size: var(--text-sm); color: var(--color-primary); }
 .token-row-meta { font-size: var(--text-sm); color: var(--text-disabled); margin-top: 4px; }
 .token-revoke-btn {
@@ -5290,6 +5310,68 @@ body {
   transition: var(--transition-full);
 }
 .settings-link-btn:hover { background: var(--surface-hover); color: var(--color-white); }
+
+/* ── 账户卡：头像 ──────────────────────────────────────────────────────────── */
+.account-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.account-avatar-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+}
+.account-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.account-avatar-fallback {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 0;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.account-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.account-avatar-upload-btn {
+  display: inline-block;
+  width: fit-content;
+}
+
+/* ── 管理员卡：用户列表 ────────────────────────────────────────────────────── */
+.admin-user-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-user-row { display: flex; align-items: flex-start; gap: 10px; }
+.admin-user-row .token-row-main { padding-right: 0; }
+.admin-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--surface-2);
+}
+.admin-user-body { flex: 1; min-width: 0; }
+.admin-user-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.admin-user-actions .token-revoke-btn { position: static; }
+.admin-status { font-size: var(--text-sm); color: var(--color-success); }
+.admin-status--frozen { color: var(--color-danger-bright); }
+.admin-self-hint { font-size: var(--text-sm); color: var(--text-disabled); margin-top: 8px; }
 
 /* 浅色主题覆盖 */
 .light-theme #prompts-modal-box { background: var(--color-white); border-color: rgba(0,0,0,0.12); }
