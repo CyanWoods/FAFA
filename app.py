@@ -1209,25 +1209,65 @@ def index():
 @app.route("/api/upload", methods=["POST"])
 @_auth.login_required
 def upload():
+    """上传一个 .fit 文件，解析并直接存入当前用户的文件库。"""
     f = request.files.get("file")
     if not f:
         return jsonify(error="未收到文件"), 400
-    if not f.filename.lower().endswith(".fit"):
+    filename = f.filename or ""
+    try:
+        filename_bytes = len(filename.encode("utf-8"))
+    except UnicodeError:
+        filename_bytes = 0
+    if (not filename or Path(filename).name != filename or "\\" in filename
+            or "\x00" in filename or filename_bytes > 255):
+        return jsonify(error="文件名不合法"), 400
+    if not filename.lower().endswith(".fit"):
         return jsonify(error="请上传 .fit 格式文件"), 400
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".fit")
-    os.close(fd)
-    f.save(tmp_path)
+    input_dir = _user_input_dir()
+    input_dir.mkdir(parents=True, exist_ok=True)
+    dest = _validate_filename_in_input(filename, input_dir)
+    if dest is None:
+        return jsonify(error="文件名不合法"), 400
+
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    f.seek(0)
+    if size > _MAX_API_UPLOAD_BYTES:
+        return jsonify(error=f"单个文件不能超过 {_MAX_API_UPLOAD_BYTES // (1024 * 1024)} MB"), 413
+    if _input_storage_bytes(input_dir) + size > _USER_STORAGE_MAX_BYTES:
+        return jsonify(error="用户 FIT 存储空间不足"), 507
 
     try:
-        data = _parse_and_build(tmp_path, f.filename)
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return jsonify(error="同名文件已存在"), 409
+    except OSError as e:
+        return jsonify(error=f"文件保存失败: {e}"), 500
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while chunk := f.stream.read(1024 * 1024):
+                out.write(chunk)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        return jsonify(error=f"文件保存失败: {e}"), 500
+
+    try:
+        data = _parse_and_build(str(dest), filename)
     except ValueError as e:
+        dest.unlink(missing_ok=True)
+        _remove_file_caches(dest)
         return jsonify(error=str(e)), 422
     except Exception as e:
+        dest.unlink(missing_ok=True)
+        _remove_file_caches(dest)
         return jsonify(error=f"解析失败: {e}"), 422
-    finally:
-        os.unlink(tmp_path)
-        _remove_file_caches(Path(tmp_path))
+
+    try:
+        st = dest.stat()
+        _auth.upsert_user_file(g.user_id, filename, st.st_size, st.st_mtime_ns)
+    except Exception:
+        pass
 
     return jsonify(**data, source="upload")
 

@@ -118,7 +118,7 @@ Concurrency is capped by flock-based slots in `.runtime_locks/`: `FAFA_PARSE_SLO
 | Route | Purpose |
 |---|---|
 | `/login`, `/logout` | session auth; rate-limited per user **and** per IP. `POST /login` is AJAX: JSON body → **200** `{ok}` on success / **403** bad creds / **429** rate-limited; form body (no-JS fallback) → 302 redirect. Already-authenticated `GET /login` → **302**. |
-| `/api/upload` | parse an uploaded FIT to a temp file; never persisted |
+| `/api/upload` | parse an uploaded FIT and persist it into the user's `input/` library (same dedupe/quota checks as `/api/v1/files`); failed parse deletes the saved file |
 | `/api/load` | parse one library file; returns `source="library"` |
 | `/api/files`, `/api/files/delete`, `/api/files/delete_all`, `/api/files/export` | library management; export streams a ZIP |
 | `/api/records/<filename>` | per-second stream for detail charts; local time from `fit.utc_offset_s`; includes cumulative `dist_m` for the segment-compare distance alignment |
