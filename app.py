@@ -1027,6 +1027,7 @@ def _run_sync(username: str, input_dir: Path, user_id: int, full: bool, limit: i
             if isinstance(item, dict) and item.get("filename")
             and (input_dir / item["filename"]).exists()
         }
+        state = {rid: state[rid] for rid in skip_ids}  # 清理文件已被手动删除的残留记录
         sess     = build_session(auth["token"], auth["cookies"])
 
         _set_sync(username, input_dir=input_dir, state="fetching", message="正在获取活动列表…")
