@@ -237,7 +237,7 @@ def compute_dist_stats(fit: FitData, step_m: float = 100.0) -> List[KmStats]:
     buckets: dict[int, List[Record]] = defaultdict(list)
     for r in records:
         buckets[int(r.distance_m / step_m)].append(r)
-    return [_build_one_segment(buckets[k], i + 1, ftp) for i, k in enumerate(sorted(buckets.keys()))]
+    return [_build_one_segment(buckets[k], k + 1, ftp) for k in sorted(buckets.keys())]
 
 
 def _zero_segment(seg_idx: int, step_s: float) -> KmStats:

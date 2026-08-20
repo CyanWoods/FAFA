@@ -1019,9 +1019,14 @@ def _run_sync(username: str, input_dir: Path, user_id: int, full: bool, limit: i
                 return
 
         state = {} if full else load_state()
-        if state and not _library_fit_paths(input_dir):
+        library_paths = _library_fit_paths(input_dir)
+        if state and not library_paths:
             state = {}
-        skip_ids = set(state.keys())
+        skip_ids = {
+            rid for rid, item in state.items()
+            if isinstance(item, dict) and item.get("filename")
+            and (input_dir / item["filename"]).exists()
+        }
         sess     = build_session(auth["token"], auth["cookies"])
 
         _set_sync(username, input_dir=input_dir, state="fetching", message="正在获取活动列表…")
@@ -1041,7 +1046,12 @@ def _run_sync(username: str, input_dir: Path, user_id: int, full: bool, limit: i
         new_files: list[str] = []
         done_count = 0
         dl_lock    = threading.Lock()
-        storage_used = _input_storage_bytes(input_dir)
+        storage_used = 0
+        for _p in library_paths:
+            try:
+                storage_used += _p.stat().st_size
+            except OSError:
+                pass
         storage_reserved = 0
 
         def _download_one(act: dict) -> tuple[Path | None, str]:
@@ -1206,13 +1216,9 @@ def index():
                            user_id=g.user_id, display_name=g.display_name)
 
 
-@app.route("/api/upload", methods=["POST"])
-@_auth.login_required
-def upload():
-    """上传一个 .fit 文件，解析并直接存入当前用户的文件库。"""
-    f = request.files.get("file")
-    if not f:
-        return jsonify(error="未收到文件"), 400
+def _save_uploaded_fit(f, input_dir: Path) -> tuple[dict | None, tuple | None]:
+    """校验、保存并解析一个上传的 .fit 文件到 input_dir。
+    成功返回 (data, None)；失败返回 (None, (error_body, status_code))，已清理落地的文件。"""
     filename = f.filename or ""
     try:
         filename_bytes = len(filename.encode("utf-8"))
@@ -1220,48 +1226,47 @@ def upload():
         filename_bytes = 0
     if (not filename or Path(filename).name != filename or "\\" in filename
             or "\x00" in filename or filename_bytes > 255):
-        return jsonify(error="文件名不合法"), 400
+        return None, (jsonify(error="文件名不合法"), 400)
     if not filename.lower().endswith(".fit"):
-        return jsonify(error="请上传 .fit 格式文件"), 400
+        return None, (jsonify(error="请上传 .fit 格式文件"), 400)
 
-    input_dir = _user_input_dir()
     input_dir.mkdir(parents=True, exist_ok=True)
     dest = _validate_filename_in_input(filename, input_dir)
     if dest is None:
-        return jsonify(error="文件名不合法"), 400
+        return None, (jsonify(error="文件名不合法"), 400)
 
     f.seek(0, os.SEEK_END)
     size = f.tell()
     f.seek(0)
     if size > _MAX_API_UPLOAD_BYTES:
-        return jsonify(error=f"单个文件不能超过 {_MAX_API_UPLOAD_BYTES // (1024 * 1024)} MB"), 413
+        return None, (jsonify(error=f"单个文件不能超过 {_MAX_API_UPLOAD_BYTES // (1024 * 1024)} MB"), 413)
     if _input_storage_bytes(input_dir) + size > _USER_STORAGE_MAX_BYTES:
-        return jsonify(error="用户 FIT 存储空间不足"), 507
+        return None, (jsonify(error="用户 FIT 存储空间不足"), 507)
 
     try:
         fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        return jsonify(error="同名文件已存在"), 409
+        return None, (jsonify(error="同名文件已存在"), 409)
     except OSError as e:
-        return jsonify(error=f"文件保存失败: {e}"), 500
+        return None, (jsonify(error=f"文件保存失败: {e}"), 500)
     try:
         with os.fdopen(fd, "wb") as out:
             while chunk := f.stream.read(1024 * 1024):
                 out.write(chunk)
     except Exception as e:
         dest.unlink(missing_ok=True)
-        return jsonify(error=f"文件保存失败: {e}"), 500
+        return None, (jsonify(error=f"文件保存失败: {e}"), 500)
 
     try:
         data = _parse_and_build(str(dest), filename)
     except ValueError as e:
         dest.unlink(missing_ok=True)
         _remove_file_caches(dest)
-        return jsonify(error=str(e)), 422
+        return None, (jsonify(error=str(e)), 422)
     except Exception as e:
         dest.unlink(missing_ok=True)
         _remove_file_caches(dest)
-        return jsonify(error=f"解析失败: {e}"), 422
+        return None, (jsonify(error=f"解析失败: {e}"), 422)
 
     try:
         st = dest.stat()
@@ -1269,6 +1274,19 @@ def upload():
     except Exception:
         pass
 
+    return data, None
+
+
+@app.route("/api/upload", methods=["POST"])
+@_auth.login_required
+def upload():
+    """上传一个 .fit 文件，解析并直接存入当前用户的文件库。"""
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="未收到文件"), 400
+    data, error = _save_uploaded_fit(f, _user_input_dir())
+    if error:
+        return error
     return jsonify(**data, source="upload")
 
 
@@ -2690,53 +2708,9 @@ def api_v1_upload_file():
     f = request.files.get("file")
     if not f:
         return jsonify(error="未收到文件"), 400
-    filename = f.filename or ""
-    try:
-        filename_bytes = len(filename.encode("utf-8"))
-    except UnicodeError:
-        filename_bytes = 0
-    if (not filename or Path(filename).name != filename or "\\" in filename
-            or "\x00" in filename or filename_bytes > 255):
-        return jsonify(error="文件名不合法"), 400
-    if not filename.lower().endswith(".fit"):
-        return jsonify(error="请上传 .fit 格式文件"), 400
-
-    input_dir = _user_input_dir()
-    dest = _validate_filename_in_input(filename, input_dir)
-    if dest is None:
-        return jsonify(error="文件名不合法"), 400
-    f.seek(0, os.SEEK_END)
-    size = f.tell()
-    f.seek(0)
-    if size > _MAX_API_UPLOAD_BYTES:
-        return jsonify(error=f"单个文件不能超过 {_MAX_API_UPLOAD_BYTES // (1024 * 1024)} MB"), 413
-    if _input_storage_bytes(input_dir) + size > _USER_STORAGE_MAX_BYTES:
-        return jsonify(error="用户 FIT 存储空间不足"), 507
-
-    try:
-        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return jsonify(error="同名文件已存在"), 409
-    except OSError as e:
-        return jsonify(error=f"文件保存失败: {e}"), 500
-    try:
-        with os.fdopen(fd, "wb") as out:
-            while chunk := f.stream.read(1024 * 1024):
-                out.write(chunk)
-    except Exception as e:
-        dest.unlink(missing_ok=True)
-        return jsonify(error=f"文件保存失败: {e}"), 500
-    try:
-        data = _parse_and_build(str(dest), filename)
-    except Exception as e:
-        dest.unlink(missing_ok=True)
-        _remove_file_caches(dest)
-        return jsonify(error=f"解析失败，文件未保存: {e}"), 422
-    try:
-        st = dest.stat()
-        _auth.upsert_user_file(g.user_id, filename, st.st_size, st.st_mtime_ns)
-    except Exception:
-        pass
+    data, error = _save_uploaded_fit(f, _user_input_dir())
+    if error:
+        return error
     return jsonify(**data, source="upload"), 201
 
 
@@ -2932,6 +2906,8 @@ def upload_own_avatar():
 @app.route("/api/account/avatar/<int:user_id>")
 @_auth.login_required
 def get_account_avatar(user_id):
+    if user_id != g.user_id and not g.is_admin:
+        return jsonify(error="forbidden"), 403
     av = _auth.get_avatar(user_id)
     if av is None:
         return jsonify(error="not found"), 404

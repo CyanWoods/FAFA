@@ -3212,6 +3212,7 @@ async function openDetailView(id) {
       if (resp.ok) records = (await resp.json()).records;
     } catch (_) {}
   }
+  if (detailTrackId !== id) return; // 详情视图已切到别的轨迹，丢弃这次过期响应
 
   _renderDetailCharts(records, t.timeStats);
   _renderDetailTable();
@@ -3228,6 +3229,7 @@ async function openDetailView(id) {
   fetch(`/api/weather/${encodeURIComponent(t.name)}`)
     .then(r => r.ok ? r.json() : null)
     .then(d => {
+      if (detailTrackId !== id) return; // 详情视图已切到别的轨迹，丢弃这次过期响应
       if (d?.available && d.hourly) _detailWindData = d;
       if (d?.available) {
         const summaryRow = document.getElementById('detail-summary-row');
@@ -3304,6 +3306,7 @@ async function _loadAndRenderDetailMeta(filename) {
     const res = await fetch('/api/meta/' + encodeURIComponent(filename));
     if (!res.ok) return;
     const data = await res.json();
+    if (_detailMetaFilename !== filename) return; // 详情视图已切到别的轨迹，丢弃这次过期响应
     _detailCurrentNote = data.note || '';
     _detailCurrentTags = data.tags || [];
     _renderDetailNote(_detailCurrentNote, false);

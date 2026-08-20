@@ -55,7 +55,8 @@ def parse_fit(filepath: str) -> FitData:
     records: List[Record] = []
     for r in messages.get("record_mesgs", []):
         dist = r.get("distance")
-        if dist is None:
+        ts = r.get("timestamp")
+        if dist is None or ts is None:
             continue
         alt = r.get("enhanced_altitude") if r.get("enhanced_altitude") is not None else r.get("altitude")
         # FIT uint16 invalid sentinel: 0xFFFF → 12607.0 m (÷5 − 500); also reject anything above Everest
@@ -63,7 +64,7 @@ def parse_fit(filepath: str) -> FitData:
             alt = None
         spd = r.get("enhanced_speed") if r.get("enhanced_speed") is not None else r.get("speed")
         records.append(Record(
-            timestamp=r["timestamp"],
+            timestamp=ts,
             distance_m=float(dist),
             heart_rate=r.get("heart_rate"),
             power=r.get("power"),
