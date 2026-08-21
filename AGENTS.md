@@ -184,6 +184,7 @@ The 23 checks run in 8 phases. The load-bearing ones:
 - **`no-cdn-scripts` / `vendor-assets`** — no CDN URLs in `templates/index.html`; these files must exist: `static/vendor/leaflet/leaflet.{js,css}`, `static/vendor/marked/marked.min.js`, `static/vendor/dompurify/purify.min.js`.
 - **`css-token-enforcement` / `js-inline-style-tokens`** — scan the **staged** diff for hardcoded colors, radii, font sizes, transition durations.
 - **`version-date`** — the `version` file must be `vYYYY.MM.DD` matching the last commit date. Bump it when committing.
+- **收尾提交前置检查**：提交前必须确认 `version` 文件内版本号与当前日期一致（`vYYYY.MM.DD`），不一致先更新 `version` 再提交，避免 `version-date` 检查失败。
 - **`staged-secrets-scan`**, **`dockerignore`**, **`python-security`** (bandit, `-ll`), **`file-permissions`** (0700 dirs / 0600 files), **`sqlite-integrity`**.
 
 Several checks silently degrade to `[SKIP]` when their tool is absent, so CI installs `bandit` and `PyYAML` explicitly — otherwise `python-security` and `docker-compose-yaml` are listed as passing checks that never actually ran. Bandit's surviving findings are all false positives and carry inline `# nosec <id>` with the reason (bind-to-all in server mode, `?`-only SQL interpolation, urlopen against hardcoded HTTPS constants, MD5 mandated by the OneLap protocol). `hadolint` is still not installed, so `dockerfile-lint` skips.
