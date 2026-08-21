@@ -194,6 +194,12 @@ let _detailCompareMetric = 'speed';     // 叠加曲线当前指标 key
 let _detailCumDistM = null;             // 各记录累计距离(米)，距离对齐用
 let _segCmpChart = null, _segCmpChartEl = null, _segCmpChipsEl = null, _segCmpMetricBarEl = null, _segCmpToggleBtn = null;
 const COMPARE_COLORS = ['#2e86de', '#e74c3c', '#27ae60', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#3498db'];
+// 地理围栏分段：{lat,lon,radius}[]，会话内临时状态，不持久化
+let _detailGeofences = [];
+let _detailFenceEditMode = false;
+let _fenceEditBtn = null;
+let _fenceLayers = [];        // 地图上的围栏 circle+marker 图层
+let _fenceClickBoundMap = null;   // 围栏点击新增监听器已绑定到的地图实例
 let _detailRouteMarker = null;
 let _detailRouteHideTimer = null;
 let _detailWindData = null;
@@ -4229,6 +4235,9 @@ function _renderDetailSegments(wrap, records) {
   // 每次进入详情页重置对比状态
   _detailCompareMode = false;
   _detailCompareSegs = [];
+  _detailFenceEditMode = false;
+  _detailGeofences = [];
+  _clearFenceLayers();
   _detailCumDistM = _recordsCumDist(records);
   const metrics = _compareMetrics(records);
   if (!metrics.length) return;
@@ -4246,24 +4255,33 @@ function _renderDetailSegments(wrap, records) {
   const btnGroup = document.createElement('span');
   btnGroup.style.cssText = 'display:flex;gap:4px;';
   const autoBtn = document.createElement('button');
-  autoBtn.textContent = '自动分段（转向）';
+  autoBtn.textContent = '自动分段（围栏）';
   autoBtn.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
     `background:transparent;color:${subColor}`;
   autoBtn.onclick = () => {
-    const segs = _autoSegmentByTurns(_detailRecordsRef || []);
-    if (!segs) { toast('未检测到足够明显的转弯，无法自动分段'); return; }
+    if (!_detailGeofences.length) _detailGeofences = _autoDetectGeofences(_detailRecordsRef || []);
+    if (!_detailGeofences.length) { toast('未检测到明显的停留点，无法自动生成围栏；可点「编辑围栏」手动放置'); return; }
+    const segs = _segmentByGeofences(_detailRecordsRef || [], _detailGeofences);
+    if (!segs) { toast('围栏未被轨迹进入，无法分段'); return; }
     _detailCompareSegs = segs;
     _updateCompareChips();
     _updateCompareChart();
-    toast(`已按转向自动生成 ${segs.length} 段`);
+    _renderFenceLayers();
+    toast(`已按围栏自动生成 ${segs.length} 段`);
   };
+  const fenceBtn = document.createElement('button');
+  fenceBtn.textContent = '编辑围栏';
+  fenceBtn.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
+    `background:transparent;color:${subColor}`;
+  _fenceEditBtn = fenceBtn;
+  fenceBtn.onclick = () => { _setFenceEditMode(!_detailFenceEditMode); };
   const toggle = document.createElement('button');
   toggle.textContent = '框选对比';
   toggle.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
     `background:transparent;color:${subColor}`;
   _segCmpToggleBtn = toggle;
   toggle.onclick = () => { _setCompareMode(!_detailCompareMode); };
-  btnGroup.append(autoBtn, toggle);
+  btnGroup.append(autoBtn, fenceBtn, toggle);
   const title = document.createElement('span');
   title.textContent = '分段平行对比 · 距离叠加';
   lbl.appendChild(title);
@@ -4273,7 +4291,7 @@ function _renderDetailSegments(wrap, records) {
   // 提示
   const hint = document.createElement('div');
   hint.style.cssText = `font-size:11px;color:${subColor};padding:4px 2px 0;`;
-  hint.textContent = '「自动分段」按转向角把路线自动切成若干段；或开启「框选对比」在上方曲线拖拽手动选段，可多选；各段起点距离归零后叠加对比。';
+  hint.textContent = '「自动分段」把轨迹进入地理围栏(停留点自动聚类)的地方切成若干段；「编辑围栏」可在地图上拖拽围栏、滚轮调半径、点地图新增围栏点；或开启「框选对比」在上方曲线拖拽手动选段，可多选；各段起点距离归零后叠加对比。';
   block.appendChild(hint);
 
   // 指标切换条
@@ -4327,6 +4345,93 @@ function _setCompareMode(on) {
   if (on && _detailZoomActive) _resetDetailZoom();
 }
 
+// ── 围栏编辑模式：地图上拖拽/缩放/新增围栏，实时重算分段 ────────────────────
+function _setFenceEditMode(on) {
+  _detailFenceEditMode = on;
+  const isDark = !document.body.classList.contains('light-theme');
+  const btn = _fenceEditBtn;
+  if (btn) {
+    btn.style.background = on ? '#2e86de' : 'transparent';
+    btn.style.color = on ? '#fff' : (isDark ? '#888' : '#999');
+    btn.textContent = on ? '围栏编辑中 · 点地图新增 · 再点此结束' : '编辑围栏';
+  }
+  if (on && !_detailGeofences.length) {
+    _detailGeofences = _autoDetectGeofences(_detailRecordsRef || []);
+  }
+  _renderFenceLayers();
+}
+
+function _clearFenceLayers() {
+  if (detailRouteMap) for (const l of _fenceLayers) { try { detailRouteMap.removeLayer(l); } catch {} }
+  _fenceLayers = [];
+}
+
+function _recomputeFenceSegments(quiet) {
+  const segs = _segmentByGeofences(_detailRecordsRef || [], _detailGeofences);
+  if (!segs) { if (!quiet) toast('围栏未被轨迹进入，无法分段'); return; }
+  _detailCompareSegs = segs;
+  _updateCompareChips();
+  _updateCompareChart();
+}
+
+function _renderFenceLayers() {
+  _clearFenceLayers();
+  if (!detailRouteMap) return;
+  _detailGeofences.forEach((fence, idx) => {
+    const color = COMPARE_COLORS[idx % COMPARE_COLORS.length];
+    const circle = L.circle([fence.lat, fence.lon], {
+      radius: fence.radius, color, weight: 2, fillColor: color, fillOpacity: 0.12,
+      interactive: _detailFenceEditMode,
+    }).addTo(detailRouteMap);
+    _fenceLayers.push(circle);
+
+    if (_detailFenceEditMode) {
+      circle.on('click', L.DomEvent.stopPropagation);   // 点圈内不触发地图“新增围栏”
+      // 滚轮缩放围栏半径（20~300m）
+      circle.on('wheel', e => {
+        L.DomEvent.stopPropagation(e);
+        L.DomEvent.preventDefault(e);
+        const delta = e.originalEvent.deltaY < 0 ? 10 : -10;
+        fence.radius = Math.max(20, Math.min(300, fence.radius + delta));
+        circle.setRadius(fence.radius);
+        _recomputeFenceSegments(true);
+      });
+
+      const center = L.marker([fence.lat, fence.lon], {
+        draggable: true,
+        icon: L.divIcon({
+          className: '', html: `<div style="width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #fff;"></div>`,
+          iconSize: [12, 12], iconAnchor: [6, 6],
+        }),
+      }).addTo(detailRouteMap);
+      center.on('drag', () => {
+        const p = center.getLatLng();
+        fence.lat = p.lat; fence.lon = p.lng;
+        circle.setLatLng(p);
+      });
+      center.on('dragend', () => _recomputeFenceSegments(true));
+      center.bindTooltip('拖拽移动 · 滚轮调半径 · 双击删除', { direction: 'top' });
+      center.on('dblclick', e => {
+        L.DomEvent.stopPropagation(e);
+        _detailGeofences.splice(idx, 1);
+        _renderFenceLayers();
+        _recomputeFenceSegments(true);
+      });
+      _fenceLayers.push(center);
+    }
+  });
+
+  if (detailRouteMap && _fenceClickBoundMap !== detailRouteMap) {
+    _fenceClickBoundMap = detailRouteMap;
+    detailRouteMap.on('click', e => {
+      if (!_detailFenceEditMode) return;
+      _detailGeofences.push({ lat: e.latlng.lat, lon: e.latlng.lng, radius: 50 });
+      _renderFenceLayers();
+      _recomputeFenceSegments(true);
+    });
+  }
+}
+
 function _updateCompareMetricBar(isDark) {
   if (!_segCmpMetricBarEl) return;
   _segCmpMetricBarEl.querySelectorAll('button[data-mkey]').forEach(b => {
@@ -4337,63 +4442,13 @@ function _updateCompareMetricBar(isDark) {
   });
 }
 
-// 按转向角自动分段：沿累计距离每 ~25m 重采样一次经纬度，用重采样点间的方位角
-// 变化识别转弯，转弯点作为分段边界；邻近转弯合并、过短分段丢弃，最多给出
-// COMPARE_COLORS.length 段。找不到足够转弯时返回 null。
-function _autoSegmentByTurns(records) {
-  if (!records?.length || !_detailCumDistM) return null;
-  const pts = [];
-  for (let i = 0; i < records.length; i++) {
-    const r = records[i];
-    if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
-      pts.push({ i, lat: r.lat, lon: r.lon, cum: _detailCumDistM[i] });
-    }
-  }
-  if (pts.length < 20) return null;   // 无坐标或点数太少，判不了转弯
-
-  const STEP_M = 25;
-  const sampled = [pts[0]];
-  for (const p of pts) {
-    if (p.cum - sampled[sampled.length - 1].cum >= STEP_M) sampled.push(p);
-  }
-  if (sampled[sampled.length - 1] !== pts[pts.length - 1]) sampled.push(pts[pts.length - 1]);
-  if (sampled.length < 6) return null;
-
-  const bearing = (a, b) => {
-    const phi1 = a.lat * Math.PI / 180, phi2 = b.lat * Math.PI / 180;
-    const dLambda = (b.lon - a.lon) * Math.PI / 180;
-    const y = Math.sin(dLambda) * Math.cos(phi2);
-    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
-    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-  };
-  const angleDiff = (a, b) => ((b - a + 540) % 360) - 180;
-
-  const TURN_DEG = 40;    // 转弯判定阈值
-  const MERGE_M  = 60;    // 邻近转弯点合并半径
-  const MIN_SEG_M = 300;  // 最短分段，太短的转弯边界直接丢弃
-
-  const turns = [];
-  for (let k = 1; k < sampled.length - 1; k++) {
-    const b1 = bearing(sampled[k - 1], sampled[k]);
-    const b2 = bearing(sampled[k], sampled[k + 1]);
-    const delta = Math.abs(angleDiff(b1, b2));
-    if (delta >= TURN_DEG) turns.push({ idx: sampled[k].i, cum: sampled[k].cum, delta });
-  }
-  if (!turns.length) return null;
-
-  const merged = [];
-  for (const t of turns) {
-    const last = merged[merged.length - 1];
-    if (last && t.cum - last.cum < MERGE_M) { if (t.delta > last.delta) merged[merged.length - 1] = t; }
-    else merged.push(t);
-  }
-
-  const bounds = [0, ...merged.map(t => t.idx), records.length - 1];
+// 边界索引数组(含首尾) → 分段区间：丢弃过短分段、末段并入上一段、按颜色数上限截断。
+function _boundsToSegs(bounds, minSegM) {
   const cleaned = [bounds[0]];
   for (let k = 1; k < bounds.length; k++) {
     const prevCum = _detailCumDistM[cleaned[cleaned.length - 1]];
     const curCum = _detailCumDistM[bounds[k]];
-    if (curCum - prevCum < MIN_SEG_M) {
+    if (curCum - prevCum < minSegM) {
       if (k === bounds.length - 1 && cleaned.length > 1) {
         // 末尾不足最短距离时去掉前一个边界，把短尾段并入上一段。
         cleaned[cleaned.length - 1] = bounds[k];
@@ -4413,6 +4468,102 @@ function _autoSegmentByTurns(records) {
     segs[segs.length - 1].i1 = routeEnd;  // 超出颜色数的尾段合并，仍覆盖完整路线
   }
   return segs.length >= 2 ? segs : null;
+}
+
+// ── 地理围栏分段：轨迹进入围栏圆(lat,lon,radius) 时切一段边界 ──────────────
+// 围栏来源二选一/合并：_autoDetectGeofences 自动聚类低速停留点；
+// 或用户在地图上手动放置/拖拽/缩放围栏（见 _renderFenceLayers）。
+const _fenceHaversineM = (lat1, lon1, lat2, lon2) => {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+// 自动探测围栏：轮/踏频测速在停车时也常不归零，不能只看瞬时速度；
+// 改用位移法——某点若接下来 WINDOW_S 秒内直线位移仍很小，判定为停留点
+// （等红灯、路口、补给点等）。停留点按 40m 邻近关系聚类，簇内停留时长
+// 覆盖 MIN_DWELL_S 才算数（防止短暂减速被误判），聚类半径 = 簇内最远点
+// 距质心 + 15m 余量。
+function _autoDetectGeofences(records) {
+  if (!records?.length) return [];
+  const pts = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    const tSec = _tSec(r.t);
+    if (Number.isFinite(r.lat) && Number.isFinite(r.lon) && tSec != null) {
+      pts.push({ lat: r.lat, lon: r.lon, tSec });
+    }
+  }
+  if (pts.length < 10) return [];
+
+  const WINDOW_S = 12, STOP_RADIUS_M = 15;
+  const stops = [];
+  let j = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (j < i) j = i;
+    let target = pts[i].tSec + WINDOW_S;
+    while (j + 1 < pts.length && pts[j].tSec < target) j++;
+    if (pts[j].tSec - pts[i].tSec < WINDOW_S * 0.6) continue;   // 窗口内数据太稀疏/跳变，跳过
+    if (_fenceHaversineM(pts[i].lat, pts[i].lon, pts[j].lat, pts[j].lon) <= STOP_RADIUS_M) {
+      stops.push(pts[i]);
+    }
+  }
+  if (stops.length < 8) return [];
+
+  const CLUSTER_M = 40, MIN_DWELL_S = 20, MARGIN_M = 15, MIN_R = 25, MAX_R = 120;
+  const used = new Array(stops.length).fill(false);
+  const fences = [];
+  for (let i = 0; i < stops.length; i++) {
+    if (used[i]) continue;
+    const group = [stops[i]];
+    used[i] = true;
+    for (let k = i + 1; k < stops.length; k++) {
+      if (used[k]) continue;
+      if (_fenceHaversineM(stops[i].lat, stops[i].lon, stops[k].lat, stops[k].lon) <= CLUSTER_M) {
+        group.push(stops[k]);
+        used[k] = true;
+      }
+    }
+    const dwellS = Math.max(...group.map(p => p.tSec)) - Math.min(...group.map(p => p.tSec));
+    if (dwellS < MIN_DWELL_S) continue;
+    const lat = group.reduce((s, p) => s + p.lat, 0) / group.length;
+    const lon = group.reduce((s, p) => s + p.lon, 0) / group.length;
+    const maxDist = Math.max(...group.map(p => _fenceHaversineM(lat, lon, p.lat, p.lon)));
+    const radius = Math.max(MIN_R, Math.min(MAX_R, maxDist + MARGIN_M));
+    fences.push({ lat, lon, radius });
+  }
+  return fences.slice(0, COMPARE_COLORS.length + 2);
+}
+
+// 按围栏切段：沿轨迹遍历，记录“从围栏外进入围栏内”的那个点为分段边界，
+// 邻近边界(<60m)合并，过短分段(<300m)丢弃/并入上一段。
+function _segmentByGeofences(records, fences) {
+  if (!records?.length || !fences?.length || !_detailCumDistM) return null;
+  const MERGE_M = 60, MIN_SEG_M = 300;
+  const inside = new Array(fences.length).fill(false);
+  const enters = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+    for (let f = 0; f < fences.length; f++) {
+      const d = _fenceHaversineM(r.lat, r.lon, fences[f].lat, fences[f].lon);
+      const now = d <= fences[f].radius;
+      if (now && !inside[f]) enters.push({ idx: i, cum: _detailCumDistM[i] });
+      inside[f] = now;
+    }
+  }
+  if (!enters.length) return null;
+
+  const merged = [];
+  for (const e of enters) {
+    const last = merged[merged.length - 1];
+    if (last && e.cum - last.cum < MERGE_M) continue;
+    merged.push(e);
+  }
+
+  const bounds = [0, ...merged.map(e => e.idx), records.length - 1];
+  return _boundsToSegs(bounds, MIN_SEG_M);
 }
 
 function _addCompareSegment(chart, minPx, maxPx) {
