@@ -1178,14 +1178,44 @@ body {
   border-color: transparent;
 }
 
-/* ── detail view meta section (tags + note) ─────────────────────────────────── */
-#detail-meta {
+/* ── detail view summary card (core stats + secondary stats + tags) ─────────── */
+#detail-summary-card {
   flex-shrink: 0;
-  padding: 8px 20px 6px;
-  border-bottom: 1px solid var(--surface-1);
+  margin: 10px 20px 0;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+}
+#detail-summary-core {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+.sum-stat { font-size: var(--text-md); font-weight: 600; color: var(--text-light); white-space: nowrap; }
+.sum-unit { font-size: var(--text-sm); font-weight: 400; color: var(--text-muted); }
+#detail-summary-sec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 7px 0;
+  border-top: 1px solid var(--surface-hover);
+}
+#detail-summary-sec:empty { display: none; }
+.sum-sec { font-size: var(--text-sm); color: var(--text-muted); white-space: nowrap; }
+#detail-summary-card #detail-tags-row {
+  border-top: 1px solid var(--surface-hover);
+  padding-top: 7px;
+  margin-top: 1px;
+}
+/* ── detail view note row (de-emphasized, sits below the summary card) ──────── */
+#detail-note-wrap {
+  flex-shrink: 0;
+  margin: 6px 20px 0;
+  padding: 4px 6px 10px;
+  opacity: 0.7;
 }
 #detail-tags-row {
   display: flex;
@@ -1343,7 +1373,6 @@ body {
 #tag-new-btn:hover { color: var(--color-white); border-color: rgba(255,255,255,0.4); }
 
 /* ── light theme overrides ──────────────────────────────────────────────────── */
-.light-theme #detail-meta { border-bottom-color: rgba(0,0,0,0.1); }
 .light-theme .detail-note-rendered { color: var(--text-hint); }
 .light-theme .detail-note-rendered.has-content { color: var(--bg-control); }
 .light-theme .detail-note-editor { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.15); color: var(--bg-card); }
@@ -1410,15 +1439,6 @@ body {
 .bulk-tag-chip.state-none { opacity: 0.3; background: transparent !important; border-color: rgba(255,255,255,0.18); }
 .bulk-tag-chip:hover { opacity: 1; }
 .light-theme .tag-filter-chip:hover { color: var(--bg-card); border-color: rgba(0,0,0,0.3); }
-
-#detail-summary-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--surface-1);
-  flex-shrink: 0;
-}
 
 #detail-main-row {
   display: flex;
@@ -2368,15 +2388,38 @@ body {
   flex-direction: column;
 }
 
-#detail-route-metric-bar {
+#detail-route-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 8px 16px;
   flex-shrink: 0;
   background: rgba(15,15,20,0.95);
   border-bottom: 1px solid var(--surface-2);
 }
+
+#detail-route-metric-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.det-route-layout-btn {
+  flex-shrink: 0;
+  border: 1px dashed rgba(255,255,255,0.18);
+  border-radius: 16px;
+  padding: 3px 12px;
+  font-size: var(--text-base);
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-subtle);
+  transition: var(--transition-base);
+}
+.det-route-layout-btn:hover { color: var(--text-light); border-color: rgba(255,255,255,0.35); }
+.light-theme .det-route-layout-btn { border-color: rgba(0,0,0,0.18); color: var(--text-dim); }
+.light-theme .det-route-layout-btn:hover { color: var(--text-disabled); border-color: rgba(0,0,0,0.32); }
 
 .det-route-metric-btn {
   border: 1px solid rgba(255,255,255,0.10);
@@ -4283,7 +4326,6 @@ body {
 .light-theme #detail-split-handle:hover #detail-split-handle-bar { background: rgba(0,0,0,0.30); }
 .light-theme .det-export-btn { border-color: rgba(0,0,0,0.18); color: var(--text-disabled); background: transparent; }
 .light-theme .det-export-btn:hover { background: rgba(0,0,0,0.07); color: var(--bg-panel); border-color: rgba(0,0,0,0.25); }
-.light-theme #detail-summary-row { border-bottom-color: rgba(0,0,0,0.08); }
 .light-theme .detail-chart-block { border-bottom-color: rgba(0,0,0,0.08); }
 .light-theme .detail-chart-label { color: var(--text-subtle); }
 .light-theme #detail-table-section { border-top-color: rgba(0,0,0,0.10); }
@@ -4295,7 +4337,7 @@ body {
 .light-theme .detail-table td { color: var(--bg-control); border-bottom-color: rgba(0,0,0,0.07); }
 .light-theme .detail-table td:first-child { color: var(--text-subtle); }
 .light-theme .detail-table tr:hover td { background: rgba(0,0,0,0.04); }
-.light-theme #detail-route-metric-bar { background: rgba(242,242,246,0.98); border-bottom-color: rgba(0,0,0,0.12); }
+.light-theme #detail-route-toolbar { background: rgba(242,242,246,0.98); border-bottom-color: rgba(0,0,0,0.12); }
 .light-theme #detail-route-fit-btn,
 .light-theme #detail-route-wind-btn,
 .light-theme #detail-route-3d-btn { background: rgba(242,242,246,0.9); border-color: rgba(0,0,0,0.15); color: var(--text-disabled); }
@@ -5534,6 +5576,27 @@ body {
 }
 .r3d-speed::-moz-range-track { height: 4px; border-radius: var(--radius-xs); background: var(--surface-active); }
 
+/* ── 详情页图表区标签（总览 / 对比分析）：各自独立胶囊，激活态高亮区分 ─────── */
+#detail-chart-tabs {
+  display: inline-flex;
+  gap: 8px;
+  margin: 8px 20px 4px;
+}
+.detail-chart-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--surface-active);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  cursor: pointer;
+  transition: var(--transition-full);
+}
+.detail-chart-tab:hover:not(.active) { color: var(--text-light); border-color: var(--surface-raised); }
+.detail-chart-tab.active { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-white); }
+.light-theme .detail-chart-tab { color: var(--text-dim); }
+.light-theme .detail-chart-tab.active { background: var(--color-primary); color: var(--color-white); }
+
 /* ── 分享弹窗标签 + 3D 预览面板 ─────────────────────────────────────────────── */
 #share-tabs { display: flex; gap: 4px; }
 .share-tab {
@@ -5618,7 +5681,7 @@ body {
 }
 #detail-map-float-collapse:hover { color: var(--text-light); }
 .map-float #detail-route-section.collapsed { height: auto !important; resize: none; }
-.map-float #detail-route-section.collapsed #detail-route-metric-bar,
+.map-float #detail-route-section.collapsed #detail-route-toolbar,
 .map-float #detail-route-section.collapsed #detail-route-map,
 .map-float #detail-route-section.collapsed #detail-route-tooltip,
 .map-float #detail-route-section.collapsed #detail-route-legend { display: none; }

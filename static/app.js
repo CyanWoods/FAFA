@@ -187,13 +187,17 @@ let _detailRouteStepM = 1000;
 let _detailChartIsRecords = false;
 let _detailChartDataLen = 0;
 let _detailRecordsRef = null;   // 详情页当前记录序列，供分段对比重渲染
-// 分段平行对比（手动框选 · 距离归零叠加）
-let _detailCompareMode = false;         // 框选模式：拖拽=添加对比段而非缩放
+// 分段平行对比（围栏分段 · 距离归零叠加）
 let _detailCompareSegs = [];            // [{i0,i1}] 记录索引区间
 let _detailCompareMetric = 'speed';     // 叠加曲线当前指标 key
 let _detailCumDistM = null;             // 各记录累计距离(米)，距离对齐用
-let _segCmpChart = null, _segCmpChartEl = null, _segCmpChipsEl = null, _segCmpMetricBarEl = null, _segCmpToggleBtn = null;
+let _segCmpChart = null, _segCmpChartEl = null, _segCmpChipsEl = null, _segCmpMetricBarEl = null;
 const COMPARE_COLORS = ['#2e86de', '#e74c3c', '#27ae60', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#3498db'];
+const _CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+function _lapLabel(idx) {
+  const n = idx + 1;
+  return '第' + (n <= _CN_NUM.length ? _CN_NUM[n - 1] : n) + '圈';
+}
 // 地理围栏分段：{lat,lon,radius}[]，会话内临时状态，不持久化
 let _detailGeofences = [];
 let _detailFenceEditMode = false;
@@ -202,6 +206,9 @@ let _fenceLayers = [];        // 地图上的围栏 circle+marker 图层
 let _fenceClickBoundMap = null;   // 围栏点击新增监听器已绑定到的地图实例
 let _detailRouteMarker = null;
 let _detailRouteHideTimer = null;
+let _segCmpMarkers = [];        // 分段对比：各段在地图上的高亮点，下标对应 _detailCompareSegs
+let _segCmpHideTimer = null;
+let _segCmpTooltipEl = null;    // 分段对比：光标处自定义 tooltip（按分段顺序+配色列出各段数值）
 let _detailWindData = null;
 let _detailWindArrow = null;
 let _detailTotalDurationS = 0;
@@ -1396,15 +1403,6 @@ async function _posterBuildMap(width, height, theme, token) {
   }
   ctx.restore();
 
-  if (avail.length) {
-    ctx.fillStyle = theme.routeHalo;
-    ctx.fillRect(width - 132, height - 42, 132, 42);
-    ctx.font = `18px ${_POSTER_FONT}`;
-    ctx.fillStyle = theme.text;
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('© CARTO', width - 14, height - 20);
-  }
   return mapCanvas;
 }
 
@@ -1833,7 +1831,7 @@ function _applyPanBounds() {
 
 function initMap() {
   map = L.map('map', {
-    center: [30, 116], zoom: 8, zoomControl: false,
+    center: [30, 116], zoom: 8, zoomControl: false, attributionControl: false,
     // 必须允许小数缩放：默认 zoomSnap=1 会先把缩放取整再夹到 minZoom，
     // 于是「世界高度正好等于视口」这个小数下限永远到不了，滚轮只能停在上一个整数级。
     zoomSnap: 0,
@@ -3238,15 +3236,15 @@ async function openDetailView(id) {
       if (detailTrackId !== id) return; // 详情视图已切到别的轨迹，丢弃这次过期响应
       if (d?.available && d.hourly) _detailWindData = d;
       if (d?.available) {
-        const summaryRow = document.getElementById('detail-summary-row');
-        if (summaryRow) {
+        const secRow = document.getElementById('detail-summary-sec');
+        if (secRow) {
           const arrow = _windDirArrow(d.wind_dir_deg);
-          summaryRow.insertAdjacentHTML('beforeend',
-            `<span class="stat-chip">🌬 ${d.wind_speed_avg_kmh} km/h</span>` +
-            `<span class="stat-chip">${arrow} ${d.wind_dir_label}</span>` +
-            `<span class="stat-chip">逆风 ${d.headwind_pct}% / 顺风 ${d.tailwind_pct}%</span>` +
-            (d.gust_max_kmh ? `<span class="stat-chip">阵风 ${d.gust_max_kmh} km/h</span>` : '') +
-            (d.source_label ? `<span class="stat-chip" title="风向数据源">📡 ${d.source_label}</span>` : '')
+          // 风向数据源（自动/ecmwf/...）不面向摘要展示，只是内部选源标记，这里不再渲染。
+          secRow.insertAdjacentHTML('beforeend',
+            `<span class="sum-sec">🌬 ${d.wind_speed_avg_kmh} km/h</span>` +
+            `<span class="sum-sec">${arrow} ${d.wind_dir_label}</span>` +
+            `<span class="sum-sec">逆风 ${d.headwind_pct}% / 顺风 ${d.tailwind_pct}%</span>` +
+            (d.gust_max_kmh ? `<span class="sum-sec">阵风 ${d.gust_max_kmh} km/h</span>` : '')
           );
         }
       }
@@ -3293,8 +3291,8 @@ function _disposeDetailCharts() {
   }
   detailAuxCharts = [];
   // 清除分段对比模块引用，避免关闭后指向已 dispose 的实例
-  _segCmpChart = null; _segCmpChartEl = null; _segCmpChipsEl = null; _segCmpMetricBarEl = null; _segCmpToggleBtn = null;
-  _detailCompareMode = false; _detailCompareSegs = [];
+  _segCmpChart = null; _segCmpChartEl = null; _segCmpChipsEl = null; _segCmpMetricBarEl = null;
+  _detailCompareSegs = [];
 }
 
 // ── detail meta: notes + tags ─────────────────────────────────────────────────
@@ -3629,10 +3627,30 @@ function _initDetailNoteButtons() {
   });
 }
 
+// 核心数据（距离/时长/速度/爬升/心率/功率/流畅度）字号更大更亮；
+// 次要数据（左右平衡、踏板效率，以及后续异步补上的风况）小字弱化。
 function _renderDetailSummary(summary) {
-  const chips = _statChips(summary);
-  document.getElementById('detail-summary-row').innerHTML =
-    chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
+  const core = [];
+  if (summary?.total_dist_km != null) core.push([summary.total_dist_km.toFixed(1), 'km']);
+  const dur = _fmtDur(summary?.total_duration_s);
+  if (dur) core.push([dur, '']);
+  if (summary?.avg_speed_kmh != null) core.push([summary.avg_speed_kmh.toFixed(1), 'km/h']);
+  if (summary?.total_elevation_gain_m > 0) core.push(['+' + Math.round(summary.total_elevation_gain_m), 'm']);
+  if (summary?.avg_hr != null) core.push([Math.round(summary.avg_hr), 'bpm']);
+  if (summary?.avg_power != null) core.push([Math.round(summary.avg_power), 'W']);
+  if (summary?.avg_pedal_smooth != null) core.push(['流畅 ' + summary.avg_pedal_smooth.toFixed(1), '%']);
+
+  const sec = [];
+  if (summary?.left_pct != null) {
+    const r = (100 - summary.left_pct).toFixed(0);
+    sec.push('L ' + summary.left_pct.toFixed(0) + '% / R ' + r + '%');
+  }
+  if (summary?.avg_torque_eff != null) sec.push('效率 ' + summary.avg_torque_eff.toFixed(1) + '%');
+
+  document.getElementById('detail-summary-core').innerHTML =
+    core.map(([v, u]) => `<span class="sum-stat">${v}${u ? `<span class="sum-unit"> ${u}</span>` : ''}</span>`).join('');
+  document.getElementById('detail-summary-sec').innerHTML =
+    sec.map(s => `<span class="sum-sec">${s}</span>`).join('');
 }
 
 /* ── 爬坡分段面板 ─────────────────────────────────────────────────────────── */
@@ -3902,11 +3920,7 @@ function _initDetailZoomHandlers() {
     const rect = canvas.getBoundingClientRect();
     const endPx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
     if (Math.abs(endPx - startPx) <= 8) return;
-    if (_detailCompareMode) {
-      _addCompareSegment(chart, Math.min(startPx, endPx), Math.max(startPx, endPx));
-    } else {
-      _applyDetailZoom(Math.min(startPx, endPx), Math.max(startPx, endPx), chart);
-    }
+    _applyDetailZoom(Math.min(startPx, endPx), Math.max(startPx, endPx), chart);
   });
 }
 
@@ -4198,6 +4212,12 @@ function _renderDetailFatigue(wrap, records) {
   ro.observe(cw);
   detailChartResizeObservers.push(ro);
   detailAuxCharts.push(chart);
+
+  chart.getZr().on('mousemove', evt => {
+    const idx = Math.round(chart.convertFromPixel({ xAxisIndex: 0 }, evt.offsetX));
+    if (idx >= 0 && idx < records.length) _updateDetailRouteMarker(idx);
+  });
+  chart.getZr().on('mouseout', _hideDetailRouteMarker);
 }
 
 // ── 分段平行对比：手动框选任意 N 段，按距离归零叠加曲线 ─────────────────────
@@ -4233,8 +4253,9 @@ function _renderDetailSegments(wrap, records) {
   const isDark = !document.body.classList.contains('light-theme');
 
   // 每次进入详情页重置对比状态
-  _detailCompareMode = false;
   _detailCompareSegs = [];
+  if (_segCmpHideTimer) { clearTimeout(_segCmpHideTimer); _segCmpHideTimer = null; }
+  _segCmpMarkers = [];
   _detailFenceEditMode = false;
   _detailGeofences = [];
   _clearFenceLayers();
@@ -4248,50 +4269,26 @@ function _renderDetailSegments(wrap, records) {
   block.className = 'detail-chart-block';
   block.dataset.segBlock = '1';
 
-  // 标题 + 框选开关
+  // 标题 + 围栏编辑开关
   const lbl = document.createElement('div');
   lbl.className = 'detail-chart-label';
   lbl.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
-  const btnGroup = document.createElement('span');
-  btnGroup.style.cssText = 'display:flex;gap:4px;';
-  const autoBtn = document.createElement('button');
-  autoBtn.textContent = '自动分段（围栏）';
-  autoBtn.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
-    `background:transparent;color:${subColor}`;
-  autoBtn.onclick = () => {
-    if (!_detailGeofences.length) _detailGeofences = _autoDetectGeofences(_detailRecordsRef || []);
-    if (!_detailGeofences.length) { toast('未检测到明显的停留点，无法自动生成围栏；可点「编辑围栏」手动放置'); return; }
-    const segs = _segmentByGeofences(_detailRecordsRef || [], _detailGeofences);
-    if (!segs) { toast('围栏未被轨迹进入，无法分段'); return; }
-    _detailCompareSegs = segs;
-    _updateCompareChips();
-    _updateCompareChart();
-    _renderFenceLayers();
-    toast(`已按围栏自动生成 ${segs.length} 段`);
-  };
   const fenceBtn = document.createElement('button');
-  fenceBtn.textContent = '编辑围栏';
-  fenceBtn.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
-    `background:transparent;color:${subColor}`;
+  fenceBtn.textContent = '添加起点';
+  fenceBtn.style.cssText = 'cursor:pointer;padding:3px 12px;border-radius:14px;font-size:11px;' +
+    `border:1px solid ${isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)'};background:transparent;color:${subColor}`;
   _fenceEditBtn = fenceBtn;
   fenceBtn.onclick = () => { _setFenceEditMode(!_detailFenceEditMode); };
-  const toggle = document.createElement('button');
-  toggle.textContent = '框选对比';
-  toggle.style.cssText = 'border:none;cursor:pointer;padding:3px 10px;border-radius:5px;font-size:11px;' +
-    `background:transparent;color:${subColor}`;
-  _segCmpToggleBtn = toggle;
-  toggle.onclick = () => { _setCompareMode(!_detailCompareMode); };
-  btnGroup.append(autoBtn, fenceBtn, toggle);
   const title = document.createElement('span');
   title.textContent = '分段平行对比 · 距离叠加';
   lbl.appendChild(title);
-  lbl.appendChild(btnGroup);
+  lbl.appendChild(fenceBtn);
   block.appendChild(lbl);
 
   // 提示
   const hint = document.createElement('div');
   hint.style.cssText = `font-size:11px;color:${subColor};padding:4px 2px 0;`;
-  hint.textContent = '「自动分段」把轨迹进入地理围栏(停留点自动聚类)的地方切成若干段；「编辑围栏」可在地图上拖拽围栏、滚轮调半径、点地图新增围栏点；或开启「框选对比」在上方曲线拖拽手动选段，可多选；各段起点距离归零后叠加对比。';
+  hint.textContent = '「添加起点」可在地图上点击新增起点、拖拽移动、滚轮调半径，轨迹进入起点范围的地方即切一段边界，实时重算；各段起点距离归零后叠加对比。';
   block.appendChild(hint);
 
   // 指标切换条
@@ -4308,18 +4305,25 @@ function _renderDetailSegments(wrap, records) {
   }
   block.appendChild(metricBar);
 
-  // 已选段 chips
+  // 已选段列表
   const chips = document.createElement('div');
-  chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:2px 2px 6px;min-height:4px;';
+  chips.style.cssText = 'display:flex;flex-direction:column;gap:1px;padding:2px 2px 6px;min-height:4px;';
   _segCmpChipsEl = chips;
   block.appendChild(chips);
 
   // 叠加图
   const cw = document.createElement('div');
   cw.className = 'detail-chart-canvas-wrap';
+  cw.style.position = 'relative';
   _segCmpChartEl = cw;
   block.appendChild(cw);
   wrap.appendChild(block);
+
+  const tip = document.createElement('div');
+  tip.className = 'seg-cmp-tooltip';
+  tip.style.cssText = 'position:absolute;display:none;pointer-events:none;z-index:20;';
+  cw.appendChild(tip);
+  _segCmpTooltipEl = tip;
 
   _segCmpChart = echarts.init(cw, null, { renderer: 'svg' });
   detailAuxCharts.push(_segCmpChart);
@@ -4327,22 +4331,15 @@ function _renderDetailSegments(wrap, records) {
   ro.observe(cw);
   detailChartResizeObservers.push(ro);
 
+  _segCmpChart.getZr().on('mousemove', evt => {
+    const km = _segCmpChart.convertFromPixel({ xAxisIndex: 0 }, evt.offsetX);
+    if (Number.isFinite(km)) _updateSegCompareMarkers(km, evt.offsetX, evt.offsetY);
+  });
+  _segCmpChart.getZr().on('mouseout', _hideSegCompareMarkers);
+
   _updateCompareMetricBar(isDark);
   _updateCompareChips();
   _updateCompareChart();
-}
-
-function _setCompareMode(on) {
-  _detailCompareMode = on;
-  const isDark = !document.body.classList.contains('light-theme');
-  const btn = _segCmpToggleBtn;
-  if (btn) {
-    btn.style.background = on ? '#2e86de' : 'transparent';
-    btn.style.color = on ? '#fff' : (isDark ? '#888' : '#999');
-    btn.textContent = on ? '框选中 · 点此结束' : '框选对比';
-  }
-  // 框选模式下暂时关闭缩放态提示
-  if (on && _detailZoomActive) _resetDetailZoom();
 }
 
 // ── 围栏编辑模式：地图上拖拽/缩放/新增围栏，实时重算分段 ────────────────────
@@ -4352,11 +4349,9 @@ function _setFenceEditMode(on) {
   const btn = _fenceEditBtn;
   if (btn) {
     btn.style.background = on ? '#2e86de' : 'transparent';
+    btn.style.borderColor = on ? '#2e86de' : (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)');
     btn.style.color = on ? '#fff' : (isDark ? '#888' : '#999');
-    btn.textContent = on ? '围栏编辑中 · 点地图新增 · 再点此结束' : '编辑围栏';
-  }
-  if (on && !_detailGeofences.length) {
-    _detailGeofences = _autoDetectGeofences(_detailRecordsRef || []);
+    btn.textContent = on ? '添加中 · 点地图放置 · 再点此结束' : '添加起点';
   }
   _renderFenceLayers();
 }
@@ -4368,7 +4363,7 @@ function _clearFenceLayers() {
 
 function _recomputeFenceSegments(quiet) {
   const segs = _segmentByGeofences(_detailRecordsRef || [], _detailGeofences);
-  if (!segs) { if (!quiet) toast('围栏未被轨迹进入，无法分段'); return; }
+  if (!segs) { if (!quiet) toast('起点未被轨迹经过，无法分段'); return; }
   _detailCompareSegs = segs;
   _updateCompareChips();
   _updateCompareChart();
@@ -4387,15 +4382,6 @@ function _renderFenceLayers() {
 
     if (_detailFenceEditMode) {
       circle.on('click', L.DomEvent.stopPropagation);   // 点圈内不触发地图“新增围栏”
-      // 滚轮缩放围栏半径（20~300m）
-      circle.on('wheel', e => {
-        L.DomEvent.stopPropagation(e);
-        L.DomEvent.preventDefault(e);
-        const delta = e.originalEvent.deltaY < 0 ? 10 : -10;
-        fence.radius = Math.max(20, Math.min(300, fence.radius + delta));
-        circle.setRadius(fence.radius);
-        _recomputeFenceSegments(true);
-      });
 
       const center = L.marker([fence.lat, fence.lon], {
         draggable: true,
@@ -4404,6 +4390,19 @@ function _renderFenceLayers() {
           iconSize: [12, 12], iconAnchor: [6, 6],
         }),
       }).addTo(detailRouteMap);
+      // 圆心 marker 是真实 DOM 元素才能收到原生 wheel 事件；圈(circle)是 SVG 渲染的矢量图层，
+      // Leaflet 不会把 wheel 转发给它，之前挂在 circle 上导致滚轮穿透到地图触发缩放。
+      const centerEl = center.getElement();
+      if (centerEl) {
+        L.DomEvent.on(centerEl, 'wheel', e => {
+          L.DomEvent.stopPropagation(e);
+          L.DomEvent.preventDefault(e);
+          const delta = e.deltaY < 0 ? 10 : -10;
+          fence.radius = Math.max(20, Math.min(300, fence.radius + delta));
+          circle.setRadius(fence.radius);
+          _recomputeFenceSegments(true);
+        });
+      }
       center.on('drag', () => {
         const p = center.getLatLng();
         fence.lat = p.lat; fence.lon = p.lng;
@@ -4471,70 +4470,13 @@ function _boundsToSegs(bounds, minSegM) {
 }
 
 // ── 地理围栏分段：轨迹进入围栏圆(lat,lon,radius) 时切一段边界 ──────────────
-// 围栏来源二选一/合并：_autoDetectGeofences 自动聚类低速停留点；
-// 或用户在地图上手动放置/拖拽/缩放围栏（见 _renderFenceLayers）。
+// 围栏由用户在地图上手动放置/拖拽/缩放（见 _renderFenceLayers）。
 const _fenceHaversineM = (lat1, lon1, lat2, lon2) => {
   const R = 6371000, toRad = d => d * Math.PI / 180;
   const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
-
-// 自动探测围栏：轮/踏频测速在停车时也常不归零，不能只看瞬时速度；
-// 改用位移法——某点若接下来 WINDOW_S 秒内直线位移仍很小，判定为停留点
-// （等红灯、路口、补给点等）。停留点按 40m 邻近关系聚类，簇内停留时长
-// 覆盖 MIN_DWELL_S 才算数（防止短暂减速被误判），聚类半径 = 簇内最远点
-// 距质心 + 15m 余量。
-function _autoDetectGeofences(records) {
-  if (!records?.length) return [];
-  const pts = [];
-  for (let i = 0; i < records.length; i++) {
-    const r = records[i];
-    const tSec = _tSec(r.t);
-    if (Number.isFinite(r.lat) && Number.isFinite(r.lon) && tSec != null) {
-      pts.push({ lat: r.lat, lon: r.lon, tSec });
-    }
-  }
-  if (pts.length < 10) return [];
-
-  const WINDOW_S = 12, STOP_RADIUS_M = 15;
-  const stops = [];
-  let j = 0;
-  for (let i = 0; i < pts.length; i++) {
-    if (j < i) j = i;
-    let target = pts[i].tSec + WINDOW_S;
-    while (j + 1 < pts.length && pts[j].tSec < target) j++;
-    if (pts[j].tSec - pts[i].tSec < WINDOW_S * 0.6) continue;   // 窗口内数据太稀疏/跳变，跳过
-    if (_fenceHaversineM(pts[i].lat, pts[i].lon, pts[j].lat, pts[j].lon) <= STOP_RADIUS_M) {
-      stops.push(pts[i]);
-    }
-  }
-  if (stops.length < 8) return [];
-
-  const CLUSTER_M = 40, MIN_DWELL_S = 20, MARGIN_M = 15, MIN_R = 25, MAX_R = 120;
-  const used = new Array(stops.length).fill(false);
-  const fences = [];
-  for (let i = 0; i < stops.length; i++) {
-    if (used[i]) continue;
-    const group = [stops[i]];
-    used[i] = true;
-    for (let k = i + 1; k < stops.length; k++) {
-      if (used[k]) continue;
-      if (_fenceHaversineM(stops[i].lat, stops[i].lon, stops[k].lat, stops[k].lon) <= CLUSTER_M) {
-        group.push(stops[k]);
-        used[k] = true;
-      }
-    }
-    const dwellS = Math.max(...group.map(p => p.tSec)) - Math.min(...group.map(p => p.tSec));
-    if (dwellS < MIN_DWELL_S) continue;
-    const lat = group.reduce((s, p) => s + p.lat, 0) / group.length;
-    const lon = group.reduce((s, p) => s + p.lon, 0) / group.length;
-    const maxDist = Math.max(...group.map(p => _fenceHaversineM(lat, lon, p.lat, p.lon)));
-    const radius = Math.max(MIN_R, Math.min(MAX_R, maxDist + MARGIN_M));
-    fences.push({ lat, lon, radius });
-  }
-  return fences.slice(0, COMPARE_COLORS.length + 2);
-}
 
 // 按围栏切段：沿轨迹遍历，记录“从围栏外进入围栏内”的那个点为分段边界，
 // 邻近边界(<60m)合并，过短分段(<300m)丢弃/并入上一段。
@@ -4566,21 +4508,6 @@ function _segmentByGeofences(records, fences) {
   return _boundsToSegs(bounds, MIN_SEG_M);
 }
 
-function _addCompareSegment(chart, minPx, maxPx) {
-  const labels = chart.getOption().xAxis[0].data;
-  if (!labels || labels.length < 2) return;
-  let i0 = Math.round(chart.convertFromPixel({ xAxisIndex: 0 }, minPx));
-  let i1 = Math.round(chart.convertFromPixel({ xAxisIndex: 0 }, maxPx));
-  if (i0 > i1) [i0, i1] = [i1, i0];
-  i0 = Math.max(0, i0);
-  i1 = Math.min(labels.length - 1, i1);
-  if (i1 - i0 < 5) { toast('选区太短'); return; }
-  if (_detailCompareSegs.length >= COMPARE_COLORS.length) { toast('最多 ' + COMPARE_COLORS.length + ' 段'); return; }
-  _detailCompareSegs.push({ i0, i1 });
-  _updateCompareChips();
-  _updateCompareChart();
-}
-
 function _updateCompareChips() {
   if (!_segCmpChipsEl) return;
   const recs = _detailRecordsRef;
@@ -4588,25 +4515,31 @@ function _updateCompareChips() {
   if (!_detailCompareSegs.length) {
     const empty = document.createElement('span');
     empty.style.cssText = 'font-size:11px;color:#999;';
-    empty.textContent = _detailCompareMode ? '在曲线上拖拽以添加对比段…' : '尚未选择对比段';
+    empty.textContent = '尚未选择对比段';
     _segCmpChipsEl.appendChild(empty);
     return;
   }
+  const isDark = !document.body.classList.contains('light-theme');
+  const timeColor = isDark ? '#999' : '#777';
   _detailCompareSegs.forEach((seg, idx) => {
     const color = COMPARE_COLORS[idx];
-    const label = String.fromCharCode(65 + idx); // A,B,C…
+    const label = _lapLabel(idx);
     const km = recs ? ((_detailCumDistM[seg.i1] - _detailCumDistM[seg.i0]) / 1000) : 0;
-    const chip = document.createElement('span');
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;' +
-      `font-size:11px;background:${color}22;color:${color};border:1px solid ${color}55;`;
-    chip.innerHTML = `<b>${label}</b> ${recs ? recs[seg.i0].t : ''}→${recs ? recs[seg.i1].t : ''} · ${km.toFixed(1)}km` +
-      `<span data-rm="${idx}" style="cursor:pointer;font-weight:700;margin-left:2px">✕</span>`;
-    chip.querySelector('[data-rm]').onclick = () => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:4px;font-size:11px;';
+    row.innerHTML =
+      `<span style="width:7px;height:7px;border-radius:50%;background:${color};flex:0 0 auto;"></span>` +
+      `<b style="color:${color};flex:0 0 44px;">${label}</b>` +
+      `<span style="color:${timeColor};flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">` +
+        `${recs ? recs[seg.i0].t : ''} → ${recs ? recs[seg.i1].t : ''}</span>` +
+      `<span style="color:${timeColor};flex:0 0 auto;">${km.toFixed(1)} km</span>` +
+      `<span data-rm="${idx}" style="cursor:pointer;color:${timeColor};flex:0 0 auto;padding:0 2px;">✕</span>`;
+    row.querySelector('[data-rm]').onclick = () => {
       _detailCompareSegs.splice(idx, 1);
       _updateCompareChips();
       _updateCompareChart();
     };
-    _segCmpChipsEl.appendChild(chip);
+    _segCmpChipsEl.appendChild(row);
   });
   if (_detailCompareSegs.length) {
     const clr = document.createElement('span');
@@ -4619,14 +4552,13 @@ function _updateCompareChips() {
 
 function _updateCompareChart() {
   if (!_segCmpChart) return;
+  _segCmpMarkers.forEach(m => { if (m && detailRouteMap) detailRouteMap.removeLayer(m); });
+  _segCmpMarkers = [];
   const recs = _detailRecordsRef;
   const isDark = !document.body.classList.contains('light-theme');
   const gridColor   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)';
   const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
   const tickColor   = isDark ? '#555' : '#999';
-  const tooltipBg   = isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)';
-  const tooltipBorder = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
-  const tooltipBody   = isDark ? '#ddd' : '#333';
   const meta = METRICS.find(m => m.key === _detailCompareMetric) || METRICS[0];
 
   _segCmpChart.clear();
@@ -4648,7 +4580,7 @@ function _updateCompareChart() {
       if (y == null) continue;
       data.push([(_detailCumDistM[k] - base) / 1000, y]);
     }
-    return { type: 'line', name: '段' + String.fromCharCode(65 + idx), data, symbol: 'none',
+    return { type: 'line', name: _lapLabel(idx), data, symbol: 'none',
       lineStyle: { color, width: 1.5 }, itemStyle: { color }, connectNulls: false, emphasis: { disabled: true } };
   });
 
@@ -4661,22 +4593,88 @@ function _updateCompareChart() {
       nameTextStyle: { color: tickColor, fontSize: 10 },
       axisLine: { lineStyle: { color: borderColor } }, axisTick: { show: false },
       axisLabel: { color: tickColor, fontSize: 10, formatter: v => v.toFixed(1) },
-      splitLine: { show: false } },
+      splitLine: { show: false },
+      axisPointer: { show: true, type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } } },
     yAxis: { type: 'value', scale: meta.key !== 'altitude', name: meta.unit,
       nameTextStyle: { color: tickColor, fontSize: 10 },
       axisLine: { show: false }, axisTick: { show: false },
       axisLabel: { color: tickColor, fontSize: 10 }, splitLine: { lineStyle: { color: gridColor } } },
     series,
-    tooltip: { trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: 'rgba(128,128,160,0.3)', width: 1 } },
-      backgroundColor: tooltipBg, borderColor: tooltipBorder, borderWidth: 1,
-      textStyle: { color: tooltipBody, fontSize: 11 },
-      formatter: params => {
-        const km = params[0]?.axisValue;
-        const head = `距离 ${(+km).toFixed(2)} km`;
-        const lines = params.map(p => `<span style="color:${p.color}">●</span> ${p.seriesName}: ${p.value[1]} ${meta.unit}`);
-        return `${head}<br/>${lines.join('<br/>')}`;
-      } },
+    // 各段各自的数据点互不对齐，ECharts 默认 axis tooltip 只按最近点匹配单一系列；
+    // 改由 _updateSegCompareMarkers/_updateSegCmpTooltip 按各段独立插值，自定义 tooltip 展示全部段
+    tooltip: { show: false },
   });
+}
+
+// 分段对比图 hover：按分段序号取该段内对应记录的经纬度+指标值，各段各自打点（各自配色）
+// 各段数据点互不对齐（各自按距离归零），无法靠 ECharts 默认 axis tooltip 一次性匹配全部段，
+// 这里对每段单独按目标距离二分查找最近记录，因此下面手搓的地图打点 + tooltip 天然覆盖全部段。
+function _updateSegCompareMarkers(km, pxX, pxY) {
+  if (_segCmpHideTimer) { clearTimeout(_segCmpHideTimer); _segCmpHideTimer = null; }
+  const recs = _detailRecordsRef;
+  if (!recs || !_detailCumDistM || !_detailCompareSegs.length) { _updateSegCmpTooltip(km, [], pxX, pxY); return; }
+  const meta = METRICS.find(m => m.key === _detailCompareMetric) || METRICS[0];
+  const distM = km * 1000;
+  const rows = [];
+  _detailCompareSegs.forEach((seg, idx) => {
+    const segLenM = _detailCumDistM[seg.i1] - _detailCumDistM[seg.i0];
+    if (distM < 0 || distM > segLenM) {
+      if (_segCmpMarkers[idx] && detailRouteMap) { detailRouteMap.removeLayer(_segCmpMarkers[idx]); _segCmpMarkers[idx] = null; }
+      return;
+    }
+    const target = _detailCumDistM[seg.i0] + distM;
+    let lo = seg.i0, hi = seg.i1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (_detailCumDistM[m] < target) lo = m + 1; else hi = m; }
+    const rec = recs[lo];
+    if (!rec) {
+      if (_segCmpMarkers[idx] && detailRouteMap) { detailRouteMap.removeLayer(_segCmpMarkers[idx]); _segCmpMarkers[idx] = null; }
+      return;
+    }
+    const color = COMPARE_COLORS[idx];
+    if (rec.lat != null && rec.lon != null && detailRouteMap) {
+      const latlng = [rec.lat, rec.lon];
+      if (!_segCmpMarkers[idx]) {
+        _segCmpMarkers[idx] = L.circleMarker(latlng, {
+          radius: 6, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1,
+        }).addTo(detailRouteMap);
+      } else {
+        _segCmpMarkers[idx].setLatLng(latlng);
+      }
+    }
+    const y = rec[meta.rField];
+    if (y != null) rows.push({ label: _lapLabel(idx), color, value: y });
+  });
+  _updateSegCmpTooltip(km, rows, pxX, pxY, meta.unit);
+}
+
+function _updateSegCmpTooltip(km, rows, pxX, pxY, unit) {
+  const el = _segCmpTooltipEl;
+  if (!el) return;
+  if (!rows.length || pxX == null) { el.style.display = 'none'; return; }
+  const isDark = !document.body.classList.contains('light-theme');
+  const bg     = isDark ? 'rgba(15,15,20,0.94)' : 'rgba(255,255,255,0.97)';
+  const border = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
+  const title  = isDark ? '#888' : '#999';
+  const body   = isDark ? '#ddd' : '#333';
+  const lines = rows.map(r => `<span style="color:${r.color}">●</span> ${r.label}: ${r.value}${unit ? ' ' + unit : ''}`).join('<br/>');
+  el.innerHTML = `<span style="color:${title}">距离 ${km.toFixed(2)} km</span><br/>${lines}`;
+  // 光标右侧放不下时翻到左侧，避免溢出图表容器
+  const cw = _segCmpChartEl;
+  const flipLeft = cw && (pxX + 160) > cw.clientWidth;
+  el.style.cssText = 'position:absolute;display:block;pointer-events:none;z-index:20;' +
+    `padding:6px 10px;border-radius:6px;background:${bg};border:1px solid ${border};` +
+    `font-size:11px;color:${body};white-space:nowrap;line-height:1.6;` +
+    (flipLeft ? `right:${(cw.clientWidth - pxX) + 12}px;` : `left:${pxX + 12}px;`) +
+    `top:${Math.max(0, pxY - 10)}px;`;
+}
+
+function _hideSegCompareMarkers() {
+  _segCmpHideTimer = setTimeout(() => {
+    _segCmpHideTimer = null;
+    _segCmpMarkers.forEach(m => { if (m && detailRouteMap) detailRouteMap.removeLayer(m); });
+    _segCmpMarkers = [];
+    if (_segCmpTooltipEl) _segCmpTooltipEl.style.display = 'none';
+  }, 60);
 }
 
 function _renderDetailCharts(records, fallbackStats) {
@@ -4688,6 +4686,9 @@ function _renderDetailCharts(records, fallbackStats) {
   _initDetailZoomHandlers();
   const wrap = document.getElementById('detail-charts-wrap');
   wrap.innerHTML = '';
+  const compareWrap = document.getElementById('detail-charts-compare');
+  if (compareWrap) compareWrap.innerHTML = '';
+  _switchDetailChartTab('overview');
 
   const useRecords = records && records.length > 0;
   const track = tracks.get(detailTrackId);
@@ -4845,8 +4846,17 @@ function _renderDetailCharts(records, fallbackStats) {
   _detailRecordsRef = useRecords ? records : null;
   if (useRecords) {
     _renderDetailFatigue(wrap, records);
-    _renderDetailSegments(wrap, records);
+    if (compareWrap) _renderDetailSegments(compareWrap, records);
   }
+}
+
+function _switchDetailChartTab(tab) {
+  document.querySelectorAll('#detail-chart-tabs .detail-chart-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === tab));
+  const overviewWrap = document.getElementById('detail-charts-wrap');
+  const compareWrap = document.getElementById('detail-charts-compare');
+  if (overviewWrap) overviewWrap.style.display = tab === 'overview' ? '' : 'none';
+  if (compareWrap) compareWrap.style.display = tab === 'compare' ? '' : 'none';
 }
 
 // Returns index of first element in arr >= val (leftmost binary search).
@@ -5190,7 +5200,7 @@ function _renderDetailRoute() {
 
   // Init Leaflet map once per detail session
   if (!detailRouteMap) {
-    detailRouteMap = L.map('detail-route-map', { zoomControl: true });
+    detailRouteMap = L.map('detail-route-map', { zoomControl: true, attributionControl: false });
     const tileKey = document.getElementById('tile-select').value || 'dark-nolabels';
     void _setDetailTiles(tileKey);
   }

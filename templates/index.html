@@ -398,21 +398,22 @@
       <button id="detail-back-btn" onclick="closeDetailView()">← 返回</button>
       <span id="detail-filename-label"></span>
       <button class="det-export-btn det-zoom-reset-btn" id="detail-zoom-reset-btn" onclick="_resetDetailZoom()" style="display:none">重置缩放</button>
-      <button class="det-export-btn" id="detail-layout-btn" onclick="_toggleDetailMapFloat()" title="切换布局：双栏 / 图表全宽+地图浮窗">⧉ 浮窗</button>
       <button class="det-export-btn" id="detail-poster-btn" onclick="openDetailShare()">分享</button>
       <button class="det-export-btn det-ai-btn" id="detail-ai-btn" onclick="openAiView()">AI 评估</button>
     </div>
-    <div id="detail-meta">
+    <div id="detail-summary-card">
+      <div id="detail-summary-core"></div>
+      <div id="detail-summary-sec"></div>
       <div id="detail-tags-row">
         <div id="detail-tags-list"></div>
         <button id="detail-tag-add-btn" title="添加标签">＋标签</button>
       </div>
-      <div id="detail-note-wrap">
-        <div id="detail-note-rendered" class="detail-note-rendered"></div>
-        <textarea id="detail-note-editor" class="detail-note-editor" placeholder="添加备注（支持 Markdown）…" style="display:none"></textarea>
-        <button id="detail-note-edit-btn" class="detail-note-edit-btn">编辑</button>
-        <button id="detail-note-save-btn" class="detail-note-edit-btn" style="display:none">保存</button>
-      </div>
+    </div>
+    <div id="detail-note-wrap">
+      <div id="detail-note-rendered" class="detail-note-rendered"></div>
+      <textarea id="detail-note-editor" class="detail-note-editor" placeholder="添加备注（支持 Markdown）…" style="display:none"></textarea>
+      <button id="detail-note-edit-btn" class="detail-note-edit-btn">编辑</button>
+      <button id="detail-note-save-btn" class="detail-note-edit-btn" style="display:none">保存</button>
     </div>
     <!-- tag picker popup -->
     <div id="tag-picker" style="display:none">
@@ -423,10 +424,14 @@
         <button id="tag-new-btn">创建</button>
       </div>
     </div>
-    <div id="detail-summary-row"></div>
     <div id="detail-main-row">
       <div id="detail-chart-section">
+        <div id="detail-chart-tabs">
+          <button class="detail-chart-tab active" data-tab="overview" onclick="_switchDetailChartTab('overview')">▤ 总览</button>
+          <button class="detail-chart-tab" data-tab="compare" onclick="_switchDetailChartTab('compare')">⇄ 对比分析</button>
+        </div>
         <div id="detail-charts-wrap"></div>
+        <div id="detail-charts-compare" style="display:none"></div>
       </div>
       <div id="detail-split-handle"><div id="detail-split-handle-bar"></div></div>
       <div id="detail-route-section">
@@ -442,7 +447,10 @@
           <span id="detail-map-float-title">地图</span>
           <button id="detail-map-float-collapse" onclick="_toggleMapFloatCollapse()" title="收起 / 展开地图">–</button>
         </div>
-        <div id="detail-route-metric-bar"></div>
+        <div id="detail-route-toolbar">
+          <div id="detail-route-metric-bar"></div>
+          <button class="det-route-layout-btn" id="detail-layout-btn" onclick="_toggleDetailMapFloat()" title="切换布局：双栏 / 图表全宽+地图浮窗">⧉ 浮窗</button>
+        </div>
         <div id="detail-route-map">
           <div id="detail-route-map-controls">
             <button id="detail-route-fit-btn" onclick="_detailRouteFitBounds()" title="重置视角">⊡</button>
