@@ -147,7 +147,7 @@ _MAX_BATCH_FILES  = 1_000
 _MAX_EXPORT_FILES = 10_000
 _MAX_TAG_IDS      = 100
 _MAX_AI_MESSAGES  = 100
-_MAX_AI_TEXT      = 200_000
+_MAX_AI_TEXT      = 200_000  # 无用户配置时的兜底值，实际生效值见 _config_max_ai_text()
 _MAX_LOGIN_PASSWORD_CHARS = 1024
 _MAX_AI_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_AI_STREAM_SECONDS = 5 * 60
@@ -1738,6 +1738,13 @@ def _config_max_tokens(cfg: dict) -> int:
         return 2500
 
 
+def _config_max_ai_text(cfg: dict) -> int:
+    try:
+        return max(10_000, min(2_000_000, int(cfg.get('max_ai_text', _MAX_AI_TEXT))))
+    except (TypeError, ValueError):
+        return _MAX_AI_TEXT
+
+
 def _wind_dir_label(deg: float) -> str:
     labels = ["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]
     return labels[round(deg / 45) % 8]
@@ -2100,6 +2107,7 @@ _CONFIG_NUMBER_RANGES = {
     'pmc_weight': (30, 150), 'route_grade_min': (-30, 0),
     'route_grade_max': (0, 30), 'route_speed_max': (10, 120),
     'route_cadence_max': (60, 200), 'max_tokens': (256, 16_000),
+    'max_ai_text': (10_000, 2_000_000),
     'strava_redirect_port': (1024, 65_535),
 }
 _CONFIG_ENUM_VALUES = {
@@ -2152,9 +2160,9 @@ def _validate_config_update(data: dict) -> dict:
         low, high = _CONFIG_NUMBER_RANGES[key]
         if not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f'{key} 必须在 {low}-{high} 之间')
-        if key in ('max_tokens', 'strava_redirect_port') and int(value) != value:
+        if key in ('max_tokens', 'max_ai_text', 'strava_redirect_port') and int(value) != value:
             raise ValueError(f'{key} 必须是整数')
-        validated[key] = int(value) if key in ('max_tokens', 'strava_redirect_port') else value
+        validated[key] = int(value) if key in ('max_tokens', 'max_ai_text', 'strava_redirect_port') else value
     return validated
 
 
@@ -2413,7 +2421,7 @@ def ai_evaluate():
     if not cfg:
         return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     body = request.get_json(silent=True) or {}
-    too_large = _reject_large_json(body)
+    too_large = _reject_large_json(body, _config_max_ai_text(cfg))
     if too_large:
         return too_large
     prompt = _build_eval_prompt(
@@ -2445,7 +2453,7 @@ def ai_chat():
         if not isinstance(content, str):
             return jsonify(error="消息内容必须是文本"), 400
         total_chars += len(content)
-    if total_chars > _MAX_AI_TEXT:
+    if total_chars > _config_max_ai_text(cfg):
         return jsonify(error="消息内容过长"), 413
     return _llm_stream(cfg, messages=messages)
 
@@ -2457,7 +2465,7 @@ def ai_compare():
     if not cfg:
         return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     body       = request.get_json(silent=True) or {}
-    too_large = _reject_large_json(body)
+    too_large = _reject_large_json(body, _config_max_ai_text(cfg))
     if too_large:
         return too_large
     activities = body.get("activities") or []
@@ -3075,7 +3083,7 @@ def ai_pmc():
     if not cfg:
         return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     data   = request.get_json(silent=True) or {}
-    too_large = _reject_large_json(data)
+    too_large = _reject_large_json(data, _config_max_ai_text(cfg))
     if too_large:
         return too_large
     prompt = _build_pmc_prompt(data)
@@ -3125,7 +3133,7 @@ def ai_calendar():
     if not cfg:
         return jsonify(error="AI 未配置，请点击左下角「设置」按钮进行配置"), 503
     data   = request.get_json(silent=True) or {}
-    too_large = _reject_large_json(data)
+    too_large = _reject_large_json(data, _config_max_ai_text(cfg))
     if too_large:
         return too_large
     prompt = _build_calendar_prompt(data)

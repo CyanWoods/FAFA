@@ -380,7 +380,7 @@ All values must use `var(--token)` from the `:root` block in `static/style.css` 
 Per-user config lives in `users.db` (`user_config` table, secrets encrypted — see "Accounts, roles and per-user config storage" above), not a per-user file anymore; `config.template.json` still documents every field in its `_comments` block and seeds the response for a user with no config yet. Writes go through `/api/config/raw`, which rejects unknown keys and validates:
 
 - **Strings** (with length caps): `api_base` (HTTPS + SSRF check), `api_key`, `model`, `onelap_username/password`, `igpsport_username/password`, `strava_client_id/secret`
-- **Numbers** (with ranges): `max_tokens` 256–16000, `pmc_ftp` 50–600, `pmc_rest_hr` 30–100, `pmc_max_hr` 100–220, `pmc_weight` 30–150, `route_grade_min` −30–0, `route_grade_max` 0–30, `route_speed_max` 10–120, `route_cadence_max` 60–200, `strava_redirect_port` 1024–65535
+- **Numbers** (with ranges): `max_tokens` 256–16000, `max_ai_text` 10000–2000000 (max JSON-serialized char length for AI request bodies — evaluate/chat/compare/pmc/calendar — via `_config_max_ai_text()`; exceeding it returns 413), `pmc_ftp` 50–600, `pmc_rest_hr` 30–100, `pmc_max_hr` 100–220, `pmc_weight` 30–150, `route_grade_min` −30–0, `route_grade_max` 0–30, `route_speed_max` 10–120, `route_cadence_max` 60–200, `strava_redirect_port` 1024–65535
 - **Enums**: `wind_source` ∈ {auto, ecmwf, gfs, icon, era5}; `map_tile` ∈ {dark, dark-nolabels, light, light-nolabels, amap}
 
 Secret fields are returned masked as `••••••••`; posting the mask back leaves the stored value untouched. Strava tokens are read-only through this endpoint.

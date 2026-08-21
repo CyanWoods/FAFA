@@ -1053,6 +1053,11 @@
           <input id="cfg-max-tokens" type="number" min="256" max="16000" placeholder="2500">
         </div>
         <div class="settings-row">
+          <label class="settings-label">最大请求体（字符）</label>
+          <input id="cfg-max-ai-text" type="number" min="10000" max="2000000" placeholder="200000">
+        </div>
+        <div class="settings-hint">发给 AI 的数据（骑行统计/风向等）序列化后超过此字符数会被拒绝（413）。长骑行、风向数据多时可调大。</div>
+        <div class="settings-row">
           <label class="settings-label">提示词</label>
           <button class="settings-link-btn" onclick="openPromptsModal()">编辑提示词模板…</button>
         </div>

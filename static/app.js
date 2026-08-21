@@ -6384,6 +6384,7 @@ async function loadSettingsView() {
     document.getElementById('cfg-api-key').value       = cfg.api_key              ?? '';
     document.getElementById('cfg-model').value         = cfg.model                ?? '';
     document.getElementById('cfg-max-tokens').value    = cfg.max_tokens           ?? '';
+    document.getElementById('cfg-max-ai-text').value   = cfg.max_ai_text          ?? '';
     document.getElementById('cfg-onelap-user').value   = cfg.onelap_username      ?? '';
     document.getElementById('cfg-onelap-pass').value   = cfg.onelap_password      ?? '';
     document.getElementById('cfg-igp-user').value      = cfg.igpsport_username    ?? '';
@@ -6415,6 +6416,7 @@ async function saveSettings() {
     api_key:              val('cfg-api-key')       || null,
     model:                val('cfg-model')         || null,
     max_tokens:           num('cfg-max-tokens'),
+    max_ai_text:          num('cfg-max-ai-text'),
     onelap_username:      val('cfg-onelap-user')   || null,
     onelap_password:      val('cfg-onelap-pass')   || null,
     igpsport_username:    val('cfg-igp-user')       || null,
